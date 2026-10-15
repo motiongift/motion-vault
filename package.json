@@ -1,0 +1,24 @@
+{
+  "name": "motion-vault",
+  "version": "0.2.0",
+  "private": true,
+  "license": "BUSL-1.1",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build:engine": "vite build --config vite.web-engine.config.ts",
+    "typecheck": "tsc --noEmit",
+    "hash": "node scripts/hash.mjs",
+    "verify": "node scripts/verify-live.mjs",
+    "release": "node scripts/vault-release.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
+    "typescript": "6.0.3",
+    "viem": "2.54.6",
+    "vite": "8.1.3"
+  }
+}

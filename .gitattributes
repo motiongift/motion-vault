@@ -1,0 +1,3 @@
+# Byte-exact checkouts on every OS: no line-ending conversion. The build output is compared
+# byte for byte with what motion.gift serves, so the inputs must be the bytes in this repository.
+* -text

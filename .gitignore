@@ -1,0 +1,5 @@
+node_modules/
+# build output: produced by `npm run build:engine`, compared by hash, never committed
+server/web/vendor/
+*.log
+.DS_Store

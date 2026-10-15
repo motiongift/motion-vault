@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-vault-host="1">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>copytrade vault</title>
+<!-- The vault frame. Nothing here but the engine: keys are created, stored,
+     backed up and used for signing inside this document, on its own origin,
+     behind a Content-Security-Policy whose connect-src names the blockchain
+     nodes and nothing else. The page that embeds it talks to it over
+     postMessage and cannot read anything in here. The script tag below is
+     pinned to the exact bytes of the shipped engine (Subresource Integrity);
+     the same hash is published in /releases.json and shown on /custody. -->
+<link rel="stylesheet" href="/vault.css">
+<!-- the dialog faces, fetched with the frame so the first dialog does not swap fonts mid-read -->
+<link rel="preload" href="/fonts/space-grotesk-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/space-grotesk-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/jetbrains-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+</head>
+<body>
+<noscript>The copytrade vault needs JavaScript.</noscript>
+<script src="/vendor/engine.js" integrity="sha384-m3D8BvIU0R6HB1ZhitOrGmaWa2z8u/YiJIBaWBzHSvMZ12zAW5/nUr+7ipQ8lfWN" crossorigin="anonymous"></script>
+</body>
+</html>
