@@ -11,6 +11,40 @@ checked.
 
 Security overview, live checks and the hashes of the current build: <https://motion.gift/security-center>.
 
+## In plain words: is motion.gift running this exact code?
+
+Think of the vault code as a sealed jar with a fingerprint on the lid.
+
+- **The fingerprint is a hash** — a long string like `sha384-m3D8Bv…`. It is computed from every single
+  byte of the code. Change one letter anywhere and the fingerprint comes out completely different.
+- **Your browser checks the fingerprint every time.** The vault page tells the browser "run this file
+  only if its fingerprint is exactly this" (that's called Subresource Integrity). If the file was
+  swapped, the browser refuses to run it — the vault simply doesn't open.
+- **We publish the fingerprint and the code.** The fingerprint of what motion.gift serves right now
+  is at <https://vault.motion.gift/releases.json>. The code is this repository.
+- **Anyone can make the jar again.** Download this code, build it, and you get the *same* fingerprint.
+  Same fingerprint = the site runs exactly the code you can read here. Nothing hidden, nothing added.
+
+Three ways to check, from easiest:
+
+1. **No code at all (1 minute).** Open <https://motion.gift/security-center> and press **Run checks** —
+   your browser fetches the vault the site really serves, hashes it, and compares it with the
+   published fingerprint. Then open <https://vault.motion.gift/releases.json> and check that
+   `engine` → `sha384` there is the same as the one in the [build output below](#reproducible-build)
+   for the release tag you're looking at.
+2. **One command (5 minutes, needs Node.js).** Clone, build, and let the script compare with the live
+   site for you:
+   ```sh
+   git clone https://github.com/motiongift/motion-vault && cd motion-vault
+   npm ci && npm run build:engine && npm run verify
+   ```
+   Three `OK` lines = your own build, the file the site serves, and the published fingerprint are
+   the same bytes.
+3. **Read it.** Everything below explains what the code does and where to look.
+
+If you ever see a mismatch that no release tag explains, that's exactly what this is for — please
+report it (see [SECURITY.md](SECURITY.md)) and tell people.
+
 ## What is in the box
 
 | path | what |
