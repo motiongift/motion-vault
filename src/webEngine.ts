@@ -17,7 +17,7 @@ import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RE
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
 import {
   bootVault, resetVault, openWith, lostBlobs, unrecovered, webLocker, KEY_LOCK, LOST_PREFIX, type Boot, type KeyStore, type LostBlob,
-  bytesHex, seedOfSignature, fingerprint, subKeyV1, subKeyV2With, MAIN_MSG,
+  bytesHex, seedOfSignature, fingerprint, subKeyV1, subKeyV2With, MAIN_MSG, type MainMsgVersion,
   openProfile, buildProfile, storageHealth, backupNudge, type Profile, type ProfileEntry, type BackupWallet, type OpenedWallet,
 } from './vaultRecovery';
 import {
@@ -438,7 +438,7 @@ type Account = { id: string; name: string; address: `0x${string}`; key: `0x${str
 // account: the last profile the server confirmed (vault-client → mainPublished) and which addresses it covers
 // removedAddrs: wallets removed here on a trusted click — a publish does not carry them back into the profile
 // mergedBlobs / recoveryDismissed: set-aside vaults already merged back, and missing wallets the user chose to forget
-type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[] };
+type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[]; mainMv?: Record<string, 2> };
 type StoredVault = { v: 2; iv: string; ct: string; siv?: string; sct?: string; meta: VaultMeta; addresses: { id: string; name: string; address: string; archived?: boolean; hop?: boolean }[] };
 const VAULT_KEY = 'trenches.vault';
 const SETTINGS_KEY = 'trenches.engine.settings';
@@ -494,7 +494,7 @@ async function mergeFromDisk() {
   const disk = await decryptStored(); if (!disk) return;
   for (const a of disk.accounts) if (!removedIds.has(a.id) && !unlocked.some((x) => x.id === a.id)) unlocked.push(a);
   for (const id of disk.meta.order) if (!meta.order.includes(id) && unlocked.some((x) => x.id === id)) meta.order.push(id);
-  for (const [m, sd] of Object.entries(disk.seeds || {})) if (!seeds[m]) seeds[m] = sd;
+  for (const [m, sd] of Object.entries(disk.seeds || {})) if (!seeds[m]) { seeds[m] = sd; if (disk.meta.mainMv?.[m] === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; }
 }
 let persisting: Promise<void> = Promise.resolve();
 let replacing = false;                       // the first write of a vault that replaces a set-aside one (inside the key lock)
@@ -679,6 +679,8 @@ const subKey = subKeyV1;
 const subsOf = (main: string) => (unlocked || []).filter((a) => a.main === lc(main) && a.index != null && a.index >= 0);
 // what the account profile can re-derive on another device from the count alone: v1 trading wallets only
 const subsV1Of = (main: string) => subsOf(main).filter((a) => a.gen !== 2);
+// the fixed text this main's seed was signed over: 2 once attached with the motion text, else 1 (copytrade.gg)
+const mvOf = (main: string): MainMsgVersion => (meta.mainMv?.[lc(main)] === 2 ? 2 : 1);
 // what rides in the profile sealed (backup v3): every other wallet that has a key here — created, imported, v2, hop
 const kindOf = (a: Account): BackupWallet['kind'] => (a.hop ? 'hop' : a.main && a.index != null ? 'derived' : a.kind || (/^Imported \d+$/.test(a.name) ? 'imported' : 'created'));
 const backupWalletsOf = (main: string): BackupWallet[] => (unlocked || [])
@@ -3332,14 +3334,18 @@ const engine = {
     return { ok: true, id, ...summary() };
   },
   // ── main wallet: attach (one signature), sync with the account profile, publish the profile, detach ──
-  mainStatus: async (address: string) => { await ready; const m = lc(address); return { ok: true, attached: !!seeds[m], current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: seeds[m] ? await fingerprint(seeds[m]) : '', keyMissing: !!keyMissing }; },
+  mainStatus: async (address: string) => { await ready; const m = lc(address); return { ok: true, attached: !!seeds[m], current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: seeds[m] ? await fingerprint(seeds[m]) : '', mv: mvOf(m), keyMissing: !!keyMissing }; },
   // the main is a Privy embedded wallet or the external wallet the user logged in with (MetaMask & co. sign the same text)
-  mainAttach: async (src: { address: string; signature: string; expectFp?: string }) => {
+  // mv: which fixed text was signed — 1 (copytrade.gg, every older account) or 2 (motion.gift, accounts created since)
+  mainAttach: async (src: { address: string; signature: string; expectFp?: string; mv?: number }) => {
     await ready; if (!HOST) throw new Error('main wallets attach in the vault frame only');
     requireUnlocked();
     const m = lc(src?.address); if (!/^0x[0-9a-f]{40}$/.test(m)) throw new Error('Bad main address');
+    const mv: MainMsgVersion = src?.mv === 2 ? 2 : 1;
+    // a main already attached here keeps the text it was attached with: the other one would derive other wallets
+    if (seeds[m] && mvOf(m) !== mv) throw new Error(`This main wallet is attached here with the v${mvOf(m)} text — sign that one`);
     // the signature must be the main's own, over the fixed text — not any 65 bytes a page hands over
-    const signer = await recoverMessageAddress({ message: MAIN_MSG(m), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
+    const signer = await recoverMessageAddress({ message: MAIN_MSG(m, mv), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
     if (!same(signer, m)) throw new Error('That signature is not from this main wallet');
     // a main this vault has not worked with yet becomes the parent of every wallet created from now on: a page
     // script could attach its own (its own signature verifies too) — so the first attach of a main is a trusted click
@@ -3350,8 +3356,9 @@ const engine = {
     if (src.expectFp && src.expectFp !== fp) throw new Error('fingerprint mismatch: this signature does not match the one that created the account\'s trading wallets');
     if (seeds[m] && seeds[m] !== seed) throw new Error('This main wallet signed differently than before — the signature is not deterministic, trading wallets cannot be re-derived from it');
     seeds[m] = seed; meta.main = m;
+    if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
     await persist();
-    return { ok: true, fp, ...summary() };
+    return { ok: true, fp, mv, ...summary() };
   },
   mainDetach: async () => { await ready; requireUnlocked(); meta.main = null; await persist(); return { ok: true, ...summary() }; },
   // The account's profile from the server, applied: v1 trading wallets re-derived from the count, the vault salts
@@ -3409,7 +3416,7 @@ const engine = {
     const count = subs.reduce((n, a) => Math.max(n, (a.index ?? -1) + 1), 0);
     const names: Record<string, string> = {}; for (const a of subs) names[String(a.index)] = a.name;
     const fromServer = remote && typeof remote === 'object' && lc(remote.main) === m && Array.isArray(remote.attached) ? remote.attached : [];
-    const r = await buildProfile({ main: m, seed, count, names, wallets: backupWalletsOf(m), salts: saltsOf(), carry: [...fromServer, ...(remoteCarry.get(m) || [])] as ProfileEntry[], forget: meta.removedAddrs || [] });
+    const r = await buildProfile({ main: m, seed, count, names, wallets: backupWalletsOf(m), salts: saltsOf(), carry: [...fromServer, ...(remoteCarry.get(m) || [])] as ProfileEntry[], forget: meta.removedAddrs || [], mv: mvOf(m) });
     pendingPublish.set(r.digest, { main: m, addrs: r.covered });
     if (pendingPublish.size > 20) pendingPublish.delete(pendingPublish.keys().next().value as string);
     return { ok: true, profile: r.profile, digest: r.digest, covered: r.covered.length, dropped: r.dropped };

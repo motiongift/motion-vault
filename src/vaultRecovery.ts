@@ -39,7 +39,12 @@ export async function hmac(keyHex: string, msg: string): Promise<Uint8Array> {
   return new Uint8Array(await subtle().sign('HMAC', k, buf(enc.encode(msg))));
 }
 // the exact text vault-client.js asks the main wallet to sign (Privy embedded or an external wallet)
-export const MAIN_MSG = (main: string) => `copytrade.gg — trading wallets\nMain wallet: ${main.toLowerCase()}\n\nThis signature derives your trading wallets on this device. Sign it only on copytrade.gg.`;
+// v1 (every account created before 2026-10-17) keeps the copytrade.gg text for good: the signature IS the seed, so a
+// different text would derive different wallets. v2 is the motion text, for accounts created since (profile.mv = 2).
+export type MainMsgVersion = 1 | 2;
+export const MAIN_MSG = (main: string, mv: MainMsgVersion = 1) => mv === 2
+  ? `motion.gift — trading wallets\nMain wallet: ${main.toLowerCase()}\n\nThis signature unlocks your motion trading wallets on this device. It sends no transaction and costs nothing. Sign it only on motion.gift.`
+  : `copytrade.gg — trading wallets\nMain wallet: ${main.toLowerCase()}\n\nThis signature derives your trading wallets on this device. Sign it only on copytrade.gg.`;
 export async function seedOfSignature(sig: string): Promise<string> {
   if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) throw new Error('That is not a wallet signature');
   return bytesHex(new Uint8Array(await subtle().digest('SHA-256', buf(hexBytes(sig)))));
@@ -169,7 +174,7 @@ export async function resetVault(d: BootDeps): Promise<Extract<Boot, { state: 'o
 
 // ── the account profile (server/.accounts.json, shape fixed by the server's validProfile) ──
 export type ProfileEntry = { address: string; name: string; iv: string; ct: string };
-export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number };
+export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2 };
 export type BackupWallet = { address: string; name: string; key: `0x${string}`; kind: 'created' | 'imported' | 'derived' | 'hop'; main?: string; index?: number; gen?: 2; archived?: boolean; createdAt?: number };
 export type OpenedWallet = BackupWallet & { v: 1 | 2 | 3 };
 export const PROFILE_CAP = 200;   // the server refuses a profile with more attached entries
@@ -194,7 +199,7 @@ const validEntry = (e: unknown): e is ProfileEntry => !!e && typeof e === 'objec
 // What the server stores for the account. Order under the 200-entry cap: salts, then the vault's wallets in the
 // order given (the engine puts funded/visible ones first), then entries carried over verbatim from the server copy
 // (wallets other devices published, blobs this browser cannot open) — a publish never drops what it did not write.
-export async function buildProfile(src: { main: string; seed: string; count: number; names: Record<string, string>; wallets: BackupWallet[]; salts: string[]; carry?: ProfileEntry[]; forget?: string[] }) {
+export async function buildProfile(src: { main: string; seed: string; count: number; names: Record<string, string>; wallets: BackupWallet[]; salts: string[]; carry?: ProfileEntry[]; forget?: string[]; mv?: MainMsgVersion }) {
   const kb = await backupKeyV3(src.seed);
   const attached: ProfileEntry[] = [];
   const salts = [...new Set(src.salts.filter((s) => /^0x[0-9a-f]{64}$/.test(s)))];
@@ -219,7 +224,8 @@ export async function buildProfile(src: { main: string; seed: string; count: num
     if (!validEntry(e) || isSaltSlot(e.address) || mine.has(lc(e.address)) || forget.has(lc(e.address)) || carried.some((c) => same(c, e))) continue;
     attached.push({ address: e.address, name: String(e.name || '').slice(0, 40), iv: e.iv, ct: e.ct }); carried.push(e);
   }
-  const profile: Profile = { v: 1, main: lc(src.main), fp: await fingerprint(src.seed), count: src.count, names: src.names, attached };
+  // mv names the text the seed was signed over (absent = v1), so another device asks for the same one
+  const profile: Profile = { v: 1, main: lc(src.main), fp: await fingerprint(src.seed), count: src.count, names: src.names, attached, ...(src.mv === 2 ? { mv: 2 as const } : {}) };
   // a stable digest of the facts (fresh IVs make the blobs differ every time): the page posts only when it changes
   const saltTag = bytesHex(await hmac(src.seed, 'motion/backup/v3/salts/' + salts.join(','))).slice(2, 18);
   const facts = JSON.stringify({ count: src.count, names: src.names, w: src.wallets.filter((w) => covered.includes(lc(w.address))).map((w) => [lc(w.address), w.name, w.kind, w.main || '', w.index ?? '', !!w.archived]), s: saltTag, c: carried.map((c) => lc(c.address) + c.iv) });
