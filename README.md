@@ -94,6 +94,12 @@ terminal website, not of the engine; their hashes are also published in `release
   cannot open it on its own — it holds the ciphertext, not the signature. Anyone holding *both*
   your Privy session and your main wallet's derivation signature could open it; that is the
   deliberate trade-off that lets a fresh browser restore your wallets after login + one signature.
+- **The text your main wallet signs.** That signature is the seed, so its text can never change for an
+  existing account (another text would derive other wallets). Accounts created before 17 Oct 2026 sign
+  the original text, which still names the project's former domain, `copytrade.gg`; accounts created
+  since sign `motion.gift — trading wallets …` (`MAIN_MSG(main, 2)`), and their backup records `mv: 2`
+  so every device asks for the same text. The engine verifies the signature against the text it was
+  told and never re-attaches a main under the other one.
 - **Solana is the one lane with a relay in the send path.** Reads go from your browser to a
   public Solana node. For sends, simulations and fee estimates a copy of the **already-signed**
   transaction (and of the unsigned simulation payload) goes through motion's relay (`/sol/api`)
