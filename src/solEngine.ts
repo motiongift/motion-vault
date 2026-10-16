@@ -12,6 +12,10 @@
 //   they are refused here with a clear message rather than half-supported.
 // - after migration: PumpSwap buy_exact_quote_in_v2 / sell_v2 on the canonical
 //   pool, through a wrapped-SOL account the transaction opens and closes itself.
+// - a coin whose pump market is not SOL (its curve quoted in another token, its PumpSwap pool paired with it)
+//   trades on its Meteora DLMM pool against SOL: swap2 on the LB pair (lb_clmm 0.12, on-chain IDL), the quote
+//   walked bin by bin from the pool's bin arrays exactly as the program does (fees, volatility, limit orders).
+//   The indexer only names candidate pools; the vault reads each one and verifies owner, layout, mints and status.
 // Sending — one signed transaction, several roads at once:
 //   Fast  · priority fee at Helius "high" + a Jito tip at the landed-tip 75th
 //           percentile; sent to Jito and to Helius together, simulated first.
@@ -36,7 +40,10 @@ import { sha256 } from '@noble/hashes/sha256';
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
 export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number };
-export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string };
+export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute };
+// a Meteora DLMM pool as the vault verified it: which side is SOL, its reserves and oracle (fixed for the pool's life),
+// the bin array the active bin sat in when the route was read (which arrays a quote prefetches)
+export type DlmmRoute = { solIsX: boolean; reserveX: string; reserveY: string; oracle: string; activeIdx: number; binStep: number };
 
 // ── base58 / bytes ──
 const ALPH = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -57,6 +64,7 @@ export const P = {
   ata: 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL', budget: 'ComputeBudget111111111111111111111111111111', wsol: 'So11111111111111111111111111111111111111112',
   pump: '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', pamm: 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA', fees: 'pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ',
   pumpFeeConfig: '8Wf5TiAheLUqBrKXeYg2JtAFFMWtKdG2BSFgqUcPVwTt', ammFeeConfig: '5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx', ammGlobalConfig: 'ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw',
+  dlmm: 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', memo: 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr',
 };
 const BUYBACK = ['5YxQFdt3Tr9zJLvkFccqXVUwhdTWJQc1fFg2YPbxvxeD', '9M4giFFMxmFGXtc3feFzRai56WbBqehoSeRE5GK7gf7', 'GXPFM2caqTtQYC2cJ5yJRi9VDkpsYZXzYdwYpGnLmtDL', '3BpXnfJaUTiwXnJNe7Ej1rcbzqTTQUvLShZaWazebsVR', '5cjcW9wExnJJiqgLjq7DEG75Pm6JBgE1hNv4B2vHXUW6', 'EHAAiTxcdDwQ3U4bU6YcMsQGaekdzLS3B5SmYo46kJtL', '5eHhjP8JaYkz83CWwvGU2uMUXefd3AazWGx4gpcuEEYD', 'A7hAgCzFw14fejgCp387JUJRMNyz4j89JKnhtKU8piqW'];
 const JITO_TIP = ['96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5', 'HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe', 'Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY', 'ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49', 'DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh', 'ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt', 'DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL', '3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT'];
@@ -67,7 +75,10 @@ const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)];
 const DISC = {
   buyV3: [225, 247, 80, 30, 213, 179, 132, 136], sellV3: [28, 146, 222, 119, 38, 196, 105, 213],
   ammBuy: [194, 171, 28, 70, 104, 77, 91, 47], ammSell: [93, 246, 130, 60, 231, 233, 64, 178],
+  dlmmSwap2: [65, 75, 63, 76, 235, 91, 91, 136],   // lb_clmm swap2 (the IDL on chain, 7UZRobkzaKVm1RbCH5WdFaYCGzCRjnu3prziHAsYiSyr)
 };
+// Anchor account discriminators the vault checks before it trusts a DLMM account's bytes
+const LB_PAIR_DISC = [33, 11, 49, 98, 181, 101, 177, 13], BIN_ARRAY_DISC = [92, 142, 92, 220, 5, 148, 70, 181];
 
 // ── program derived addresses ──
 const onCurve = (b: Uint8Array) => { try { ed25519.ExtendedPoint.fromHex(b); return true; } catch { return false; } };
@@ -84,6 +95,10 @@ export function pda(seeds: Uint8Array[], program: string): string {
 export const ataOf = (owner: string, mint: string, tokenProgram = P.token) => pda([b58d(owner), b58d(tokenProgram), b58d(mint)], P.ata);
 const pumpPda = (...s: (string | Uint8Array)[]) => pda(s.map((x) => (typeof x === 'string' ? te.encode(x) : x)), P.pump);
 const ammPda = (...s: (string | Uint8Array)[]) => pda(s.map((x) => (typeof x === 'string' ? te.encode(x) : x)), P.pamm);
+const dlmmPda = (...s: (string | Uint8Array)[]) => pda(s.map((x) => (typeof x === 'string' ? te.encode(x) : x)), P.dlmm);
+const i64 = (v: number) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigInt64(0, BigInt(v), true); return b; };
+export const binArrayOf = (pool: string, index: number) => dlmmPda('bin_array', b58d(pool), i64(index));
+export const dlmmOracleOf = (pool: string) => dlmmPda('oracle', b58d(pool));
 export const curveOf = (mint: string) => pumpPda('bonding-curve', b58d(mint));
 export function canonicalPool(mint: string) {
   const authority = pumpPda('pool-authority', b58d(mint));
@@ -198,6 +213,11 @@ function readBatch(addrs: string[]): Promise<Got[]> {
 const rdU64 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset).getBigUint64(o, true);
 const rdI128 = (d: Uint8Array, o: number) => { const v = new DataView(d.buffer, d.byteOffset); return (v.getBigInt64(o + 8, true) << 64n) | v.getBigUint64(o, true); };
 const rdKey = (d: Uint8Array, o: number) => b58e(d.subarray(o, o + 32));
+const rdU128 = (d: Uint8Array, o: number) => { const v = new DataView(d.buffer, d.byteOffset); return (v.getBigUint64(o + 8, true) << 64n) | v.getBigUint64(o, true); };
+const rdI32 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset).getInt32(o, true);
+const rdU16 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset).getUint16(o, true);
+const rdU32 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset).getUint32(o, true);
+const hasDisc = (d: Uint8Array, disc: number[]) => d.length >= 8 && disc.every((b, i) => d[i] === b);
 
 // ── transactions ──
 type Meta = { pubkey: string; signer: boolean; writable: boolean };
@@ -312,31 +332,80 @@ async function loadRoute(mint: string, hint?: any): Promise<SolRoute> {
   if (!mintAcc) throw new Error('Unknown mint');
   const tokenProgram = mintAcc.owner; if (tokenProgram !== P.token && tokenProgram !== P.token22) throw new Error('Not an SPL token');
   const decimals = mintAcc.data[44];
-  let venue: 'pump' | 'pumpswap' = 'pumpswap'; let isCashback = false, isMayhem = false; let pool = '';
-  let baseVault: string | undefined, quoteVault: string | undefined;
+  let venue: SolRoute['venue'] = 'pumpswap'; let isCashback = false, isMayhem = false; let pool = '';
+  let baseVault: string | undefined, quoteVault: string | undefined, dlmm: DlmmRoute | undefined;
+  // why pump.fun has no SOL market for this coin (then its Meteora DLMM pool against SOL is the venue, if it has one)
+  let noPumpSol = '';
   if (curveAcc && curveAcc.owner === P.pump) {
     const c = decodeCurve(curveAcc.data); isCashback = c.cashback; isMayhem = c.mayhem;
-    if (c.quoteMint !== P.system && c.quoteMint !== P.wsol) throw new Error('This coin is paired with another token; only SOL-paired coins trade here');
+    if (c.quoteMint !== P.system && c.quoteMint !== P.wsol) noPumpSol = 'This coin\'s pump.fun market is quoted in another token, not SOL';
     venue = c.complete ? 'pumpswap' : 'pump';
-  }
-  if (venue === 'pumpswap') {
+  } else noPumpSol = 'Not a pump.fun coin: no curve and no PumpSwap pool';
+  if (!noPumpSol && venue === 'pumpswap') {
     pool = pool0;
     const pa = poolAcc;
-    if (!pa || pa.owner !== P.pamm) throw new Error(curveAcc ? 'The curve is complete and its PumpSwap pool is not open yet — try again in a few seconds' : 'Not a pump.fun coin: no curve and no PumpSwap pool');
-    if (rdKey(pa.data, 43) !== mint || rdKey(pa.data, 75) !== P.wsol) throw new Error('Pool does not match the coin');
-    isCashback = pa.data[8 + 1 + 2 + 32 * 6 + 8 + 32 + 1] === 1;
-    // the pool's vaults never change: knowing them here lets a quote read pool + vaults in one call
-    baseVault = rdKey(pa.data, 139); quoteVault = rdKey(pa.data, 171);
+    if (!pa || pa.owner !== P.pamm) noPumpSol = 'The curve is complete and its PumpSwap pool is not open yet — try again in a few seconds';
+    else {
+      if (rdKey(pa.data, 43) !== mint || rdKey(pa.data, 75) !== P.wsol) throw new Error('Pool does not match the coin');
+      isCashback = pa.data[8 + 1 + 2 + 32 * 6 + 8 + 32 + 1] === 1;
+      // the pool's vaults never change: knowing them here lets a quote read pool + vaults in one call
+      baseVault = rdKey(pa.data, 139); quoteVault = rdKey(pa.data, 171);
+    }
+  }
+  if (noPumpSol) {
+    // the indexer names candidate DLMM pools (it found them by program-account search); nothing in that list is
+    // trusted: every candidate is read here and must be an enabled LB pair of this mint against SOL
+    let h = await hP;
+    if (!Array.isArray(h?.dlmm)) h = await fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null);   // a page hint names no pools: the indexer's route does
+    const named: string[] = Array.isArray(h?.dlmm) ? h.dlmm.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 8) : [];
+    const found = named.length ? await dlmmPoolsOf(mint, named) : [];
+    if (!found.length) throw new Error(noPumpSol + (named.length ? ' — its Meteora DLMM pools could not be verified' : /not open yet/.test(noPumpSol) ? '' : ' — and no Meteora DLMM pool against SOL was found'));
+    const ext = mintExtensions(mintAcc.data);
+    if (ext.has(1)) throw new Error('This coin charges a transfer fee (Token-2022) — not supported here');
+    if (ext.has(14)) throw new Error('This coin carries a transfer hook (Token-2022) — not supported here');
+    const best = found[0]; venue = 'dlmm'; pool = best.pool; isCashback = false; dlmm = best.route;
   }
   const h = await Promise.race([hP, Promise.resolve(null)]);   // a symbol not here yet is not worth waiting for
-  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault };
+  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault, dlmm };
   routeCache.set(mint, { at: Date.now(), r }); return r;
+}
+// the TLV extensions of a Token-2022 mint (type → present); a classic mint has none
+function mintExtensions(d: Uint8Array): Set<number> {
+  const out = new Set<number>(); if (d.length <= 166 || d[165] !== 1) return out;
+  const v = new DataView(d.buffer, d.byteOffset);
+  for (let o = 166; o + 4 <= d.length;) { const t = v.getUint16(o, true), n = v.getUint16(o + 2, true); if (!t && !n) break; out.add(t); o += 4 + n; }
+  return out;
+}
+// the named pools, verified on chain and ordered by their SOL reserve (the deepest first); a candidate that is not
+// an enabled LB pair of exactly this mint and SOL is dropped, never used
+async function dlmmPoolsOf(mint: string, named: string[]): Promise<{ pool: string; route: DlmmRoute; solReserve: bigint }[]> {
+  const accs = await readBatch(named);
+  if (accs.every((a) => a === undefined)) throw new Error(READ_FAIL);
+  const ok: { pool: string; route: DlmmRoute }[] = [];
+  for (let i = 0; i < named.length; i++) {
+    const a = accs[i]; if (!a || a.owner !== P.dlmm || a.data.length < 904 || !hasDisc(a.data, LB_PAIR_DISC)) continue;
+    const lb = decodeLbPair(a.data);
+    const solIsX = lb.tokenX === P.wsol && lb.tokenY === mint, solIsY = lb.tokenY === P.wsol && lb.tokenX === mint;
+    if (!solIsX && !solIsY) continue;
+    if (lb.status !== 0) continue;   // PairStatus::Disabled
+    // a permissioned / customizable pair opens at its activation point (slot or unix time); slot-gated ones are left
+    // to the simulation, time-gated ones that are not open yet are skipped here
+    if ((lb.pairType === 1 || lb.pairType === 2) && lb.activationType === 1 && Number(lb.activationPoint) > Date.now() / 1000) continue;
+    if (lb.oracle !== dlmmOracleOf(named[i])) continue;
+    ok.push({ pool: named[i], route: { solIsX, reserveX: lb.reserveX, reserveY: lb.reserveY, oracle: lb.oracle, activeIdx: binArrayIndex(lb.activeId), binStep: lb.binStep } });
+  }
+  if (!ok.length) return [];
+  const res = await readBatch(ok.map((p) => (p.route.solIsX ? p.route.reserveX : p.route.reserveY)));
+  const out = ok.map((p, i) => ({ ...p, solReserve: res[i] && res[i]!.data.length >= 72 ? rdU64(res[i]!.data, 64) : 0n }));
+  return out.sort((a, b) => (a.solReserve === b.solReserve ? a.route.binStep - b.route.binStep : a.solReserve > b.solReserve ? -1 : 1));
 }
 
 // ── quotes ──
 // what a quote needs, as one list of accounts (fee config only when it is not cached)
 function marketAddrs(r: SolRoute): string[] {
   if (r.venue === 'pump') return [curveOf(r.mint), ...(feeCfgFresh(P.pumpFeeConfig) ? [] : [P.pumpFeeConfig])];
+  // DLMM: the pair and the bin arrays around the active bin (a quote reads further ones only when the walk gets there)
+  if (r.venue === 'dlmm' && r.dlmm) return [r.pool, binArrayOf(r.pool, r.dlmm.activeIdx - 1), binArrayOf(r.pool, r.dlmm.activeIdx), binArrayOf(r.pool, r.dlmm.activeIdx + 1)];
   if (!r.baseVault || !r.quoteVault) return [r.pool];
   return [r.pool, r.baseVault, r.quoteVault, ...(feeCfgFresh(P.ammFeeConfig) ? [] : [P.ammFeeConfig])];
 }
@@ -402,8 +471,139 @@ async function quoteAmm(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint, pre
   const gross = (quote * amountIn) / (base + amountIn); return { out: gross - ceilFee(gross, totalBps), baseVault, quoteVault, totalBps };
 }
 
+// ── Meteora DLMM: the pool's state, its math, a quote walked bin by bin ──
+// Layouts from the program's on-chain IDL (lb_clmm 0.12.0): LbPair 904 bytes, BinArray 8 + 48 + 70 × 144 bytes.
+type LbPair = {
+  baseFactor: number; filterPeriod: number; decayPeriod: number; reductionFactor: number; variableFeeControl: number; maxVolatilityAccumulator: number;
+  protocolShare: number; baseFeePowerFactor: number; functionType: number; collectFeeMode: number;
+  va: number; vref: number; indexRef: number; lastUpdate: bigint;
+  pairType: number; activeId: number; binStep: number; status: number; activationType: number;
+  tokenX: string; tokenY: string; reserveX: string; reserveY: string; rewardMints: string[]; oracle: string; bitmap: bigint[]; activationPoint: bigint; flagX: number; flagY: number;
+};
+function decodeLbPair(d: Uint8Array): LbPair {
+  return {
+    baseFactor: rdU16(d, 8), filterPeriod: rdU16(d, 10), decayPeriod: rdU16(d, 12), reductionFactor: rdU16(d, 14), variableFeeControl: rdU32(d, 16), maxVolatilityAccumulator: rdU32(d, 20),
+    protocolShare: rdU16(d, 32), baseFeePowerFactor: d[34], functionType: d[35], collectFeeMode: d[36],
+    va: rdU32(d, 40), vref: rdU32(d, 44), indexRef: rdI32(d, 48), lastUpdate: new DataView(d.buffer, d.byteOffset).getBigInt64(56, true),
+    pairType: d[75], activeId: rdI32(d, 76), binStep: rdU16(d, 80), status: d[82], activationType: d[86],
+    tokenX: rdKey(d, 88), tokenY: rdKey(d, 120), reserveX: rdKey(d, 152), reserveY: rdKey(d, 184), rewardMints: [rdKey(d, 264), rdKey(d, 264 + 144)], oracle: rdKey(d, 552),
+    bitmap: Array.from({ length: 16 }, (_, i) => rdU64(d, 584 + 8 * i)), activationPoint: rdU64(d, 816), flagX: d[880], flagY: d[881],
+  };
+}
+const BINS_PER_ARRAY = 70, BITMAP_SIZE = 512, BIN_SIZE = 144, BINS_AT = 56;
+export const binArrayIndex = (binId: number) => Math.floor(binId / BINS_PER_ARRAY);
+const U128 = (1n << 128n) - 1n, Q64 = 1n << 64n;
+const FEE_PRECISION = 1_000_000_000n, MAX_FEE_RATE = 100_000_000n, LIMIT_ORDER_FEE_SHARE = 5000n;
+// (1 + bin_step / 10000) ^ id in Q64.64, bit for bit the program's u64x64_math::pow (19 exponent bits, the base
+// inverted first so no product overflows 128 bits); null where the program would overflow
+export function dlmmPow(base: bigint, exp: number): bigint | null {
+  let invert = exp < 0; if (exp === 0) return Q64;
+  const e = Math.abs(exp); if (e >= 0x80000) return null;
+  let sq = base, result = Q64;
+  if (sq >= result) { sq = U128 / sq; invert = !invert; }
+  for (let bit = 1; bit <= 0x40000; bit <<= 1) {
+    if (bit > 1) { const s2 = sq * sq; if (s2 > U128) return null; sq = s2 >> 64n; }
+    if (e & bit) { const r = result * sq; if (r > U128) return null; result = r >> 64n; }
+  }
+  if (result === 0n) return null;
+  return invert ? U128 / result : result;
+}
+export const dlmmPrice = (binId: number, binStep: number) => dlmmPow(Q64 + ((BigInt(binStep) << 64n) / 10000n), binId);
+const divUp = (a: bigint, b: bigint) => (a + b - 1n) / b;
+const fits64 = (v: bigint) => v <= 0xffffffffffffffffn;
+// out for in and in for out at a bin's price (Q64.64), the program's rounding
+const binOut = (amountIn: bigint, price: bigint, forY: boolean) => (forY ? (price * amountIn) >> 64n : (amountIn << 64n) / price);
+const binIn = (amountOut: bigint, price: bigint, forY: boolean) => (forY ? divUp(amountOut << 64n, price) : divUp(amountOut * price, Q64));
+// the pool's fee rate (1e9 = 100 %) at a volatility accumulator: base fee + variable fee, capped at 10 %
+const dlmmTotalFee = (lb: LbPair, va: number) => {
+  const base = BigInt(lb.baseFactor) * BigInt(lb.binStep) * 10n * 10n ** BigInt(lb.baseFeePowerFactor);
+  const sq = (BigInt(va) * BigInt(lb.binStep)) ** 2n;
+  const variable = lb.variableFeeControl > 0 ? (BigInt(lb.variableFeeControl) * sq + 99_999_999_999n) / 100_000_000_000n : 0n;
+  const t = base + variable; return t > MAX_FEE_RATE ? MAX_FEE_RATE : t;
+};
+const feeOn = (amount: bigint, rate: bigint) => divUp(amount * rate, FEE_PRECISION - rate);          // fee to add on top of a net amount
+const feeFrom = (amount: bigint, rate: bigint) => divUp(amount * rate, FEE_PRECISION);              // fee inside a gross amount
+type Bin = { ax: bigint; ay: bigint; price: bigint; open: bigint; processed: bigint; ask: boolean };
+const binAt = (arr: Uint8Array, i: number): Bin => { const o = BINS_AT + i * BIN_SIZE; return { ax: rdU64(arr, o), ay: rdU64(arr, o + 8), price: rdU128(arr, o + 16), open: rdU64(arr, o + 112), processed: rdU64(arr, o + 128), ask: arr[o + 140] !== 0 }; };
+// the bitmap bit of a bin array index (the pair's own bitmap covers −512 … 511)
+const bitmapHas = (bm: bigint[], idx: number) => { const o = idx + BITMAP_SIZE; return o >= 0 && o < 1024 && ((bm[o >> 6] >> BigInt(o & 63)) & 1n) === 1n; };
+// the next bin array with liquidity from `from` in the swap direction (inclusive), inside the pair's own bitmap;
+// null past it (the extension bitmap) — a swap that deep is refused rather than guessed
+function nextArrayWithLiquidity(bm: bigint[], from: number, forY: boolean): number | null {
+  for (let i = from; i >= -BITMAP_SIZE && i < BITMAP_SIZE; i += forY ? -1 : 1) if (bitmapHas(bm, i)) return i;
+  return null;
+}
+export type DlmmQuote = { out: bigint; fee: bigint; binArrays: string[]; endId: number; lb: LbPair };
+const DLMM_DRY = 'The pool has too little liquidity for this trade';
+// The exact-in quote the program computes (commons/src/quote.rs of the SDK, lb_clmm 0.12): references and the
+// volatility accumulator updated as a swap would, each bin filled from market-making liquidity, then processed and
+// open limit orders where the pair supports them, the fee on the input or on the output per collect_fee_mode.
+// Bin arrays are read as the walk needs them (the three around the active bin come with the market read).
+async function quoteDlmm(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint, pre?: Market): Promise<DlmmQuote> {
+  const d = r.dlmm; if (!d) throw new Error('No DLMM pool on this route');
+  const m: Market = pre && pre.has(r.pool) ? pre : (await readMarket(r)).m;
+  const pa = m.get(r.pool); if (!pa) throw new Error('Pool not found');
+  if (pa.owner !== P.dlmm || !hasDisc(pa.data, LB_PAIR_DISC)) throw new Error('Pool does not match the coin');
+  const lb = decodeLbPair(pa.data);
+  if (lb.status !== 0) throw new Error('Meteora has this pool disabled');
+  const forY = side === 'buy' ? d.solIsX : !d.solIsX;   // selling X for Y walks bins down, selling Y for X walks up
+  // references: a swap older than the filter period re-anchors the volatility reference (decayed inside the decay period)
+  const now = BigInt(Math.floor(Date.now() / 1000)); const elapsed = now - lb.lastUpdate;
+  let indexRef = lb.indexRef, vref = lb.vref, va = lb.va;
+  if (elapsed >= BigInt(lb.filterPeriod)) { indexRef = lb.activeId; vref = elapsed < BigInt(lb.decayPeriod) ? Math.floor((lb.va * lb.reductionFactor) / 10000) : 0; }
+  const limitOrders = lb.functionType === 2 || (lb.functionType === 0 && lb.rewardMints.every((x) => x === P.system));
+  const feeOnInput = lb.collectFeeMode === 1 ? !forY : true;
+  let activeId = lb.activeId, left = amountIn, out = 0n, fee = 0n;
+  const arrays: string[] = []; const loads = new Map<string, Promise<Got[]>>();
+  const arrayBytes = async (idx: number): Promise<Uint8Array> => {
+    const key = binArrayOf(r.pool, idx);
+    let acc: Got = m.has(key) ? m.get(key) : undefined;
+    if (acc === undefined) { let p = loads.get(key); if (!p) { p = readBatch([key]); loads.set(key, p); } acc = (await p)[0]; if (acc === undefined) throw new Error(READ_FAIL); m.set(key, acc); }
+    if (!acc || acc.owner !== P.dlmm || !hasDisc(acc.data, BIN_ARRAY_DISC) || acc.data.length < BINS_AT + BINS_PER_ARRAY * BIN_SIZE) throw new Error('Pool liquidity not found on chain');
+    if (rdKey(acc.data, 24) !== r.pool || Number(new DataView(acc.data.buffer, acc.data.byteOffset).getBigInt64(8, true)) !== idx) throw new Error('Pool liquidity does not match the pool');
+    return acc.data;
+  };
+  for (let guard = 0; left > 0n; guard++) {
+    if (guard > 40) throw new Error(DLMM_DRY);
+    const idx = nextArrayWithLiquidity(lb.bitmap, binArrayIndex(activeId), forY);
+    if (idx === null) throw new Error(DLMM_DRY);
+    const bytes = await arrayBytes(idx); const key = binArrayOf(r.pool, idx); if (!arrays.includes(key)) arrays.push(key);
+    // an empty gap between the active bin and this array: the walk resumes at the array's near edge
+    if (binArrayIndex(activeId) !== idx) activeId = forY ? idx * BINS_PER_ARRAY + BINS_PER_ARRAY - 1 : idx * BINS_PER_ARRAY;
+    while (left > 0n && binArrayIndex(activeId) === idx) {
+      const b = binAt(bytes, activeId - idx * BINS_PER_ARRAY);
+      const [open, processed] = limitOrders && ((forY && !b.ask) || (!forY && b.ask)) ? [b.open, b.processed] : [0n, 0n];
+      const mm = forY ? b.ay : b.ax;
+      if (mm + open + processed > 0n) {
+        va = Math.min(vref + Math.abs(indexRef - activeId) * 10000, lb.maxVolatilityAccumulator);
+        const rate = dlmmTotalFee(lb, va);
+        let price = b.price; if (price === 0n) { const p = dlmmPrice(activeId, lb.binStep); if (p === null) throw new Error('Bin price overflow'); price = p; }
+        // the fill in this bin: market-making liquidity first, then processed, then open limit orders
+        let fIn = feeOnInput ? feeFrom(left, rate) : 0n; let net = left - fIn;
+        let used = 0n, got = 0n;
+        for (const cap of [mm, processed, open]) {
+          if (net <= 0n || cap === 0n) continue;
+          const maxIn = binIn(cap, price, forY);
+          if (net >= maxIn) { used += maxIn; got += cap; net -= maxIn; } else { used += net; got += binOut(net, price, forY); net = 0n; }
+        }
+        let gross = left;
+        if (net > 0n) { gross = feeOnInput ? used + (fIn = feeOn(used, rate)) : used; }   // the bin ran dry: only what it took is spent
+        let netOut = got;
+        if (!feeOnInput) { const f = feeFrom(got, rate); fee += f; netOut = got - f; } else fee += fIn;
+        if (!fits64(gross) || !fits64(netOut)) throw new Error('Amount overflow');
+        if (gross > 0n) { left -= gross; out += netOut; }
+      }
+      if (left > 0n) { activeId += forY ? -1 : 1; if (activeId < -443636 || activeId > 443636) throw new Error(DLMM_DRY); }
+    }
+  }
+  // one more array with liquidity beyond the walk rides along: the price can move a few bins before the swap lands
+  const beyond = nextArrayWithLiquidity(lb.bitmap, binArrayIndex(activeId) + (forY ? -1 : 1), forY);
+  if (beyond !== null && arrays.length < 4) { const k = binArrayOf(r.pool, beyond); if (!arrays.includes(k)) arrays.push(k); }
+  return { out, fee, binArrays: arrays, endId: activeId, lb };
+}
+
 // ── building one trade ──
-const slipMin = (v: bigint, slippagePct: number) => (v * BigInt(Math.floor((100 - Math.min(99, Math.max(0, slippagePct))) * 100))) / 10000n;
+const slipMin =(v: bigint, slippagePct: number) => (v * BigInt(Math.floor((100 - Math.min(99, Math.max(0, slippagePct))) * 100))) / 10000n;
 function pumpIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint, minOut: bigint): Ix[] {
   const curve = curveOf(r.mint);
   const accs: [string, boolean, boolean][] = [
@@ -434,6 +634,25 @@ function ammIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint,
   out.push(ix(P.pamm, accs, data), closeAcc(wsolAta, user, user));
   return out;
 }
+// Meteora DLMM swap2 (16 accounts in the IDL's order, then the bin arrays the quote walked as remaining accounts);
+// the optional bitmap-extension and host-fee slots carry the program id, Anchor's "none". The same wrapped-SOL
+// account as PumpSwap: opened, funded on a buy, closed at the end so the SOL of a sell lands in the wallet.
+function dlmmIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint, minOut: bigint, binArrays: string[]): Ix[] {
+  const d = r.dlmm!; const wsolAta = ataOf(user, P.wsol, P.token), tokAta = ataOf(user, r.mint, r.tokenProgram);
+  const [mintX, mintY, progX, progY] = d.solIsX ? [P.wsol, r.mint, P.token, r.tokenProgram] : [r.mint, P.wsol, r.tokenProgram, P.token];
+  const [inAta, outAta] = side === 'buy' ? [wsolAta, tokAta] : [tokAta, wsolAta];
+  const accs: [string, boolean, boolean][] = [
+    [r.pool, false, true], [P.dlmm, false, false], [d.reserveX, false, true], [d.reserveY, false, true], [inAta, false, true], [outAta, false, true],
+    [mintX, false, false], [mintY, false, false], [d.oracle, false, true], [P.dlmm, false, false], [user, true, false],
+    [progX, false, false], [progY, false, false], [P.memo, false, false], [dlmmPda('__event_authority'), false, false], [P.dlmm, false, false],
+    ...binArrays.map((k) => [k, false, true] as [string, boolean, boolean]),
+  ];
+  const data = cat(Uint8Array.from(DISC.dlmmSwap2), u64(amount), u64(minOut), u32(0));   // remaining_accounts_info: no slices (no transfer hooks)
+  const out: Ix[] = [ataCreate(user, user, P.wsol, P.token)];
+  if (side === 'buy') out.push(transferIx(user, wsolAta, amount), syncNative(wsolAta), ataCreate(user, user, r.mint, r.tokenProgram));
+  out.push(ix(P.dlmm, accs, data), closeAcc(wsolAta, user, user));
+  return out;
+}
 
 // ── fees and tips ──
 // Each of these is fetched once however many wallets ask at the same moment (the in-flight
@@ -448,7 +667,7 @@ function tips(): Promise<any> {
 let feeLv: any = null, feeAt = 0, feeLoad: Promise<any> | null = null;
 function feeLevels(): Promise<any> {
   if (feeLv && Date.now() - feeAt < 10000) return Promise.resolve(feeLv);
-  return (feeLoad ||= Promise.race([solRpc<any>('getPriorityFeeEstimate', [{ accountKeys: [P.pump, P.pamm], options: { includeAllPriorityFeeLevels: true } }]).catch(() => null), new Promise<null>((ok) => setTimeout(() => ok(null), 3000))])
+  return (feeLoad ||= Promise.race([solRpc<any>('getPriorityFeeEstimate', [{ accountKeys: [P.pump, P.pamm, P.dlmm], options: { includeAllPriorityFeeLevels: true } }]).catch(() => null), new Promise<null>((ok) => setTimeout(() => ok(null), 3000))])
     .then((est) => { feeLoad = null; const lv = est?.priorityFeeLevels; if (lv) { feeLv = lv; feeAt = Date.now(); } return lv || feeLv || {}; }));
 }
 export async function sendPlan(s: SolSettings) {
@@ -549,11 +768,17 @@ const CODE_TEXT: Record<string, string> = {
   BuySlippageBelowMinTokensOut: SLIP, BuySlippageBelowMinBaseAmountOut: SLIP,
   BuyNotEnoughSolToCoverRent: 'Not enough SOL for the fees and account rent of this buy', BuyNotEnoughSolToCoverFees: 'Not enough SOL for the fees and account rent of this buy', BuyNotEnoughQuoteTokensToCoverFees: 'Not enough SOL for the fees and account rent of this buy',
   ZeroQuoteAmount: 'Amount too small for this pool', TooLittlePoolTokenLiquidity: 'The pool has too little liquidity for this trade',
+  // lb_clmm (Meteora DLMM)
+  ExceededAmountSlippageTolerance: SLIP, ExceededBinSlippageTolerance: SLIP, InsufficientOutAmount: SLIP,
+  PairInsufficientLiquidity: 'The pool has too little liquidity for this trade', CannotFindNonZeroLiquidityBinArrayId: 'The pool has too little liquidity for this trade',
+  BinArrayNotFound: 'The price moved further than the pool liquidity this trade carried — try again', BitmapExtensionAccountIsNotProvided: 'The price moved further than the pool liquidity this trade carried — try again',
+  PoolDisabled: 'Meteora has this pool disabled', InsufficientInAmount: 'Amount too small for this pool',
 };
 // a landed failure carries only {"InstructionError":[i,{"Custom":n}]}: the number means a different thing per program
 const CUSTOM_TEXT: Record<string, Record<number, string>> = {
   pump: { 6002: SLIP, 6003: SLIP, 6042: SLIP, 6005: CODE_TEXT.BondingCurveComplete, 6040: CODE_TEXT.BuyNotEnoughSolToCoverRent, 6041: CODE_TEXT.BuyNotEnoughSolToCoverFees, 6021: CODE_TEXT.NotEnoughTokensToBuy, 6023: CODE_TEXT.NotEnoughTokensToSell },
   pumpswap: { 6004: SLIP, 6040: SLIP, 6002: CODE_TEXT.ZeroQuoteAmount, 6003: CODE_TEXT.TooLittlePoolTokenLiquidity, 6039: CODE_TEXT.BuyNotEnoughQuoteTokensToCoverFees, 6020: CODE_TEXT.DisabledBuy, 6021: CODE_TEXT.DisabledSell },
+  dlmm: { 6003: SLIP, 6004: SLIP, 6039: SLIP, 6012: CODE_TEXT.PairInsufficientLiquidity, 6037: CODE_TEXT.PairInsufficientLiquidity, 6009: CODE_TEXT.BinArrayNotFound, 6036: CODE_TEXT.BinArrayNotFound, 6042: CODE_TEXT.PoolDisabled, 6104: CODE_TEXT.InsufficientInAmount },
 };
 const errText = (sim: any, side: 'buy' | 'sell' = 'buy', venue = '') => {
   const logs: string[] = sim?.logs || []; const all = logs.join('\n'); const err = JSON.stringify(sim?.err ?? '');
@@ -578,10 +803,17 @@ export async function solTradeIxs(user: string, r: SolRoute, side: 'buy' | 'sell
     let minOut = slipMin(q.out, slippage); if (side === 'buy' && minOut <= 0n) minOut = 1n;
     return { ixs: pumpIxs(user, r, side, amount, minOut), expected: q.out, minOut };
   }
+  if (r.venue === 'dlmm') {
+    const q = await quoteDlmm(r, side, amount, pre);
+    if (q.out <= 0n) throw new Error(side === 'buy' ? 'Amount too small to buy anything' : 'Amount too small for this pool');
+    let minOut = slipMin(q.out, slippage); if (minOut <= 0n) minOut = 1n;
+    return { ixs: dlmmIxs(user, r, side, amount, minOut, q.binArrays), expected: q.out, minOut };
+  }
   const q = await quoteAmm(r, side, amount, pre);
   let minOut = slipMin(q.out, slippage); if (minOut <= 0n) minOut = 1n;
   return { ixs: ammIxs(user, r, side, amount, minOut, q), expected: q.out, minOut };
 }
+export const solQuoteDlmm = (r: SolRoute, side: 'buy' | 'sell', amountIn: bigint) => quoteDlmm(r, side, amountIn);
 export const solBudget = (units: number, micro: number) => budget(units, micro);
 export const solSimulate = (tx: Uint8Array) => simulate(tx);
 
@@ -625,7 +857,8 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   // this wallet's own accounts ride in the click's one market read: its SOL (it must pay before anything is
   // simulated or signed), its token account (a sell's balance; a buy's "does the account exist yet") and the venue's
   // volume accumulator (a wallet's first trade there pays its rent)
-  const uva = (route: SolRoute) => (route.venue === 'pump' ? pumpPda('user_volume_accumulator', b58d(user)) : ammPda('user_volume_accumulator', b58d(user)));
+  // (DLMM keeps no accumulator: the third account is the wrapped-SOL account, whose rent a first trade puts down)
+  const uva = (route: SolRoute) => (route.venue === 'pump' ? pumpPda('user_volume_accumulator', b58d(user)) : route.venue === 'dlmm' ? ataOf(user, P.wsol, P.token) : ammPda('user_volume_accumulator', b58d(user)));
   const read = (route: SolRoute) => readMarket(route, [user, ataOf(user, route.mint, route.tokenProgram), uva(route)]);
   let { m, extra } = await read(r);
   // this wallet's slice of the read failed: this wallet stops here, the others go on
@@ -647,19 +880,20 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   }
   const plan = await planP;
   const tip = plan.tipLamports > 0n ? [transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
-  // the most this transaction can be signed with: Fast simulates at 400k and signs ≤ 400k, Turbo signs 300k
-  const maxUnits = s.turbo ? 300_000 : 400_000;
+  // the most this transaction can be signed with: Fast simulates at 400k and signs ≤ 400k, Turbo signs 300k — 400k on
+  // DLMM, where a sell that walks many bins measured 337k (pump / PumpSwap never pass 100k)
+  const maxUnits = s.turbo ? (r.venue === 'dlmm' ? 400_000 : 300_000) : 400_000;
   {
     // what the wallet must hold besides a buy's amount: tip, priority and signature fee, the temporary wrapped-SOL
     // account on PumpSwap (refunded in the same transaction, but held during it), the token account and the volume
     // accumulator when they do not exist yet; a buy also keeps the wallet itself rent-exempt
     const have = BigInt(extra[0]?.lamports || 0);
-    const rent = (side === 'buy' && !extra[1] ? (r.tokenProgram === P.token22 ? RENT_ATA22 : RENT_ATA) : 0n) + (r.venue === 'pumpswap' ? RENT_ATA : 0n) + (extra[2] ? 0n : RENT_UVA);
+    const rent = (side === 'buy' && !extra[1] ? (r.tokenProgram === P.token22 ? RENT_ATA22 : RENT_ATA) : 0n) + (r.venue === 'pumpswap' ? RENT_ATA : 0n) + (r.venue === 'dlmm' ? (extra[2] ? 0n : RENT_ATA) : extra[2] ? 0n : RENT_UVA);
     const fees = plan.tipLamports + (BigInt(plan.micro) * BigInt(maxUnits)) / 1_000_000n + SIG_FEE;
     const need = (side === 'buy' ? amount + RENT_WALLET : 0n) + fees + rent;
     if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : side === 'buy' ? `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees${rent ? ' + account rent' : ''})` : `Not enough SOL for the sell's fees: ${solTxt(have)} available, about ${solTxt(need)} needed`);
   }
-  let units = s.turbo ? 300_000 : 200_000;
+  let units = s.turbo ? maxUnits : 200_000;
   if (!s.turbo) {
     // simulate with a generous limit, then sign with what it really used (+25%): a smaller limit lands sooner at the same price
     const sim = await simulate(unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...ixs, ...tip], P.system)));
@@ -686,13 +920,14 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
 }
 export async function solPreviewOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings) {
   const user = a.key && !a.ext ? solKeys(a.key).address : '';
-  const out: any = { name: a.name, address: user, side, venue: r.venue === 'pump' ? 'pump.fun curve' : 'PumpSwap', contract: r.venue === 'pump' ? P.pump : P.pamm, method: r.venue === 'pump' ? (side === 'buy' ? 'buy_exact_quote_in_v3' : 'sell_v3') : (side === 'buy' ? 'buy_exact_quote_in_v2' : 'sell_v2'), amountIn: size, amountInLabel: side === 'buy' ? size + ' SOL' : size + '%', notes: [] as string[] };
+  const out: any = { name: a.name, address: user, side, venue: r.venue === 'pump' ? 'pump.fun curve' : r.venue === 'dlmm' ? 'Meteora DLMM' : 'PumpSwap', contract: r.venue === 'pump' ? P.pump : r.venue === 'dlmm' ? P.dlmm : P.pamm, method: r.venue === 'pump' ? (side === 'buy' ? 'buy_exact_quote_in_v3' : 'sell_v3') : r.venue === 'dlmm' ? 'swap2' : (side === 'buy' ? 'buy_exact_quote_in_v2' : 'sell_v2'), amountIn: size, amountInLabel: side === 'buy' ? size + ' SOL' : size + '%', notes: [] as string[] };
   try {
     if (!user) throw new Error('This wallet has no Solana key here');
     const bal = await solRpc<any>('getBalance', [user, { commitment: 'processed' }]); out.balanceEth = (bal?.value || 0) / 1e9;
     let amount = BigInt(Math.floor(size * 1e9));
     if (side === 'sell') { const tb = await solRpc<any>('getTokenAccountBalance', [ataOf(user, r.mint, r.tokenProgram)]).catch(() => null); amount = (BigInt(tb?.value?.amount || '0') * BigInt(Math.round(size * 100))) / 10000n; }
-    const q = r.venue === 'pump' ? await quotePump(r.mint, side, amount) : await quoteAmm(r, side, amount);
+    const q = r.venue === 'pump' ? await quotePump(r.mint, side, amount) : r.venue === 'dlmm' ? await quoteDlmm(r, side, amount) : await quoteAmm(r, side, amount);
+    if (r.venue === 'dlmm' && r.dlmm && 'binArrays' in q) out.notes.push(`DLMM pool ${r.pool.slice(0, 6)}… · bin step ${r.dlmm.binStep} · ${q.binArrays.length} bin arrays`);
     const exp = side === 'buy' ? Number(q.out) / 10 ** r.decimals : Number(q.out) / 1e9;
     out.expected = exp; out.min = side === 'buy' ? Number(slipMin(q.out, s.slippage)) / 10 ** r.decimals : Number(slipMin(q.out, s.slippage)) / 1e9;
     const plan = await sendPlan(s); out.gasEth = (plan.micro * (s.turbo ? 300000 : 150000)) / 1e15 + Number(plan.tipLamports) / 1e9 + 0.000005; out.notes.push(`${plan.mode} · tip ${(Number(plan.tipLamports) / 1e9).toFixed(6)} SOL · priority ${plan.micro} µlamports/CU`);
@@ -739,7 +974,7 @@ export async function solTransfer(a: SolAcct, to: string, amountSol: number | 'm
 const inFlight = new Map<string, number>();        // signature → sent at
 const statusOf = new Map<string, { at: number; st: any }>();
 let statusLoad: Promise<void> | null = null, statusOk = true, statusBackoff = 0, statusNextAt = 0;
-const sigVenue = new Map<string, string>();       // signature → 'pump' | 'pumpswap' (a landed error code is read per program)
+const sigVenue = new Map<string, string>();       // signature → 'pump' | 'pumpswap' | 'dlmm' (a landed error code is read per program)
 function trackSig(sig: string, venue = '') { inFlight.set(sig, Date.now()); if (venue) { sigVenue.set(sig, venue); if (sigVenue.size > 500) sigVenue.delete(sigVenue.keys().next().value as string); } }
 const settledSt = (st: any) => !!st && (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized');
 async function loadStatuses(extra: string) {

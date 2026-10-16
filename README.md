@@ -51,7 +51,7 @@ report it (see [SECURITY.md](SECURITY.md)) and tell people.
 | --- | --- |
 | `src/webEngine.ts` | the engine: key store, EVM trading (Robinhood Chain, BNB Chain), the postMessage surface the terminal talks to, the 2FA gate, dialogs |
 | `src/vaultRecovery.ts` | key derivation, the encrypted vault at rest, account backup (v3), survival rules after a lost key store |
-| `src/solEngine.ts` | the Solana lane: ed25519 identities, pump.fun / PumpSwap trades, sending through Jito + RPC |
+| `src/solEngine.ts` | the Solana lane: ed25519 identities, pump.fun / PumpSwap / Meteora DLMM trades, sending through Jito + RPC |
 | `src/nearEngine.ts` | the NEAR lane: NEAR identities, Rhea DCL swaps |
 | `src/bridgeEngine.ts` | balances and sends on other EVM chains for the Relay bridge leg |
 | `src/evmV4Router.ts`, `src/bnbRouter.ts`, `src/standardRouter.ts` | calldata for the venues the engine is allowed to trade through (Uniswap V4 / Universal Router, PancakeSwap Infinity, four.meme, Flap, standardreserve) |
@@ -126,9 +126,9 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   554899
-sha384  sha384-m3D8BvIU0R6HB1ZhitOrGmaWa2z8u/YiJIBaWBzHSvMZ12zAW5/nUr+7ipQ8lfWN
-sha256  3dfc862f9b01c541824e9643db5fc9306c5dabac5afdc5e77999b6ec6fd9ea42
+bytes   563640
+sha384  sha384-b622mqiWBLTZIlQ6Iwd3Jy5vy/P/16LL9yzaGnEWhwEVFwLBlsMKiIQGP55ebfd+
+sha256  386dbdd99da87fa7ee5c3246267dbeca1cf399243452ac4ac10aeb30e349aa4b
 ```
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.

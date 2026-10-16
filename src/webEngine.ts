@@ -88,7 +88,7 @@ const pageChain = String(urlChain || (typeof window !== 'undefined' ? (window as
 const CFG = CHAIN_CFGS[pageChain] || CHAIN_CFGS.robinhood;
 // the frame opened for the NEAR lane: same wallets, NEAR identities, Rhea DCL swaps (src/nearEngine.ts)
 const NEAR_MODE = pageChain === 'near';
-// the frame opened for the Solana lane: same wallets, Solana identities, pump.fun / PumpSwap trades (src/solEngine.ts)
+// the frame opened for the Solana lane: same wallets, Solana identities, pump.fun / PumpSwap / Meteora DLMM trades (src/solEngine.ts)
 const SOL_MODE = pageChain === 'sol';
 const RPC = CFG.rpc;
 const RPC2 = CFG.rpc2;
