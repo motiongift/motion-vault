@@ -13,7 +13,7 @@
 import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
 import { NEAR_ACCT, nearAccountId, nearSecretKey, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS } from './nearEngine';
-import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase } from './solEngine';
+import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
 import {
   bootVault, resetVault, openWith, lostBlobs, unrecovered, webLocker, KEY_LOCK, LOST_PREFIX, type Boot, type KeyStore, type LostBlob,
@@ -2425,6 +2425,14 @@ listeners.add(() => pushBackupState());
 listeners.add(() => scheduleWatch(50));                        // a created / imported wallet shows a balance at once
 document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleWatch(50); });
 const decimalsCache = new Map<string, number>();
+// the symbol a send dialog names: the stablecoins every lane holds by their known names (a coin can call itself
+// anything — the dialog shows the contract beside it), else the token's own symbol()
+const KNOWN_SYMBOLS: Record<string, string> = { EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 'USDC', '0x5fc5360d0400a0fd4f2af552add042d716f1d168': 'USDG', '0x55d398326f99059ff775485246999027b3197955': 'USDT', '0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d': 'USD1' };
+async function tokenSymbolOf(token: string): Promise<string> {
+  const k = KNOWN_SYMBOLS[token] || KNOWN_SYMBOLS[token.toLowerCase()]; if (k) return k;
+  if (SOL_MODE) return String((await solTokenMeta(token)).symbol || '').slice(0, 16);
+  return String(await publicClient.readContract({ address: token.toLowerCase() as `0x${string}`, abi: ERC20_ABI, functionName: 'symbol' })).replace(/[^\w$.-]/g, '').slice(0, 16);
+}
 async function tokenDecimals(token: `0x${string}`) {
   const k = token.toLowerCase(); const hit = decimalsCache.get(k); if (hit != null) return hit;
   const d = Number(await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'decimals' }));
@@ -3290,6 +3298,36 @@ const engine = {
       if (!ok) throw new Error('Cancelled');
     } else await gate('transfer', auth);
     return { ok: true, hash: await sendEth(fromId, to as `0x${string}`, amountEth === 'max' ? 'max' : parseEther(String(amountEth))) };
+  },
+  // A token out of a wallet — a stablecoin deposit (USDC / USDG / USDT) or any coin it holds (2026-10-17: a user's 2 USDC
+  // showed in the header and could not be moved). The same doors as the native coin: outside the vault = the 'withdraw'
+  // gate and a trusted click on the real address, with the token and the amount; between own wallets = 'transfer'.
+  transferToken: async (fromId: string, token: string, to: string, amount: number | 'max', auth?: Auth) => {
+    const list = requireUnlocked(); const from = list.find((x) => x.id === fromId); if (!from) throw new Error('Unknown wallet');
+    if (NEAR_MODE) throw new Error('Sending tokens on NEAR is not supported yet — export the key to move them');
+    if (!(amount === 'max' || (typeof amount === 'number' && amount > 0 && Number.isFinite(amount)))) throw new Error('Invalid amount');
+    if (SOL_MODE ? !(SOL_ADDR.test(String(to)) && SOL_ADDR.test(String(token))) : !(/^0x[0-9a-fA-F]{40}$/.test(String(to)) && /^0x[0-9a-fA-F]{40}$/.test(String(token)))) throw new Error('Invalid address');
+    const sym = await tokenSymbolOf(token).catch(() => '');
+    const what = `${amount === 'max' ? 'all of its' : escHtml(amount)} <b>${escHtml(sym || (String(token).slice(0, 6) + '…' + String(token).slice(-4)))}</b>`;
+    if (!isOwn(to)) {
+      await gate('withdraw', auth);
+      const ok = await ask({ title: 'Send outside the vault', danger: true, ok: 'Send', html: `<p>Send ${what} from <b>${escHtml(from.name)}</b> to</p><p class="addr">${escHtml(to)}</p><p class="dlg-note">Token <span class="addr">${escHtml(token)}</span>. This address is not one of your wallets. Check every character — a transfer cannot be reversed.</p>` });
+      if (!ok) throw new Error('Cancelled');
+    } else await gate('transfer', auth);
+    if (SOL_MODE) { const r = await solTokenTransfer(from as unknown as SolAcct, String(token), String(to), amount); return { ok: true, hash: r.hash, units: r.units, decimals: r.decimals }; }
+    const { account, client } = walletFor(fromId);
+    const t = String(token).toLowerCase() as `0x${string}`;
+    const bal = await publicClient.readContract({ address: t, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) as bigint;
+    const dec = await tokenDecimals(t);
+    const units = amount === 'max' ? bal : toUnits(amount, dec);
+    if (units <= 0n) throw new Error('Nothing to send');
+    if (units > bal) throw new Error('More than this wallet holds');
+    const data = encodeFunctionData({ abi: ERC20_ABI, functionName: 'transfer', args: [to as `0x${string}`, units] });
+    const gas = await publicClient.estimateGas({ account: account.address, to: t, data }).then((g) => g * 13n / 10n);
+    const gasPrice = await feeFor(1);
+    const native = await publicClient.getBalance({ address: account.address });
+    if (native < gas * gasPrice) throw new Error(`Needs ${formatEther(gas * gasPrice)} ${NATIVE} for gas — this wallet has ${formatEther(native)}`);
+    return { ok: true, hash: await signAndSend(client, account, { to: t, data }, gasPrice, gas), units: units.toString(), decimals: dec };
   },
   // destinations are wallet ids resolved here, never addresses: these two cannot send outside the vault
   distribute: async (fromId: string, toIds: string[], amountEth: number, auth?: Auth) => { const list = requireUnlocked(); { const ext = toIds.map((id) => list.find((x) => x.id === id)).filter((t) => t && !isOwn(t.address)) as Account[]; if (ext.length) { for (const t of ext) await outsideOk(t, `Send <b>${escHtml(amountEth)} ${NATIVE}</b>`, auth); } else await gate('transfer', auth); } const results = []; for (const id of toIds) { const t = list.find((x) => x.id === id); if (!t) continue; try { results.push({ id, address: t.address, ok: true, hash: await sendEth(fromId, t.address, parseEther(String(amountEth))) }); } catch (e) { results.push({ id, address: t.address, ok: false, error: shortError(e) }); } } return { ok: true, results }; },

@@ -968,6 +968,51 @@ export async function solTransfer(a: SolAcct, to: string, amountSol: number | 'm
   await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
   return b58e(sig);
 }
+// the instructions of a token send (pure, so scripts/sol-token-transfer.test.mjs and a mainnet simulation check the bytes):
+// a compute budget, the recipient's token account created if missing (idempotent), transferChecked (index 12)
+export function tokenTransferIxs(owner: string, mint: string, to: string, units: bigint, decimals: number, prog: string): Ix[] {
+  const src = ataOf(owner, mint, prog), dst = ataOf(to, mint, prog);
+  return [...budget(80_000, 50_000), ataCreate(owner, to, mint, prog), ix(prog, [[src, false, true], [mint, false, false], [dst, false, true], [owner, true, false]], cat(Uint8Array.of(12), u64(units), Uint8Array.of(decimals)))];
+}
+// An exact decimal amount in a token's smallest units (never a float times 10^d: 0.1 USDC must be 100000, not 99999)
+export function toUnits(amount: number, decimals: number): bigint {
+  if (!(amount > 0) || !Number.isFinite(amount)) return 0n;
+  // the shortest decimal the number prints as ("0.3", not toFixed's "0.2999…989"), truncated to the token's decimals —
+  // never rounded up past what was typed; tiny numbers JS prints in exponent form go through toFixed
+  let str = String(amount); if (/e/i.test(str)) str = amount.toFixed(Math.min(100, decimals));
+  const [i, f = ''] = str.split('.');
+  return BigInt(i) * 10n ** BigInt(decimals) + BigInt((f + '0'.repeat(decimals)).slice(0, decimals) || '0');
+}
+// SPL tokens out of a wallet (a USDC deposit, a coin) — 2026-10-17, a user's 2 USDC could be seen but not moved.
+// The mint's own program (Token or Token-2022) and decimals; the recipient's token account is created when missing
+// (idempotent, the sender pays its ~0.002 SOL rent); then transferChecked, which the program rejects on a wrong
+// mint or decimals. A recipient that is itself a token account (a common paste) is refused: tokens go to wallets.
+export async function solTokenTransfer(a: SolAcct, mint: string, to: string, amount: number | 'max'): Promise<{ hash: string; units: string; decimals: number }> {
+  if (!a.key || a.ext) throw new Error('No Solana key for this wallet');
+  if (!SOL_ADDR.test(to) || b58d(to).length !== 32) throw new Error('Invalid Solana address');
+  if (!SOL_ADDR.test(mint) || b58d(mint).length !== 32) throw new Error('Invalid token');
+  const m = await account(mint); if (!m) throw new Error('Unknown token');
+  const prog = m.owner; if (prog !== P.token && prog !== P.token22) throw new Error('Not an SPL token');
+  const dec = m.data[44];
+  const k = solKeys(a.key);
+  if (to === k.address) throw new Error('That is this wallet');
+  const dest = await account(to);
+  if (dest && (dest.owner === P.token || dest.owner === P.token22)) throw new Error('That address is a token account — paste the wallet (owner) address instead');
+  const src = ataOf(k.address, mint, prog);
+  const s = await account(src); if (!s || s.owner !== prog) throw new Error('This wallet holds none of this token');
+  const bal = rdU64(s.data, 64);
+  const units = amount === 'max' ? bal : toUnits(amount, dec);
+  if (units <= 0n) throw new Error('Nothing to send');
+  if (units > bal) throw new Error('More than this wallet holds');
+  const dst = ataOf(to, mint, prog);
+  const needRent = !(await account(dst));
+  const lamports = BigInt((await solRpc<any>('getBalance', [k.address, { commitment: 'processed' }])).value || 0);
+  const need = (needRent ? 2_100_000n : 0n) + 20_000n;
+  if (lamports < need) throw new Error(`Needs ${(Number(need) / 1e9).toFixed(4)} SOL for the network fee${needRent ? ' and the recipient\'s token account' : ''} — this wallet has ${(Number(lamports) / 1e9).toFixed(4)} SOL`);
+  const { tx, sig } = signMessage(compileLegacy(k.address, tokenTransferIxs(k.address, mint, to, units, dec, prog), await blockhash()), k.seed);
+  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  return { hash: b58e(sig), units: units.toString(), decimals: dec };
+}
 // Confirmation runs beside the click, never in it. The page asks for each hash in turn; the first ask
 // reads the status of every hash still in flight in one getSignatureStatuses (≤256), the others are
 // answered from that read, so N wallets cost one status call per poll instead of N.
