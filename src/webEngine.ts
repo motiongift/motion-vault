@@ -3231,7 +3231,7 @@ function policy() {
       { method: 'consolidate', does: 'sweeps the vault\'s own wallets into one of them', needs: ['transfer'] },
       { method: 'move.start', does: 'runs a planned move (native or ERC-20, hops)', needs: ['transfer'], outside: ['click', 'withdraw'] },
       { method: 'bridgeSend', does: 'sends on another EVM chain', needs: ['transfer'], outside: ['click', 'withdraw'] },
-      { method: 'bridgeDeposit', does: 'pays a Relay bridge quote to its recipient', needs: ['activation', 'transfer'], outside: ['click', 'withdraw'] },
+      { method: 'bridgeDeposit', does: 'pays a Relay bridge quote to its recipient', needs: ['click', 'transfer'], outside: ['click', 'withdraw'] },
       { method: 'remove', does: 'erases a wallet key', needs: ['click'], funded: ['remove'] },
       { method: 'buy/sell', does: 'signs a verified route for a token trade', needs: [] },
       { method: 'wrap/unwrap', does: 'wraps native coin in the same wallet', needs: [] },
@@ -3272,7 +3272,7 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
 //   consolidate(ids, to, auth)                OWN wallets into one of them       'transfer'
 //   move.start(plan, auth)                    native/ERC-20 legs, hops           'transfer' | outside legs: click + 'withdraw'
 //   bridgeSend(id, chain, to, amt, auth)      native on another EVM chain        'transfer' | outside: click + 'withdraw'
-//   bridgeDeposit(id, quote, auth)            Relay quote to its recipient       activation + 'transfer' | outside: click + 'withdraw'
+//   bridgeDeposit(id, quote, auth)            Relay quote to its recipient       click + 'transfer' | outside: click + 'withdraw'
 //   remove(id, auth)                          key erased                         click | funded: + 'remove'
 //   buy / sell / wrap / unwrap                trades on routes verified on chain (minOut, known venues); no gate — see trade()
 //   signNote(address, message)                two fixed note formats only; never arbitrary messages, never typed data, never calldata
@@ -3606,7 +3606,10 @@ const engine = {
   bridgeBalances: async (chainId: number, addresses: string[]) => (Number(chainId) === RELAY_SOL_CHAIN ? solBalancesFor(addresses) : bridgeBalances(Number(chainId), addresses)),
   bridgeDeposit: async (id: string, quote: BridgeQuoteLite, auth?: Auth) => {
     const list = requireUnlocked(); const a = list.find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
-    if (!navigator.userActivation?.isActive && !navigator.userActivation?.hasBeenActive) throw new Error('A bridge needs a real click');
+    // No user-activation test here (2026-10-18): in the vault frame the page's click never reaches this document — a
+    // cross-origin frame gets no activation from its parent — so "A bridge needs a real click" refused every bridge of a
+    // user who had not clicked inside the frame before. The click that counts is the one on this engine's own dialog,
+    // below, for every bridge (own wallet or not): a page script alone still cannot start one.
     // the quote names where the funds land on the other chain: one of this vault's wallets (same key on every EVM chain, or its Solana identity) is a transfer; anywhere else is a withdrawal — gate, then a trusted click on the real address
     const signBound = async (bound: BridgeQuoteLite) => ({ ok: true, hash: Number(bound.originChainId) === RELAY_SOL_CHAIN ? await solBridgeDeposit(a, bound as never) : await bridgeDeposit(a, bound), requestId: bound.requestId });
     // phase 2: sign exactly what phase 1 gated and quoted — the ticket is single-use, this wallet's, 90 s
@@ -3617,14 +3620,24 @@ const engine = {
       return signBound(t.bound);
     }
     const rcpt = String(quote?.recipient || '');
-    if (!ownAccounts().some((x) => same(x.address, rcpt) || solAddressOf(x) === rcpt)) {
+    const dest = BRIDGE_CHAINS[Number(quote?.destinationChainId)]?.name || (Number(quote?.destinationChainId) === RELAY_SOL_CHAIN ? 'Solana' : `chain ${quote?.destinationChainId}`);
+    const ownTo = ownAccounts().find((x) => same(x.address, rcpt) || solAddressOf(x) === rcpt);
+    if (!ownTo) {
       await gate('withdraw', auth);
-      const dest = BRIDGE_CHAINS[Number(quote?.destinationChainId)]?.name || (Number(quote?.destinationChainId) === RELAY_SOL_CHAIN ? 'Solana' : `chain ${quote?.destinationChainId}`);
       // the login wallet (Privy) is the user's own, but its key is not in this vault: say so instead of "not one of your wallets"
       const login = list.find((x) => x.ext && same(x.address, rcpt));
       const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside the vault', danger: !login, ok: 'Bridge', html: `<p>Bridge from <b>${escHtml(a.name)}</b> to <b>${escHtml(dest)}</b>, landing at</p><p class="addr">${escHtml(rcpt)}</p><p class="dlg-note">${login ? `This is your login wallet <b>${escHtml(login.name)}</b>. It is yours, but its key is held by the login provider, not by this vault — so a bridge there counts as a withdrawal and needs this confirmation.` : 'This address is not one of your wallets.'} A bridge cannot be undone.</p>` });
       if (!ok) throw new Error('Cancelled');
-    } else await gate('transfer', auth);
+    } else {
+      // between the vault's own wallets: the 'transfer' gate, then a trusted click on the engine's dialog (the page's click cannot count here)
+      await gate('transfer', auth);
+      const origin = Number(quote?.originChainId), solOrigin = origin === RELAY_SOL_CHAIN;
+      const from = BRIDGE_CHAINS[origin]?.name || (solOrigin ? 'Solana' : `chain ${origin}`);
+      const sym = BRIDGE_CHAINS[origin]?.symbol || (solOrigin ? 'SOL' : '');
+      const amt = /^\d{1,40}$/.test(String(quote?.amount || '')) ? formatUnits(BigInt(String(quote.amount)), solOrigin ? 9 : 18) : '?';
+      const ok = await ask({ title: 'Bridge between your wallets', ok: 'Bridge', html: `<p>Bridge <b>${escHtml(amt)} ${escHtml(sym)}</b> from <b>${escHtml(a.name)}</b> on <b>${escHtml(from)}</b> to <b>${escHtml(ownTo.name)}</b> on <b>${escHtml(dest)}</b>, landing at</p><p class="addr">${escHtml(rcpt)}</p><p class="dlg-note">Both are wallets of this vault. A bridge cannot be undone. A script on the page cannot click this button.</p>` });
+      if (!ok) throw new Error('Cancelled');
+    }
     // Where Relay pays out is fixed by the request id inside the deposit, and the id by the recipient it was quoted
     // for — not by `quote.recipient`. A page could hand over a step whose id was quoted for another address while
     // `recipient` names one of ours: every check below passes (Relay's contract, this depositor, the exact value),
