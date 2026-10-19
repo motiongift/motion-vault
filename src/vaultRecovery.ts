@@ -19,6 +19,7 @@
 // Pure module: storage, key store and lock are passed in, so the node tests
 // (scripts/vault-recovery.test.mjs) run exactly the code the vault frame runs.
 import { privateKeyToAccount } from 'viem/accounts';
+import { nativeSlotOf, storableKey } from './nativeKeys.ts';
 
 export const VAULT_KEY = 'trenches.vault';
 export const LOST_PREFIX = VAULT_KEY + '.lost-';
@@ -174,7 +175,8 @@ export async function resetVault(d: BootDeps): Promise<Extract<Boot, { state: 'o
 
 // ── the account profile (server/.accounts.json, shape fixed by the server's validProfile) ──
 export type ProfileEntry = { address: string; name: string; iv: string; ct: string };
-export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2 };
+export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2; rk?: RecoveryBlob | null };
+// key: an EVM key, or a chain-only key string (nativeKeys.ts 'sol:…' / 'near:…') whose address is its placeholder slot
 export type BackupWallet = { address: string; name: string; key: `0x${string}`; kind: 'created' | 'imported' | 'derived' | 'hop'; main?: string; index?: number; gen?: 2; archived?: boolean; createdAt?: number };
 export type OpenedWallet = BackupWallet & { v: 1 | 2 | 3 };
 export const PROFILE_CAP = 200;   // the server refuses a profile with more attached entries
@@ -206,7 +208,7 @@ export async function buildProfile(src: { main: string; seed: string; count: num
   for (let i = 0; i < salts.length && attached.length < PROFILE_CAP; i += 1) attached.push({ address: SALT_SLOT(i), name: 'motion vault salt', ...(await seal(kb, AAD_S, { v: 3, s: salts[i] })) });
   const covered: string[] = []; const mine = new Set<string>();
   for (const w of src.wallets) {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(w.key) || mine.has(lc(w.address))) continue;
+    if (!storableKey(w.key) || mine.has(lc(w.address))) continue;
     mine.add(lc(w.address));
     if (attached.length >= PROFILE_CAP) continue;
     const body: Record<string, unknown> = { v: 3, k: w.key, t: KIND_CODE[w.kind] || 'i' };
@@ -230,7 +232,7 @@ export async function buildProfile(src: { main: string; seed: string; count: num
   const saltTag = bytesHex(await hmac(src.seed, 'motion/backup/v3/salts/' + salts.join(','))).slice(2, 18);
   const facts = JSON.stringify({ count: src.count, names: src.names, w: src.wallets.filter((w) => covered.includes(lc(w.address))).map((w) => [lc(w.address), w.name, w.kind, w.main || '', w.index ?? '', !!w.archived]), s: saltTag, c: carried.map((c) => lc(c.address) + c.iv) });
   const digest = bytesHex(new Uint8Array(await subtle().digest('SHA-256', buf(enc.encode(facts))))).slice(2, 34);
-  const total = new Set(src.wallets.filter((w) => /^0x[0-9a-fA-F]{64}$/.test(w.key)).map((w) => lc(w.address))).size;
+  const total = new Set(src.wallets.filter((w) => storableKey(w.key)).map((w) => lc(w.address))).size;
   return { profile, digest, covered, dropped: total - covered.length };
 }
 const same = (a: ProfileEntry, b: ProfileEntry) => lc(a.address) === lc(b.address) && a.iv === b.iv && a.ct === b.ct;
@@ -259,7 +261,8 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
     if (t3) {
       try {
         const p = JSON.parse(t3);
-        if (p && p.v === 3 && /^0x[0-9a-fA-F]{64}$/.test(String(p.k))) {
+        // an older engine opens only EVM keys here and carries a chain-only entry verbatim (it never drops it)
+        if (p && p.v === 3 && storableKey(p.k)) {
           w = { v: 3, key: p.k, address: e.address, name: String(e.name || ''), kind: CODE_KIND[p.t] || 'imported', ...(p.m && Number.isInteger(p.x) && p.x >= 0 ? { main: lc(p.m), index: Number(p.x) } : {}), ...(p.g === 2 ? { gen: 2 as const } : {}), ...(p.a ? { archived: true } : {}), ...(Number(p.c) > 0 ? { createdAt: Number(p.c) } : {}) };
         }
       } catch {}
@@ -267,12 +270,40 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
     if (!w) for (const k of k2s) { const t = await unseal(k, null, e); if (t && /^0x[0-9a-fA-F]{64}$/.test(t)) { w = { v: 2, key: t as `0x${string}`, address: e.address, name: String(e.name || ''), kind: 'imported' }; break; } }
     if (!w) { const t = await unseal(k1, null, e); if (t && /^0x[0-9a-fA-F]{64}$/.test(t)) w = { v: 1, key: t as `0x${string}`, address: e.address, name: String(e.name || ''), kind: 'imported' }; }
     let real = '';
-    if (w) { try { real = privateKeyToAccount(w.key).address; } catch {} }
+    if (w) { try { real = nativeSlotOf(w.key) || privateKeyToAccount(w.key).address; } catch {} }
     if (!w || lc(real) !== lc(e.address)) { unopened.push(e); continue; }
     if (seen.has(lc(real))) continue;
     seen.add(lc(real)); w.address = real as `0x${string}`; wallets.push(w);
   }
   return { salts, wallets, unopened };
+}
+
+// ── account recovery v1 (2026-10-19, opt-in, owner decision): the seed, sealed to the account's Privy wallet ──
+// An account whose main is an EXTERNAL wallet (Rabby / MetaMask) can only re-derive its seed where that wallet signs.
+// With recovery turned on — a trusted click in the vault, on a device where the main is attached — the vault seals the
+// seed under a key from ONE signature of the account's Privy embedded wallet over the fixed text below. Every device
+// logged into the same Privy account can produce that signature (silently), so it restores without the external wallet.
+// Trade-off (docs/PROJECT.md §6, SECURITY.md): the wallets of such an account are then as safe as its Privy login (email
+// / Google / passkey + 2FA) and the integrity of motion.gift — the same level every email-created account already has.
+// The server alone still cannot open anything. Additive and versioned: MAIN_MSG and every derivation are unchanged; the
+// blob rides in the profile as `rk`; v2 would be a new text and a new info string.
+export type RecoveryBlob = { v: 1; addr: string; iv: string; ct: string };
+export const RECOVERY_MSG = (main: string, recovery: string) =>
+  `motion.gift — account recovery v1\nMain wallet: ${lc(main)}\nRecovery wallet: ${lc(recovery)}\n\nThis signature lets any device you log into with this account restore your motion trading wallets. It sends no transaction and costs nothing. Sign it only on motion.gift.`;
+const AAD_R = (main: string, recovery: string) => buf(enc.encode('motion/recovery/v1/' + lc(main) + '/' + lc(recovery)));
+export const recoveryKeyV1 = async (recoverySig: string) => aesKey(await hmac(await seedOfSignature(recoverySig), 'motion/recovery/v1'));
+export const validRecovery = (rk: unknown): rk is RecoveryBlob => !!rk && typeof rk === 'object' && (rk as RecoveryBlob).v === 1
+  && /^0x[0-9a-fA-F]{40}$/.test(String((rk as RecoveryBlob).addr || '')) && /^[A-Za-z0-9+/=]{16}$/.test(String((rk as RecoveryBlob).iv || '')) && /^[A-Za-z0-9+/=]{20,400}$/.test(String((rk as RecoveryBlob).ct || ''));
+export async function sealRecovery(main: string, recovery: string, recoverySig: string, seed: string): Promise<RecoveryBlob> {
+  if (!/^0x[0-9a-f]{64}$/.test(seed)) throw new Error('No seed to seal');
+  const s = await seal(await recoveryKeyV1(recoverySig), AAD_R(main, recovery), { v: 1, s: seed });
+  return { v: 1, addr: lc(recovery), iv: s.iv, ct: s.ct };
+}
+// the seed, or null when this signature / main / recovery wallet does not open the blob
+export async function openRecovery(rk: RecoveryBlob, main: string, recoverySig: string): Promise<string | null> {
+  if (!validRecovery(rk)) return null;
+  const t = await unseal(await recoveryKeyV1(recoverySig), AAD_R(main, rk.addr), { address: rk.addr, name: '', iv: rk.iv, ct: rk.ct });
+  try { const s = String(JSON.parse(t || 'null')?.s || ''); return /^0x[0-9a-f]{64}$/.test(s) ? s : null; } catch { return null; }
 }
 
 // ── storage health: a browser short of disk space discards site data, and the vault key with it ──

@@ -37,6 +37,7 @@
 //     and receipts for every hash in flight are read with one getSignatureStatuses.
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { nativeChainOf, nativeSeed } from './nativeKeys.ts';
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
 export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number };
@@ -110,10 +111,13 @@ const seedOf = (evmKeyHex: string) => sha256(cat(te.encode('motion/sol/v1/'), Ui
 const keyCache = new Map<string, { seed: Uint8Array; pub: Uint8Array; address: string }>();
 export function solKeys(evmKeyHex: string) {
   const hit = keyCache.get(evmKeyHex); if (hit) return hit;
-  const seed = seedOf(evmKeyHex); const pub = ed25519.getPublicKey(seed); const k = { seed, pub, address: b58e(pub) };
+  // a Solana-only wallet ('sol:' + seed, nativeKeys.ts) IS its seed; every EVM key derives exactly as before
+  const own = nativeChainOf(evmKeyHex);
+  if (own === 'near') throw new Error('A NEAR wallet has no Solana key');
+  const seed = own === 'sol' ? nativeSeed(evmKeyHex) : seedOf(evmKeyHex); const pub = ed25519.getPublicKey(seed); const k = { seed, pub, address: b58e(pub) };
   keyCache.set(evmKeyHex, k); return k;
 }
-export const solAddressOf = (a: SolAcct) => (a.key && !a.ext ? solKeys(a.key).address : '');
+export const solAddressOf = (a: SolAcct) => (a.key && !a.ext && nativeChainOf(a.key) !== 'near' ? solKeys(a.key).address : '');
 export const solSecretKey = (evmKeyHex: string) => { const k = solKeys(evmKeyHex); return b58e(cat(k.seed, k.pub)); };
 // signs a short text note with the wallet's Solana key (the BGC entry): hex ed25519 signature over the UTF-8 bytes
 export const solSignText = (evmKeyHex: string, text: string) => Array.from(ed25519.sign(new TextEncoder().encode(text), solKeys(evmKeyHex).seed), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -957,14 +961,31 @@ export async function solTokenBalancesFor(mint: string, addrs: string[]): Promis
   return Object.fromEntries(ok.flatMap((x, i) => (r[i] === undefined ? [] : [[x, r[i] && r[i]!.owner === mm!.prog ? Number(rdU64(r[i]!.data, 64)) / 10 ** mm!.dec : 0] as [string, number]])));
 }
 const mintFacts = new Map<string, { prog: string; dec: number }>();
+// A native send's lamports (pure — scripts/sol-send-amount.test.mjs). The fee is exact: one signature (5 000) plus the
+// priority of the budget below. A system account may hold 0 or at least the rent-exempt minimum, never between: so
+// "everything" is balance − fee (the account closes), a partial send must leave ≥ the minimum, and a new (empty)
+// recipient must receive ≥ the minimum. (2026-10-19: "everything" kept 10 000 back, under rent — the network refused it.)
+export const SOL_SEND_CU = 1_000, SOL_SEND_PRICE = 50_000;
+export const SOL_RENT_MIN = 890_880n;
+export const solSendFee = (): bigint => 5_000n + BigInt(Math.ceil((SOL_SEND_CU * SOL_SEND_PRICE) / 1e6));
+const sol9 = (l: bigint) => (Number(l) / 1e9).toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+export function solSendAmount(balance: bigint, want: bigint | 'max', recipientBalance: bigint | null, fee = solSendFee()): bigint {
+  const lamports = want === 'max' ? balance - fee : want;
+  if (lamports <= 0n) throw new Error('Nothing to send after the fee');
+  if (lamports + fee > balance) throw new Error(`Not enough SOL: the wallet has ${sol9(balance)}, this send needs ${sol9(lamports + fee)} with the fee`);
+  const left = balance - lamports - fee;
+  if (left > 0n && left < SOL_RENT_MIN) throw new Error(`Leave at least ${sol9(SOL_RENT_MIN)} SOL in the wallet (Solana rent), or send everything`);
+  if (recipientBalance === 0n && lamports < SOL_RENT_MIN) throw new Error(`A new Solana address must receive at least ${sol9(SOL_RENT_MIN)} SOL (rent)`);
+  return lamports;
+}
 export async function solTransfer(a: SolAcct, to: string, amountSol: number | 'max'): Promise<string> {
   if (!a.key || a.ext) throw new Error('No Solana key for this wallet');
   if (!SOL_ADDR.test(to) || b58d(to).length !== 32) throw new Error('Invalid Solana address');
   const k = solKeys(a.key);
-  let lamports: bigint;
-  if (amountSol === 'max') { const b = await solRpc<any>('getBalance', [k.address]); lamports = BigInt(b.value) - 10_000n; } else lamports = BigInt(Math.round(amountSol * 1e9));
-  if (lamports <= 0n) throw new Error('Nothing to send after the fee');
-  const { tx, sig } = signMessage(compileLegacy(k.address, [...budget(1_000, 50_000), transferIx(k.address, to, lamports)], await blockhash()), k.seed);
+  if (amountSol !== 'max' && !(amountSol > 0 && Number.isFinite(amountSol))) throw new Error('Invalid amount');
+  const [mine, theirs] = await Promise.all([solRpc<any>('getBalance', [k.address]), solRpc<any>('getBalance', [to]).catch(() => null)]);
+  const lamports = solSendAmount(BigInt(mine.value), amountSol === 'max' ? 'max' : toUnits(amountSol, 9), theirs ? BigInt(theirs.value) : null);
+  const { tx, sig } = signMessage(compileLegacy(k.address, [...budget(SOL_SEND_CU, SOL_SEND_PRICE), transferIx(k.address, to, lamports)], await blockhash()), k.seed);
   await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
   return b58e(sig);
 }
@@ -1013,6 +1034,31 @@ export async function solTokenTransfer(a: SolAcct, mint: string, to: string, amo
   await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
   return { hash: b58e(sig), units: units.toString(), decimals: dec };
 }
+// ── wallet-to-wallet moves (src/moveChains.ts, 2026-10-19) ──
+// The same compute budget as solTransfer / tokenTransferIxs above (1 000 CU · 50 000 µlamports for SOL, 80 000 CU for a
+// token send), so a move costs what a withdrawal costs. Pure builders (tests decode the bytes), plus the reads a move needs.
+export const SOL_XFER_UNITS = 1_000, SOL_XFER_MICRO = 50_000, SOL_SPL_UNITS = 80_000;
+export const solTransferIxs = (from: string, to: string, lamports: bigint): Ix[] => [...budget(SOL_XFER_UNITS, SOL_XFER_MICRO), transferIx(from, to, lamports)];
+// accounts as read (null = does not exist, undefined = the read failed), ≤ 10 per call
+export const solAccounts = (addrs: string[]) => accounts(addrs);
+export const solB64 = (b: Uint8Array) => toB64(b);
+// a blockhash with the last block height it is valid at: a signed move that did not land by then never will
+export async function solBlockhashInfo(): Promise<{ blockhash: string; lvh: number }> {
+  const r = await solRpc<any>('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  if (!r?.value?.blockhash || !Number.isFinite(Number(r.value.lastValidBlockHeight))) throw new RpcError('no blockhash');
+  return { blockhash: String(r.value.blockhash), lvh: Number(r.value.lastValidBlockHeight) };
+}
+// the existing send path (the indexer's node, preflight on); a re-broadcast of the same bytes skips the preflight
+export const solSendSigned = (b64: string, skipPreflight = false) => solRpc<string>('sendTransaction', [b64, { encoding: 'base64', skipPreflight, maxRetries: 5 }]);
+// statuses with history, asked of BOTH roads (the indexer's node and publicnode): landed if either says so; null only
+// when an answer said "unknown signature"; undefined when no road answered for that signature
+export async function solSigStatusesBoth(sigs: string[]): Promise<(any | null | undefined)[]> {
+  const params = [sigs, { searchTransactionHistory: true }];
+  const got = await Promise.allSettled([rpcAt<any>(RPC_URL(), 'getSignatureStatuses', params, 8000), rpcAt<any>(PUBLIC_RPC, 'getSignatureStatuses', params, 8000)]);
+  const lists = got.map((g) => (g.status === 'fulfilled' && Array.isArray(g.value?.value) ? g.value.value : null)).filter(Boolean) as any[][];
+  return sigs.map((_, i) => { if (!lists.length) return undefined; const seen = lists.map((l) => l[i]).filter(Boolean); return seen.find((s) => s.confirmationStatus === 'finalized' || s.confirmationStatus === 'confirmed') || seen[0] || null; });
+}
+
 // Confirmation runs beside the click, never in it. The page asks for each hash in turn; the first ask
 // reads the status of every hash still in flight in one getSignatureStatuses (≤256), the others are
 // answered from that read, so N wallets cost one status call per poll instead of N.

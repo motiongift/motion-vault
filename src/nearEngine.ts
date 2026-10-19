@@ -7,6 +7,7 @@
 // wrap.near, the DCL exchange, and the coin account the factory itself names.
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { nativeChainOf, nativeSeed, nearNamedOf } from './nativeKeys.ts';
 
 export const NEAR_DEFAULT_RPCS = ['https://near.drpc.org', 'https://free.rpc.fastnear.com'];
 // Settings → RPC: the user's own NEAR nodes go in front of the defaults (reads try them first, every trade is
@@ -64,11 +65,20 @@ export function serializeTx(signerId: string, pub: Uint8Array, nonce: bigint, re
 const keyCache = new Map<string, { seed: Uint8Array; pub: Uint8Array; accountId: string }>();
 export function nearKeys(evmKeyHex: string) {
   let k = keyCache.get(evmKeyHex); if (k) return k;
-  const seed = sha256(concat(te.encode('copytrade/near/v1/'), hexToBytes(evmKeyHex)));
+  // a NEAR-only wallet ('near:' + seed [+ ':' + named account], nativeKeys.ts) IS its seed and signs for that account;
+  // every EVM key derives exactly as before
+  const own = nativeChainOf(evmKeyHex);
+  if (own === 'sol') throw new Error('A Solana wallet has no NEAR key');
+  const seed = own === 'near' ? nativeSeed(evmKeyHex) : sha256(concat(te.encode('copytrade/near/v1/'), hexToBytes(evmKeyHex)));
   const pub = ed25519.getPublicKey(seed);
-  k = { seed, pub, accountId: bytesToHex(pub) }; keyCache.set(evmKeyHex, k); return k;
+  k = { seed, pub, accountId: (own === 'near' && nearNamedOf(evmKeyHex)) || bytesToHex(pub) }; keyCache.set(evmKeyHex, k); return k;
 }
-export const nearAccountId = (a: NearAcct) => (a.key && !a.ext ? nearKeys(a.key).accountId : '');
+export const nearAccountId = (a: NearAcct) => (a.key && !a.ext && nativeChainOf(a.key) !== 'sol' ? nearKeys(a.key).accountId : '');
+// is this ed25519 public key a FULL-ACCESS key of that NEAR account? (the import dialog checks a named account with it)
+export async function nearFullAccess(accountId: string, pubB58: string): Promise<boolean> {
+  const r = await nearRpc('query', { request_type: 'view_access_key', finality: 'final', account_id: accountId, public_key: pubB58 });
+  return r?.permission === 'FullAccess';
+}
 export const nearPublicKey = (evmKeyHex: string) => 'ed25519:' + b58encode(nearKeys(evmKeyHex).pub);
 // the NEAR wallet format (secret = seed ‖ public key), importable into any NEAR wallet
 export const nearSecretKey = (evmKeyHex: string) => { const k = nearKeys(evmKeyHex); return 'ed25519:' + b58encode(concat(k.seed, k.pub)); };
@@ -216,6 +226,42 @@ export async function nearSend(a: NearAcct, receiverId: string, actions: Action[
   const hash = String(res?.transaction?.hash || res?.transaction_outcome?.id || localHash || '');
   if (hash) txSender.set(hash, k.accountId);
   return { hash, outcome: res, pending };
+}
+// ── wallet-to-wallet moves (src/moveChains.ts, 2026-10-19) ──
+// A move signs first and keeps the bytes (a retry re-broadcasts the SAME transaction, which can land only once), then
+// sends. The nonce comes from the same cached access key as the trades (taken synchronously: no collision in a tick).
+export async function nearSignTransfer(a: NearAcct, to: string, amount: bigint, fresh = false): Promise<{ hash: string; signed: string; nonce: string; signer: string }> {
+  if (!a.key || a.ext) throw new Error('This wallet cannot sign NEAR (Privy wallets are EVM only)');
+  const k = nearKeys(a.key); const pubB58 = nearPublicKey(a.key);
+  let ak = fresh ? undefined : accessCache.get(k.accountId);
+  if (!ak || Date.now() - ak.at > ACCESS_TTL) {
+    try { ak = storeAccess(k.accountId, await accessKey(k.accountId, pubB58)); }
+    catch (e) { if (noAccount(String((e as Error).message))) throw new Error(`Wallet ${k.accountId.slice(0, 8)}… has no NEAR yet — send NEAR to it first`); throw e; }
+  }
+  const nonce = ak.nonce + 1n; ak.nonce = nonce; ak.at = Date.now();
+  const tx = serializeTx(k.accountId, k.pub, nonce, to, ak.blockHash, [{ transfer: amount }]);
+  const signed = concat(tx, new Uint8Array([0]), ed25519.sign(sha256(tx), k.seed));
+  const hash = txHashOf(tx); txSender.set(hash, k.accountId);
+  return { hash, signed: b64(signed), nonce: nonce.toString(), signer: k.accountId };
+}
+// the same bytes to every node at once; the first full outcome wins (rejects with `.all` when every node failed)
+export const nearBroadcastSigned = (signedB64: string) => firstOk([...NEAR_SEND_ONLY, ...NEAR_RPCS].map((u) => rpcAt(u, 'send_tx', { signed_tx_base64: signedB64, wait_until: 'EXECUTED_OPTIMISTIC' })));
+export const nearTransient = (m: string) => transient(m);
+// what the chain says about one hash: executed (success / failed), known but not executed yet, unknown to EVERY node, or no answer
+export async function nearTxState(hash: string, sender: string): Promise<{ state: 'success' | 'failed' | 'pending' | 'missing' | 'unknown'; error?: string }> {
+  const got = await Promise.allSettled(NEAR_RPCS.map((u) => rpcAt(u, 'tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'NONE' }, 8000)));
+  let missing = 0, known = false;
+  for (const g of got) {
+    if (g.status === 'fulfilled') { if (executed(g.value)) { const f = failureOf(g.value); return f ? { state: 'failed', error: f } : { state: 'success' }; } known = true; continue; }
+    const m = String((g.reason as Error)?.message || '');
+    if (/doesn't exist|does not exist|UNKNOWN_TRANSACTION/i.test(m)) missing += 1; else if (!transient(m)) known = true;
+  }
+  return known ? { state: 'pending' } : missing === got.length && got.length > 0 ? { state: 'missing' } : { state: 'unknown' };
+}
+// the access key's nonce on chain (final): a transaction whose nonce is at or below it can no longer land
+export async function nearKeyNonce(a: NearAcct): Promise<bigint | null> {
+  if (!a.key || a.ext) return null;
+  try { return (await accessKey(nearKeys(a.key).accountId, nearPublicKey(a.key))).nonce; } catch { return null; }
 }
 export const failureOf = (outcome: any): string => {
   const pick = (s: any) => (s && typeof s === 'object' && 'Failure' in s ? JSON.stringify(s.Failure) : '');

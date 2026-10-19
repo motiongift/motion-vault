@@ -12,13 +12,15 @@
 // dialog, and the engine signs only routes it has verified on chain itself.
 import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
-import { NEAR_ACCT, nearAccountId, nearSecretKey, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS } from './nearEngine';
+import { ed25519 } from '@noble/curves/ed25519';
+import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS } from './nearEngine';
 import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
 import {
   bootVault, resetVault, openWith, lostBlobs, unrecovered, webLocker, KEY_LOCK, LOST_PREFIX, type Boot, type KeyStore, type LostBlob,
   bytesHex, seedOfSignature, fingerprint, subKeyV1, subKeyV2With, MAIN_MSG, type MainMsgVersion,
   openProfile, buildProfile, storageHealth, backupNudge, type Profile, type ProfileEntry, type BackupWallet, type OpenedWallet,
+  RECOVERY_MSG, sealRecovery, openRecovery, validRecovery, type RecoveryBlob,
 } from './vaultRecovery';
 import {
   UNIVERSAL_ROUTER, UNIVERSAL_ROUTER_ABI, PERMIT2, PERMIT2_ABI, MAX_UINT160, MAX_UINT48, V4_QUOTER, V4_QUOTER_ABI, NATIVE_CURRENCY,
@@ -29,6 +31,8 @@ import {
   BSC, FOUR_MANAGER_ABI, FOUR_HELPER_ABI, FLAP_PORTAL_ABI, PANCAKE_V2_ROUTER_ABI, CL_QUOTER_ABI, V3_QUOTER_ABI,
   encodeInfBuyNative, encodeInfBuyViaPath, encodeInfBuyViaWrapped, encodeInfSell, encodeInfSellViaPath, infPairCurrency, type InfPoolKey,
 } from './bnbRouter';
+import { readKey, KEY_TEXT, CHAIN_LABEL, type KeyCandidate } from './importKey';
+import { nativeChainOf, nativeSlotOf, nativeAddress, nativeSecret, storableKey, NEAR_NAMED } from './nativeKeys';
 
 // The page says which chain it is on (chain.js loads first); the same vault
 // keys sign on every EVM chain, so only the endpoints and venues change.
@@ -438,7 +442,7 @@ type Account = { id: string; name: string; address: `0x${string}`; key: `0x${str
 // account: the last profile the server confirmed (vault-client → mainPublished) and which addresses it covers
 // removedAddrs: wallets removed here on a trusted click — a publish does not carry them back into the profile
 // mergedBlobs / recoveryDismissed: set-aside vaults already merged back, and missing wallets the user chose to forget
-type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[]; mainMv?: Record<string, 2> };
+type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[]; mainMv?: Record<string, 2>; recovery?: Record<string, RecoveryBlob | null> };
 type StoredVault = { v: 2; iv: string; ct: string; siv?: string; sct?: string; meta: VaultMeta; addresses: { id: string; name: string; address: string; archived?: boolean; hop?: boolean }[] };
 const VAULT_KEY = 'trenches.vault';
 const SETTINGS_KEY = 'trenches.engine.settings';
@@ -471,6 +475,14 @@ const keyStore: KeyStore = {
 let vaultFatal = '';
 
 let unlocked: Account[] | null = null;
+// Chain-only wallets of ANOTHER lane (nativeKeys.ts: a Solana key on the BNB frame, a NEAR key on the Solana frame …):
+// not listed, not traded, not signed with here — but kept, written back on every persist and carried in every backup.
+// `unlocked` is what this lane shows; `[...unlocked, ...parked]` is the vault. With no chain-only wallet (every vault
+// before 2026-10-19) parked stays empty and nothing below behaves differently.
+let parked: Account[] = [];
+const hereOk = (a: Account) => { const c = nativeChainOf(a.key); return !c || (c === 'sol' ? SOL_MODE : NEAR_MODE); };
+const allAccounts = (): Account[] => [...(unlocked || []), ...parked];
+const keyAddress = (key: string) => (nativeSlotOf(key) || privateKeyToAccount(key as `0x${string}`).address) as `0x${string}`;
 let seeds: Record<string, string> = {};          // main address (lower) → 32-byte seed hex, from one signature of that main
 let storagePersisted = false;
 let storageEstimate: { quota?: number; usage?: number } | null = null;
@@ -492,8 +504,8 @@ async function decryptStored(): Promise<{ accounts: Account[]; meta: VaultMeta; 
 async function mergeFromDisk() {
   if (!unlocked) return;
   const disk = await decryptStored(); if (!disk) return;
-  for (const a of disk.accounts) if (!removedIds.has(a.id) && !unlocked.some((x) => x.id === a.id)) unlocked.push(a);
-  for (const id of disk.meta.order) if (!meta.order.includes(id) && unlocked.some((x) => x.id === id)) meta.order.push(id);
+  for (const a of disk.accounts) if (!removedIds.has(a.id) && !unlocked.some((x) => x.id === a.id) && !parked.some((x) => x.id === a.id)) (hereOk(a) ? unlocked : parked).push(a);
+  for (const id of disk.meta.order) if (!meta.order.includes(id) && allAccounts().some((x) => x.id === id)) meta.order.push(id);
   for (const [m, sd] of Object.entries(disk.seeds || {})) if (!seeds[m]) { seeds[m] = sd; if (disk.meta.mainMv?.[m] === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; }
 }
 let persisting: Promise<void> = Promise.resolve();
@@ -512,9 +524,10 @@ async function persistNow() {
   }
   await mergeFromDisk();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const own = unlocked.filter((a) => !a.ext);
+  const all = allAccounts();
+  const own = all.filter((a) => !a.ext);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv) }, cryptoKey, buf(enc.encode(JSON.stringify(own)))));
-  meta.order = [...meta.order.filter((id) => unlocked!.some((a) => a.id === id)), ...unlocked.filter((a) => !meta.order.includes(a.id)).map((a) => a.id)];
+  meta.order = [...meta.order.filter((id) => all.some((a) => a.id === id)), ...all.filter((a) => !meta.order.includes(a.id)).map((a) => a.id)];
   const siv = crypto.getRandomValues(new Uint8Array(12));
   const sct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(siv) }, cryptoKey, buf(enc.encode(JSON.stringify(seeds)))));
   const next: StoredVault = { v: 2, iv: b64(iv), ct: b64(ct), siv: b64(siv), sct: b64(sct), meta, addresses: own.map((a) => ({ id: a.id, name: a.name, address: a.address, archived: !!a.archived, hop: !!a.hop })) };
@@ -544,10 +557,10 @@ async function guardKey() {
 }
 setInterval(() => { guardKey().catch(() => {}); }, 60_000);
 // the first write of a vault (a fresh browser, or the explicit start-over) happens inside the key lock
-const commitFresh = async (b: { key: CryptoKey }) => { cryptoKey = b.key; unlocked = []; seeds = {}; meta = freshMeta(); keyMissing = null; replacing = true; try { await persistNow(); } finally { replacing = false; } };
+const commitFresh = async (b: { key: CryptoKey }) => { cryptoKey = b.key; unlocked = []; parked = []; seeds = {}; meta = freshMeta(); keyMissing = null; replacing = true; try { await persistNow(); } finally { replacing = false; } };
 async function openBoot(b: Boot) {
   if (b.state === 'keymissing') {
-    unlocked = null; cryptoKey = null; seeds = {};
+    unlocked = null; parked = []; cryptoKey = null; seeds = {};
     meta = Object.assign(freshMeta(), (b.stored.meta as VaultMeta) || {});   // shown (names, addresses), never written
     keyMissing = { reason: b.reason, since: Date.now(), addresses: (b.stored.addresses || []).filter((a) => !a.hop).map((a) => ({ name: String(a.name || ''), address: String(a.address) })) };
     console.error('[vault] the stored vault has no device key in this browser; nothing was changed. Recover from the account or a backup file.');
@@ -558,8 +571,13 @@ async function openBoot(b: Boot) {
   }
   const wasMissing = !!keyMissing;
   keyMissing = null; cryptoKey = b.key;
-  if (!b.created && !b.aside) { unlocked = b.accounts as unknown as Account[]; seeds = b.seeds; meta = Object.assign(freshMeta(), (b.meta as VaultMeta) || {}); }
+  if (!b.created && !b.aside) { const all = b.accounts as unknown as Account[]; unlocked = all.filter(hereOk); parked = all.filter((a) => !hereOk(a)); seeds = b.seeds; meta = Object.assign(freshMeta(), (b.meta as VaultMeta) || {}); }
+  // phone access (review 2026-10-19 H3): a vault no longer keeps its own copy of the account's recovery blob (`rk`) —
+  // an old copy was republished on the next wallet change and switched phone access back on after it was turned off
+  // elsewhere. The server's copy is the only one; a copy left by an older engine is dropped here, once.
+  const strippedRk = !!meta.recovery; if (strippedRk) delete meta.recovery;
   await mergeLostBlobs();
+  if (strippedRk && unlocked) await persist().catch(() => {});
   if (wasMissing) { post({ t: 'ev', name: 'trench:vaultkeyhealed', detail: {} }); keyBus?.postMessage({ t: 'key' }); }
   emit(); pushBackupState();
 }
@@ -595,14 +613,14 @@ async function mergeLostBlobs() {
 // wallets a set-aside vault lists that are not in this one: shown until restored or forgotten on a trusted click
 let lostCache: { sig: string; v: LostBlob[] } | null = null;
 const lostNow = () => { const names: string[] = []; for (let i = 0; i < localStorage.length; i += 1) { const k = localStorage.key(i); if (k && k.startsWith(LOST_PREFIX)) names.push(k + ':' + (localStorage.getItem(k) || '').length); } const sig = names.sort().join('|'); if (!lostCache || lostCache.sig !== sig) lostCache = { sig, v: lostBlobs(localStorage) }; return lostCache.v; };
-const missingWallets = () => (keyMissing || !unlocked ? [] : unrecovered(lostNow(), unlocked.map((a) => a.address), meta.recoveryDismissed || []));
+const missingWallets = () => (keyMissing || !unlocked ? [] : unrecovered(lostNow(), allAccounts().map((a) => a.address), meta.recoveryDismissed || []));
 // how much room the browser says is left (it discards whole origins when the disk fills up)
 function checkStorage() { navigator.storage?.estimate?.().then((e) => { storageEstimate = { quota: e.quota, usage: e.usage }; pushBackupState(); }).catch(() => {}); }
 setInterval(checkStorage, 10 * 60_000);
 const ordered = (list: Account[]) => [...list].sort((a, b) => { const ia = meta.order.indexOf(a.id), ib = meta.order.indexOf(b.id); return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib); });
 const summary = () => {
   const stored = readVault();
-  const list = unlocked ? ordered(unlocked).map((a) => ({ id: a.id, name: a.name, address: SOL_MODE ? (solAddressOf(a) || a.address) : NEAR_MODE ? (nearAccountId(a) || a.address) : a.address, evm: a.address, sol: solAddressOf(a), near: nearAccountId(a), archived: !!a.archived, hop: !!a.hop, ext: a.ext || '', main: a.main || '', index: a.index ?? null })) : (stored?.addresses || []);
+  const list = unlocked ? ordered(unlocked).map((a) => ({ id: a.id, name: a.name, address: SOL_MODE ? (solAddressOf(a) || a.address) : NEAR_MODE ? (nearAccountId(a) || a.address) : a.address, evm: nativeChainOf(a.key) ? '' : a.address, sol: solAddressOf(a), near: nearAccountId(a), ...(nativeChainOf(a.key) ? { only: nativeChainOf(a.key) } : {}), archived: !!a.archived, hop: !!a.hop, ext: a.ext || '', main: a.main || '', index: a.index ?? null })) : (stored?.addresses || []);
   const m = unlocked ? meta : (stored?.meta || meta);
   return { accounts: list.map((a) => ({ ...a, active: a.id === m.activeAccountId, selected: m.selectedAccountIds.includes(a.id) })), activeAccountId: m.activeAccountId, selectedAccountIds: m.selectedAccountIds, main: m.main || null, subCap: SUB_CAP, locked: !unlocked, exists: true, keyMissing: keyMissing ? { reason: keyMissing.reason, wallets: keyMissing.addresses.length } : null, missing: missingWallets().length };
 };
@@ -614,22 +632,24 @@ async function createVault() { await ready; }
 // past the highest existing number of that kind, so deleting one never reuses
 // a name. Rename from the table's pencil.
 function nextName(kind: 'Created' | 'Imported' | 'Wallet') {
-  const list = unlocked || [];
+  const list = allAccounts();
   const re = new RegExp('^' + kind + ' (\\d+)$');
   let n = 0;
   for (const a of list) { const m = re.exec(a.name); if (m) n = Math.max(n, Number(m[1])); }
   return `${kind} ${n + 1}`;
 }
 async function addAccount(name: string, key: `0x${string}`, opts: { hop?: boolean; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; createdAt?: number; archived?: boolean } = {}) {
-  const list = requireUnlocked();
-  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error('key must be 0x + 64 hex');
-  const acct = privateKeyToAccount(key);
-  if (list.some((a) => a.address.toLowerCase() === acct.address.toLowerCase())) throw new Error('Wallet already in the vault');
+  requireUnlocked();
+  if (!storableKey(key)) throw new Error('key must be 0x + 64 hex');
+  const acct = { address: keyAddress(key) };
+  if (allAccounts().some((a) => a.address.toLowerCase() === acct.address.toLowerCase())) throw new Error('Wallet already in the vault');
   const id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const here = !nativeChainOf(key) || (nativeChainOf(key) === 'sol' ? SOL_MODE : NEAR_MODE);
+  const list = here ? requireUnlocked() : parked;
   list.push({ id, name: name || nextName('Created'), address: acct.address, key, createdAt: opts.createdAt || Date.now(), ...(opts.hop ? { hop: true } : {}), ...(opts.archived ? { archived: true } : {}), ...(opts.main ? { main: lc(opts.main), index: opts.index } : {}), ...(opts.gen === 2 ? { gen: 2 as const } : {}), ...(opts.kind ? { kind: opts.kind } : {}) });
   // a hop wallet is plumbing: it never becomes the primary and never joins batch trades
   if (!opts.hop && !opts.archived) {
-    if (!meta.activeAccountId) meta.activeAccountId = id;
+    if (!meta.activeAccountId && here) meta.activeAccountId = id;
     if (!meta.selectedAccountIds.includes(id)) meta.selectedAccountIds.push(id);
   }
   meta.order.push(id);
@@ -673,8 +693,15 @@ function adoptSalts(list: string[]) {
 const subKeyV2 = async (seed: string, index: number) => subKeyV2With(seed, await vaultSalt(), index);
 // per main: profile entries this vault could not open (another device's blobs) — carried over verbatim on publish
 const remoteCarry = new Map<string, ProfileEntry[]>();
+// wallets the user just approved in the "Restore your wallets on this device" window (account recovery): the restore
+// that follows adds exactly these without asking a second time (same main, same addresses, within two minutes)
+let preApproved: { main: string; addrs: Set<string>; at: number } | null = null;
+// Phone access turned on or off HERE, in this frame's lifetime, by a trusted click: the only rk this vault ever publishes
+// on its own (null = off). Kept in memory until the server confirms it (mainPublished) — never stored, so a device can
+// never carry a stale choice into a later publish. Every other publish carries the server's current copy verbatim.
+const recoveryChange = new Map<string, { rk: RecoveryBlob | null; at: number }>();
 // profiles handed to the page to save, by digest: the server's confirmation (mainPublished) names one of them
-const pendingPublish = new Map<string, { main: string; addrs: string[] }>();
+const pendingPublish = new Map<string, { main: string; addrs: string[]; change?: { rk: RecoveryBlob | null; at: number } }>();
 const subKey = subKeyV1;
 const subsOf = (main: string) => (unlocked || []).filter((a) => a.main === lc(main) && a.index != null && a.index >= 0);
 // what the account profile can re-derive on another device from the count alone: v1 trading wallets only
@@ -683,8 +710,8 @@ const subsV1Of = (main: string) => subsOf(main).filter((a) => a.gen !== 2);
 const mvOf = (main: string): MainMsgVersion => (meta.mainMv?.[lc(main)] === 2 ? 2 : 1);
 // what rides in the profile sealed (backup v3): every other wallet that has a key here — created, imported, v2, hop
 const kindOf = (a: Account): BackupWallet['kind'] => (a.hop ? 'hop' : a.main && a.index != null ? 'derived' : a.kind || (/^Imported \d+$/.test(a.name) ? 'imported' : 'created'));
-const backupWalletsOf = (main: string): BackupWallet[] => (unlocked || [])
-  .filter((a) => !a.ext && /^0x[0-9a-fA-F]{64}$/.test(a.key) && !(a.main === lc(main) && a.index != null && a.gen !== 2))
+const backupWalletsOf = (main: string): BackupWallet[] => allAccounts()
+  .filter((a) => !a.ext && storableKey(a.key) && !(a.main === lc(main) && a.index != null && a.gen !== 2))
   .sort((x, y) => Number(!!x.hop) - Number(!!y.hop) || Number(!!x.archived) - Number(!!y.archived))
   .map((a) => ({ address: a.address, name: a.name, key: a.key, kind: kindOf(a), ...(a.main && a.index != null ? { main: a.main, index: a.index } : {}), ...(a.gen === 2 ? { gen: 2 as const } : {}), ...(a.archived ? { archived: true } : {}), createdAt: a.createdAt }));
 async function deriveSubs(main: string, count: number, names: Record<string, string>) {
@@ -2220,12 +2247,12 @@ const buyCap = () => { const v = Number(loadLimits().cap?.[laneKey()]); return v
 async function tradeLimits(side: 'buy' | 'sell', size: number, s: Settings) {
   const slip = Number(s.slippage) || 0;
   if (slip > SLIP_FREE && slip > (Number(loadLimits().slipOk) || SLIP_FREE)) {
-    const ok = await ask({ title: 'High slippage', danger: true, ok: `Trade at ${slip}%`, html: `<p>Slippage is set to <b>${escHtml(slip)}%</b>: a trade may fill at up to ${escHtml(slip)}% worse than quoted.</p><p class="dlg-note">Confirm once; trades at this setting or lower will not ask again. A script on the page cannot click this button.</p>` });
+    const ok = await ask({ title: 'High slippage', danger: true, ok: `Trade at ${slip}%`, html: `${sub(`Slippage is set to ${escHtml(slip)}%: a trade may fill up to ${escHtml(slip)}% worse than quoted.`)}${muted('Confirm once. Trades at this setting or lower won\'t ask again.')}` });
     if (!ok) throw new Error('Cancelled: slippage above 22% needs one confirmation in the vault');
     saveLimits({ ...loadLimits(), slipOk: slip });
   }
   if (side === 'buy' && size > buyCap()) {
-    const ok = await ask({ title: 'Large buy', danger: true, ok: `Buy ${size} ${laneUnit()}`, html: `<p>Buy <b>${escHtml(size)} ${laneUnit()}</b> per wallet — above your per-wallet cap of ${escHtml(buyCap())} ${laneUnit()}.</p><p class="dlg-note">The cap is in Settings (raising it asks here too). A script on the page cannot click this button.</p>` });
+    const ok = await ask({ title: 'Large buy', danger: true, ok: `Buy ${size} ${laneUnit()}`, html: `${sub(`${escHtml(size)} ${laneUnit()} per wallet is above your cap of ${escHtml(buyCap())} ${laneUnit()}.`)}${muted('The cap is in Settings.')}` });
     if (!ok) throw new Error(`Cancelled: ${size} ${laneUnit()} is above the per-wallet cap`);
   }
 }
@@ -2455,14 +2482,23 @@ async function tokenDecimals(token: `0x${string}`) {
 type Asset = { kind: 'eth' } | { kind: 'erc20'; address: `0x${string}`; symbol: string; decimals: number };
 type LegStatus = 'queued' | 'waiting' | 'sent' | 'confirmed' | 'failed' | 'skipped';
 type Leg = { id: string; from: `0x${string}`; to: `0x${string}`; amount: string | 'max'; asset: Asset; status: LegStatus; hash?: `0x${string}`; error?: string; after?: string; notBefore?: number; hop?: boolean; sentAt?: number; doneAt?: number; human?: number; nonce?: number };
-type Job = { id: string; label: string; createdAt: number; status: 'running' | 'done' | 'failed' | 'cancelled'; hops: number; delay: [number, number]; legs: Leg[]; hopIds: string[]; asset: Asset };
-type MoveSpec = { fromIds: string[]; toIds?: string[]; toAddresses?: string[]; asset: Asset; amount: { mode: 'fixed' | 'pct'; value: number; per: 'source' | 'dest' }; hops?: number; delay?: [number, number]; label?: string };
-const JOBS_KEY = 'trenches.jobs';
+type Job = { id: string; label: string; createdAt: number; status: 'running' | 'done' | 'failed' | 'cancelled'; hops: number; delay: [number, number]; legs: Leg[]; hopIds: string[]; asset: Asset; chain?: string };
+type MoveSpec = { fromIds: string[]; toIds?: string[]; toAddresses?: string[]; asset: Asset; amount: { mode: 'fixed' | 'pct'; value: number; per: 'source' | 'dest' }; hops?: number; delay?: [number, number]; label?: string; chain?: string };
+// One job store, one runner and one channel PER LANE (2026-10-19). The old shared 'trenches.jobs' + one runner lock let
+// a frame of one lane adopt another lane's job and send its legs with its own chain client (a BNB move driven by a
+// Robinhood, Solana or NEAR frame went out on Robinhood). A job now records its lane and only that lane's frames see
+// or drive it; tabs still on an older engine keep the old key and never see these jobs. The mover itself is EVM:
+// Solana and NEAR frames refuse to plan or start (their frames used to plan a Robinhood ETH move under their label).
+const MOVE_LANE = SOL_MODE ? 'sol' : NEAR_MODE ? 'near' : CFG.key;
+const MOVE_EVM = !SOL_MODE && !NEAR_MODE;
+const moveLanePublic = (k: string) => (k === 'bsc' ? 'bnb' : k);   // the name the app and the site pass as spec.chain
+const JOBS_KEY = 'trenches.jobs.v2.' + MOVE_LANE;
+const RUNNER_LOCK = 'trenches-jobs-runner.v2.' + MOVE_LANE;
 const ETH_GAS = 21_000n, ERC20_GAS = 80_000n, MAX_HOPS = 4;
-const readJobs = (): Job[] => { try { return JSON.parse(localStorage.getItem(JOBS_KEY) || '[]'); } catch { return []; } };
+const readJobs = (): Job[] => { try { const all = JSON.parse(localStorage.getItem(JOBS_KEY) || '[]'); return Array.isArray(all) ? all.filter((j: Job) => j && j.chain === MOVE_LANE) : []; } catch { return []; } };
 const jobs: Job[] = readJobs();
 let isRunner = false;
-const bus = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('trenches-jobs') : null;
+const bus = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('trenches-jobs.v2.' + MOVE_LANE) : null;
 const running = new Set<string>();           // leg ids in flight
 const emitJobs = () => document.dispatchEvent(new CustomEvent('trench:jobs', { detail: jobs.map((j) => ({ ...j, legs: j.legs.map((l) => ({ ...l })) })) }));
 const saveJobs = () => { try { localStorage.setItem(JOBS_KEY, JSON.stringify(jobs.slice(-60))); } catch {} emitJobs(); };
@@ -2495,7 +2531,7 @@ async function ensureRunner(): Promise<boolean> {
   // nobody answered: whoever holds the lock is frozen, discarded or gone without releasing — take it
   if (typeof navigator !== 'undefined' && navigator.locks && !takingOver) {
     takingOver = true;
-    navigator.locks.request('trenches-jobs-runner', { steal: true }, async () => { await becomeRunner(); await new Promise(() => {}); }).catch(() => { takingOver = false; });
+    navigator.locks.request(RUNNER_LOCK, { steal: true }, async () => { await becomeRunner(); await new Promise(() => {}); }).catch(() => { takingOver = false; });
     for (let i = 0; i < 20 && !isRunner; i += 1) await new Promise((r) => setTimeout(r, 100));
   } else if (!navigator?.locks) await becomeRunner();
   return isRunner;
@@ -2515,7 +2551,12 @@ const gasCostWei = (gasPrice: bigint, asset: Asset) => gasPrice * (asset.kind ==
 const humanOf = (wei: bigint, asset: Asset) => Number(formatUnits(wei, asset.kind === 'eth' ? 18 : asset.decimals));
 const weiOf = (v: number, asset: Asset) => { const d = asset.kind === 'eth' ? 18 : asset.decimals; return BigInt(Math.round(v * 10 ** Math.min(d, 9))) * 10n ** BigInt(Math.max(0, d - 9)); };
 
+function moveLaneCheck(want?: unknown) {
+  if (!MOVE_EVM) throw new Error('Moving funds between wallets runs on Robinhood and BNB — not on this network yet');
+  if (want != null && want !== '' && String(want) !== MOVE_LANE && String(want) !== moveLanePublic(MOVE_LANE)) throw new Error(`This vault frame runs ${moveLanePublic(MOVE_LANE)}, not ${String(want).slice(0, 16)} — nothing was planned`);
+}
 async function planMove(spec: MoveSpec) {
+  moveLaneCheck(spec?.chain);
   const list = requireUnlocked();
   const sources = spec.fromIds.map((id) => list.find((a) => a.id === id)).filter(Boolean) as Account[];
   const dests = [
@@ -2572,7 +2613,7 @@ async function planMove(spec: MoveSpec) {
   const totalHuman = legs.filter((l) => !l.after).reduce((s, l) => s + (l.amount === 'max' ? 0 : humanOf(BigInt(l.amount), asset)), 0);
   const gasEth = perSource.reduce((s, r) => s + (r.error ? 0 : r.gasEth), 0);
   const planId = jid('p');
-  const out = { ok: !errors.length && legs.length > 0, planId, kind, label, errors, warnings, sources: perSource, dests, legs, hops, delay: spec.delay || [15, 60], asset, total: totalHuman, gasEth, gasPriceGwei: Number(gasPrice) / 1e9 };
+  const out = { ok: !errors.length && legs.length > 0, chain: moveLanePublic(MOVE_LANE), planId, kind, label, errors, warnings, sources: perSource, dests, legs, hops, delay: spec.delay || [15, 60], asset, total: totalHuman, gasEth, gasPriceGwei: Number(gasPrice) / 1e9 };
   plans.set(planId, { plan: structuredClone(out), at: Date.now() });
   if (plans.size > 50) plans.delete(plans.keys().next().value as string);
   return out;
@@ -2592,6 +2633,7 @@ const confirmedJobs = new Set<string>();
 
 async function startMove(plan: Plan, fromBus = false): Promise<{ ok: boolean; id: string }> {
   if (!plan.ok) throw new Error(plan.errors[0] || 'plan is not executable');
+  moveLaneCheck((plan as { chain?: unknown }).chain);
   requireUnlocked();
   if (!isRunner && !fromBus) { await ensureRunner().catch(() => {}); }
   if (!isRunner && !fromBus) { const r = await askRunner({ cmd: 'start', plan }).catch(() => null); if (r) return { ok: true, id: r.id }; }
@@ -2617,7 +2659,7 @@ async function startMove(plan: Plan, fromBus = false): Promise<{ ok: boolean; id
       if (!on || on.key !== mem.key || privateKeyToAccount(on.key).address !== mem.address) throw new Error('hop wallet key did not verify on disk — nothing was sent');
     }
   }
-  const job: Job = { id: jid('j'), label: plan.label, createdAt: Date.now(), status: 'running', hops: plan.hops, delay: plan.delay, legs: plan.legs, hopIds, asset: plan.asset };
+  const job: Job = { id: jid('j'), label: plan.label, createdAt: Date.now(), status: 'running', hops: plan.hops, delay: plan.delay, legs: plan.legs, hopIds, asset: plan.asset, chain: MOVE_LANE };
   jobs.push(job); saveJobs();
   if (isRunner) tickJob(job);            // otherwise the runner adopts it from the storage event
   return { ok: true, id: job.id };
@@ -2634,6 +2676,7 @@ function retryJob(id: string): any {
 }
 const terminal = (s: LegStatus) => s === 'confirmed' || s === 'failed' || s === 'skipped';
 function tickJob(job: Job) {
+  if (job.chain !== MOVE_LANE || !MOVE_EVM) return;                 // another lane's job is never driven with this frame's client
   if (job.status === 'done' || job.status === 'failed') return;
   const byId = new Map(job.legs.map((l) => [l.id, l]));
   for (const leg of job.legs) {
@@ -2763,7 +2806,7 @@ async function becomeRunner() {
 }
 ready.then(() => {
   emitJobs();
-  if (typeof navigator !== 'undefined' && navigator.locks) navigator.locks.request('trenches-jobs-runner', async () => { await becomeRunner(); await new Promise(() => {}); });
+  if (typeof navigator !== 'undefined' && navigator.locks) navigator.locks.request(RUNNER_LOCK, async () => { await becomeRunner(); await new Promise(() => {}); });
   else becomeRunner();
 });
 
@@ -2797,7 +2840,7 @@ function askChoice(o: AskOpts): Promise<string | null> {
       ? o.choices.map((c) => `<button class="dlg-btn${c.primary ? ' primary' : ''}${c.danger ? ' danger' : ''}" data-ok="${escHtml(c.id)}">${escHtml(c.label)}</button>`).join('')
       : `<button class="dlg-btn primary${o.danger ? ' danger' : ''}" data-ok>${escHtml(o.ok)}</button>`;
     // the width is a class: the frame's CSP (style-src 'self') ignores inline style attributes, an inline width left the dialog full-window
-    wrap.innerHTML = `<div class="dlg w-${o.size || 'md'}${o.plain ? ' plain' : ''}${o.choices?.length ? ' multi' : ''}" role="dialog"><div class="dlg-h"><h3>${escHtml(o.title)}</h3><button class="dlg-x" data-x aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="dlg-b">${o.html}<div class="dlg-err" hidden></div></div><div class="dlg-f">${o.cancel === false ? '' : `<button class="dlg-btn" data-no>${escHtml(o.cancelLabel || 'Cancel')}</button>`}${buttons}${o.foot || ''}</div></div>`;
+    wrap.innerHTML = `<div class="dlg w-${o.size || 'md'}${o.plain ? ' plain' : ''}${o.choices?.length ? ' multi' : ''}" role="dialog"><div class="dlg-h"><h3>${escHtml(o.title)}<span class="dk-lock" role="img" aria-label="${SEC_LABEL}" title="${SEC_LABEL}">${LOCK_SVG}</span></h3><button class="dlg-x" data-x aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="dlg-b">${o.html}<div class="dlg-err" hidden></div></div><div class="dlg-f">${buttons}${o.cancel === false || !o.cancelLabel || o.cancelLabel === 'Cancel' ? '' : `<button class="dlg-btn" data-no>${escHtml(o.cancelLabel)}</button>`}${o.foot || ''}</div></div>`;
     const dlg = wrap.querySelector('.dlg') as HTMLElement;
     try { o.mount?.(dlg); } catch {}
     const err = wrap.querySelector('.dlg-err') as HTMLElement;
@@ -2829,7 +2872,7 @@ function askChoice(o: AskOpts): Promise<string | null> {
       const val = c ? c.dataset.copy || o.copy : '';
       if (c && val && e.isTrusted) {
         copyText(val);
-        if (c.classList.contains('pk-cp')) { c.classList.add('ok'); setTimeout(() => c.classList.remove('ok'), 1200); }
+        if (c.classList.contains('pk-cp') && !c.textContent) { c.classList.add('ok'); setTimeout(() => c.classList.remove('ok'), 1200); }
         else { c.textContent = 'Copied'; setTimeout(() => { c.textContent = 'Copy'; }, 1200); }
       }
     });
@@ -2841,10 +2884,31 @@ function askChoice(o: AskOpts): Promise<string | null> {
   });
 }
 const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>';
-const PK_WARN = '<div class="pk-warn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/></svg><span>WARNING: Your private key grants complete control over this wallet. NEVER SHARE IT WITH ANYONE. Store it securely.</span></div>';
+// ── the dialog kit (vault.css .dk-*), v2 2026-10-19 after the owner's review: one sheet and nothing boxed inside it ──
+// A title (the only large text), one muted line under it, "Signed in as 0x…" for the account, wallets as one plain list
+// (name · short mono address, hairline between rows), calm muted text instead of warning boxes, one primary button and
+// text buttons. No badges, no uppercase labels, no icons in rows. Tapping a row (or "Signed in as") opens the full address
+// inline, grouped by four, with a "Copy" text button (<details>: no script, works under the frame's CSP). An address that
+// funds go to outside the vault is always printed in full. The frame's promise ("a script on the page cannot click this
+// button") is the label and tooltip of a small lock next to the title — the trusted click and visibility check are unchanged.
+const SEC_LABEL = 'A script on the page cannot click this button.';
+const shortAddr = (a: string, head = 6, tail = 6) => { const s = String(a || ''); return s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`; };
+const groupsOf = (a: string) => { const s = String(a || ''); const pre = /^0x/i.test(s) ? s.slice(0, 2) : ''; return (pre ? `<span class="g p">${escHtml(pre)}</span>` : '') + (s.slice(pre.length).match(/.{1,4}/g) || []).map((g) => `<span class="g">${escHtml(g)}</span>`).join(''); };
+const LOCK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>';
+const copyBtn = (address: string) => `<button type="button" class="dk-cp" data-copy="${escHtml(address)}" aria-label="Copy the full address">Copy</button>`;
+const fullAddr = (address: string) => `<div class="dk-full"><span class="dk-hex" translate="no">${groupsOf(address)}</span>${copyBtn(address)}</div>`;
+const addrRow = (name: string, address: string) => `<details class="dk-row"><summary><span class="dk-nm">${escHtml(name || 'Wallet')}</span><span class="dk-sh" translate="no">${escHtml(shortAddr(address))}</span></summary>${fullAddr(address)}</details>`;
+const addrRows = (xs: { name: string; address: string }[], max = 12) => `<div class="dk-list">${xs.slice(0, max).map((x) => addrRow(x.name, x.address)).join('')}${xs.length > max ? `<p class="dk-more">and ${xs.length - max} more</p>` : ''}</div>`;
+const signedIn = (address: string) => `<details class="dk-who"><summary>Signed in as <span class="dk-sh" translate="no">${escHtml(shortAddr(address))}</span></summary>${fullAddr(address)}</details>`;
+const destBox = (address: string) => `<div class="dk-dest"><span class="dk-hex big" translate="no">${groupsOf(address)}</span>${copyBtn(address)}</div>`;
+const sub = (html: string) => `<p class="dk-sub">${html}</p>`;
+const muted = (html: string) => `<p class="dk-muted">${html}</p>`;
+const recognizeAll = (n: number) => (n <= 1 ? 'this wallet' : n === 2 ? 'both wallets' : n === 3 ? 'all three wallets' : `all ${n} wallets`);
+const RECOVERY_TRADEOFF = 'Your wallets become as safe as your sign-in (email, Google or passkey, plus 2FA). You can turn this off in Wallets.';
+const PK_WARN = '<p class="pk-warn">Anyone with this key controls the wallet. Never share it, and store it somewhere only you can open.</p>';
 // The key is not even in the document until the button is clicked: what shows
 // behind the blur is a row of dots, and the copy icon copies nothing before that.
-const pkBox = (value: string, opts: { copy?: string; key?: boolean; title: string }) => `<div class="pk-box"><span class="pk-v${opts.key ? ' pk-key blur' : ''}"${opts.key ? ' data-key' : ''}>${escHtml(value)}</span><button class="pk-cp"${opts.copy ? ` data-copy="${escHtml(opts.copy)}"` : opts.key ? ' data-copy-key' : ''} title="${escHtml(opts.title)}">${COPY_SVG}</button></div>`;
+const pkBox = (value: string, opts: { copy?: string; key?: boolean; title: string }) => `<div class="pk-box"><span class="pk-v${opts.key ? ' pk-key blur' : ''}"${opts.key ? ' data-key' : ''}>${escHtml(value)}</span><button type="button" class="pk-cp"${opts.copy ? ` data-copy="${escHtml(opts.copy)}"` : opts.key ? ' data-copy-key' : ''} aria-label="${escHtml(opts.title)}">Copy</button></div>`;
 const reveal = (root: HTMLElement, btn: HTMLButtonElement, secret: string) => {
   if (root.dataset.revealed) return false;
   root.dataset.revealed = '1';
@@ -2867,7 +2931,7 @@ async function passKey(pass: string, salt: Uint8Array, rounds: number) {
 }
 type BackupFile = { v: 1; kind: 'copytrade-vault-backup' | 'motion-vault-backup'; createdAt: number; chain?: string; addresses: { name: string; address: string }[]; kdf: { name: 'PBKDF2'; hash: 'SHA-256'; rounds: number; salt: string }; iv: string; ct: string };
 async function makeBackup(pass: string): Promise<BackupFile> {
-  const list = requireUnlocked();
+  requireUnlocked(); const list = allAccounts();
   const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await passKey(pass, salt, BACKUP_ROUNDS);
   const body = JSON.stringify({ accounts: list, meta, settings: loadSettings(), seeds });
@@ -2886,21 +2950,21 @@ async function openBackup(file: BackupFile, pass: string): Promise<{ accounts: A
 }
 // wallets from a backup or from the old in-page vault join this one: by address, never twice, never dropping anything already here
 async function adoptAccounts(src: { accounts: Account[]; meta?: VaultMeta; settings?: Partial<Settings>; seeds?: Record<string, string> }) {
-  const list = requireUnlocked();
+  requireUnlocked(); const list = allAccounts();
   let added = 0;
   for (const [m, sd] of Object.entries(src.seeds || {})) if (/^0x[0-9a-f]{40}$/.test(m) && /^0x[0-9a-f]{64}$/.test(String(sd)) && !seeds[m]) seeds[m] = String(sd);
   // the salts of the device that wrote the backup: its v2 profile blobs open here too (ours stays ours)
   adoptSalts(Object.entries(src.seeds || {}).filter(([k]) => k === SALT || k.startsWith(SALT + ':')).map(([, sd]) => String(sd)));
   for (const a of src.accounts || []) {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(String(a.key || ''))) continue;
-    const acct = privateKeyToAccount(a.key);
-    if (list.some((x) => same(x.address, acct.address))) continue;
-    const id = a.id && !list.some((x) => x.id === a.id) ? a.id : 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    list.push({ id, name: String(a.name || '').trim() || nextName('Imported'), address: acct.address, key: a.key, createdAt: Number(a.createdAt) || Date.now(), ...(a.archived ? { archived: true } : {}), ...(a.hop ? { hop: true } : {}), ...(a.main && a.index != null ? { main: lc(a.main), index: Number(a.index) } : {}), ...(a.gen === 2 ? { gen: 2 as const } : {}), ...(a.kind === 'created' || a.kind === 'imported' ? { kind: a.kind } : {}) });
-    if (!a.hop) { if (!meta.activeAccountId) meta.activeAccountId = id; if (!meta.selectedAccountIds.includes(id) && src.meta?.selectedAccountIds?.includes(a.id)) meta.selectedAccountIds.push(id); }
+    if (!storableKey(a.key)) continue;
+    const acct = { address: keyAddress(a.key) };
+    if (allAccounts().some((x) => same(x.address, acct.address))) continue;
+    const id = a.id && !allAccounts().some((x) => x.id === a.id) ? a.id : 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    (hereOk(a) ? requireUnlocked() : parked).push({ id, name: String(a.name || '').trim() || nextName('Imported'), address: acct.address, key: a.key, createdAt: Number(a.createdAt) || Date.now(), ...(a.archived ? { archived: true } : {}), ...(a.hop ? { hop: true } : {}), ...(a.main && a.index != null ? { main: lc(a.main), index: Number(a.index) } : {}), ...(a.gen === 2 ? { gen: 2 as const } : {}), ...(a.kind === 'created' || a.kind === 'imported' ? { kind: a.kind } : {}) });
+    if (!a.hop) { if (!meta.activeAccountId && hereOk(a)) meta.activeAccountId = id; if (!meta.selectedAccountIds.includes(id) && src.meta?.selectedAccountIds?.includes(a.id)) meta.selectedAccountIds.push(id); }
     meta.order.push(id); added += 1;
   }
-  if (src.meta?.activeAccountId && list.some((x) => x.id === src.meta!.activeAccountId) && !list.some((x) => x.id === meta.activeAccountId)) meta.activeAccountId = src.meta.activeAccountId;
+  if (src.meta?.activeAccountId && requireUnlocked().some((x) => x.id === src.meta!.activeAccountId) && !requireUnlocked().some((x) => x.id === meta.activeAccountId)) meta.activeAccountId = src.meta.activeAccountId;
   if (src.settings && typeof src.settings === 'object') saveSettings(src.settings);
   if (added) meta.changedAt = Date.now();
   await persist();
@@ -2938,7 +3002,7 @@ function wirePwDialog(root: HTMLElement, min = 12) {
   paintStrength();
 }
 async function backupDialog() {
-  const list = requireUnlocked().filter((a) => !a.ext); if (!list.length) throw new Error('No local wallets to back up (Privy wallets are recovered through your Privy login)');
+  requireUnlocked(); const list = allAccounts().filter((a) => !a.ext); if (!list.length) throw new Error('No local wallets to back up (Privy wallets are recovered through your Privy login)');
   let pass = '';
   const ok = await ask({
     title: 'Back up the vault', ok: 'Download backup', size: 'md',
@@ -2990,15 +3054,88 @@ async function restoreDialog() {
   const fromFile = (parsed as { accounts: Account[] }).accounts || [];
   const added = await adoptAccounts(parsed);
   // the user holds this file: it counts as a backup of what it carries (a wallet that is not in it still prompts)
-  const have = (a: Account) => { try { return requireUnlocked().some((x) => same(x.address, privateKeyToAccount(a.key).address)); } catch { return false; } };
-  const inFile = new Set(fromFile.map((a) => { try { return lc(privateKeyToAccount(a.key).address); } catch { return ''; } }));
-  if (fileAt && fromFile.every(have) && requireUnlocked().every((x) => x.ext || inFile.has(lc(x.address)))) { meta.backedUpAt = Math.max(meta.backedUpAt || 0, Math.min(fileAt, Date.now())); await persist(); }
+  const have = (a: Account) => { try { return allAccounts().some((x) => same(x.address, keyAddress(a.key))); } catch { return false; } };
+  const inFile = new Set(fromFile.map((a) => { try { return lc(keyAddress(a.key)); } catch { return ''; } }));
+  if (fileAt && fromFile.every(have) && allAccounts().every((x) => x.ext || inFile.has(lc(x.address)))) { meta.backedUpAt = Math.max(meta.backedUpAt || 0, Math.min(fileAt, Date.now())); await persist(); }
   pushBackupState();
   return { ok: true, added, ...summary() };
 }
+// ── import a key typed INSIDE the frame (2026-10-19, the mobile app's Add wallet; the classic site's paste field stays) ──
+// The page or the app only asks for this dialog and gets the new wallet(s) back (id, name, chain, address) or 'Cancelled':
+// the key is pasted here, read here (importKey.ts readKey), stored here and never crosses postMessage. One field, one
+// primary button. It recognises an EVM key, a Solana secret key (Phantom base58 / solana-keygen bytes), a NEAR secret key
+// (ed25519:…) and a recovery phrase (the first EVM, Solana and NEAR account the common wallets derive — the user keeps
+// the ones they use). A Solana or NEAR key becomes a wallet of that chain only (nativeKeys.ts: shown and traded on its
+// own lane, parked on the others). A NEAR key of a NAMED account (alice.near) needs that name; the frame asks the NEAR
+// network whether the key is a full-access key of it before anything is added. The import is the trusted click on Import
+// while the dialog is visible; every wallet joins the account backup like a created one (kind 'imported').
+async function importKeyDialog() {
+  await ready;
+  requireUnlocked();
+  let chosen: KeyCandidate[] = [];
+  const held = (c: KeyCandidate) => { try { return allAccounts().some((a) => same(a.address, keyAddress(c.key))); } catch { return false; } };
+  const what = (c: KeyCandidate) => `${CHAIN_LABEL[c.chain]} · ${shortAddr(c.address)}`;
+  const ok = await ask({
+    title: 'Import a private key', ok: 'Import wallet', size: 'md',
+    html: `${sub('Paste it here, inside the vault. The page and the app never see it.')}<label class="dlg-f-row">Private key or recovery phrase<input type="text" id="ik-k" class="dk-key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" aria-describedby="ik-msg" /></label><p class="dk-muted" id="ik-msg" aria-live="polite">${escHtml(KEY_TEXT.empty)}</p><div class="dk-list" id="ik-out" hidden></div><label class="dlg-f-row" id="ik-near-row" hidden>NEAR account name, if it has one<input type="text" id="ik-near" placeholder="alice.near" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" /></label>${muted('It joins your vault and your account backup. Import only a key you control.')}`,
+    mount: (root) => {
+      const input = root.querySelector('#ik-k') as HTMLInputElement, out = root.querySelector('#ik-out') as HTMLElement, msg = root.querySelector('#ik-msg') as HTMLElement, nearRow = root.querySelector('#ik-near-row') as HTMLElement;
+      const nearShown = () => { const r = readKey(input.value); nearRow.hidden = !r.candidates.some((c, i) => c.chain === 'near' && !held(c) && (r.kind !== 'seed' || (root.querySelector(`[data-ik="${i}"]`) as HTMLInputElement | null)?.checked)); };
+      // one message at a time: the live line, or the error the Import click raised (until the field changes)
+      const paint = () => {
+        const r = readKey(input.value), cs = r.candidates;
+        msg.hidden = false; const err = root.querySelector('.dlg-err') as HTMLElement | null; if (err) err.hidden = true;
+        msg.textContent = !cs.length ? KEY_TEXT[r.kind] : r.kind === 'seed' ? KEY_TEXT.seed : held(cs[0]) ? 'This wallet is already in your vault.' : `${KEY_TEXT[r.kind]} · ${shortAddr(cs[0].address)}`;
+        out.hidden = !cs.length;
+        // a phrase: one row per chain it opens, ticked (the ones already here are shown, not ticked); a key: its address
+        out.innerHTML = r.kind === 'seed'
+          ? cs.map((c, i) => `<label class="dk-pick"><input type="checkbox" data-ik="${i}"${held(c) ? ' disabled' : ' checked'} /><span class="dk-nm">${escHtml(CHAIN_LABEL[c.chain])}${held(c) ? ' · in your vault' : ''}</span><span class="dk-sh" translate="no">${escHtml(shortAddr(c.address))}</span></label>`).join('')
+          : cs.map((c) => addrRow(`${CHAIN_LABEL[c.chain]} wallet`, c.address)).join('');
+        nearShown();
+      };
+      input.addEventListener('input', paint);
+      out.addEventListener('change', nearShown);
+      setTimeout(() => { try { input.focus(); } catch {} }, 60);
+    },
+    validate: async (root) => {
+      const hide = (m: string) => { (root.querySelector('#ik-msg') as HTMLElement).hidden = true; return m; };
+      const r = readKey((root.querySelector('#ik-k') as HTMLInputElement).value);
+      if (!r.candidates.length) return hide(KEY_TEXT[r.kind]);
+      const picked = r.kind === 'seed' ? r.candidates.filter((_, i) => (root.querySelector(`[data-ik="${i}"]`) as HTMLInputElement | null)?.checked) : r.candidates;
+      const fresh = picked.filter((c) => !held(c));
+      if (!fresh.length) return hide(r.kind === 'seed' && !picked.length ? 'Tick at least one wallet.' : 'This wallet is already in your vault.');
+      // a NEAR key of a named account: the name, checked against the network (a full-access key of THAT account)
+      const name = String((root.querySelector('#ik-near') as HTMLInputElement | null)?.value || '').trim().toLowerCase();
+      const out: KeyCandidate[] = [];
+      for (const c of fresh) {
+        if (c.chain !== 'near' || !name) { out.push(c); continue; }
+        if (!NEAR_NAMED.test(name)) return hide('That is not a NEAR account name (like alice.near).');
+        let full = false;
+        try { full = await nearFullAccess(name, nearPublicKey(c.key)); } catch { return hide(`Could not check ${name} on the NEAR network. Try again in a moment.`); }
+        if (!full) return hide(`This key is not a full-access key of ${name}.`);
+        const named = `${c.key}:${name}`;
+        if (held({ ...c, key: named })) return hide('This wallet is already in your vault.');
+        out.push({ ...c, key: named, address: nativeAddress(named) });
+      }
+      chosen = out; return null;
+    },
+  });
+  if (!ok || !chosen.length) { chosen = []; throw new Error('Cancelled'); }
+  const added: { id: string; name: string; chain: KeyCandidate['chain']; address: string }[] = [];
+  try {
+    for (const c of chosen) {
+      const name = nextName('Imported');
+      const id = await addAccount(name, c.key as `0x${string}`, { kind: 'imported' });
+      added.push({ id, name, chain: c.chain, address: c.address });
+    }
+  } finally { chosen = []; }
+  const first = added[0];
+  const here = requireUnlocked().find((x) => x.id === first.id);
+  return { ...summary(), ok: true, id: first.id, name: first.name, chain: first.chain, address: here ? (SOL_MODE ? (solAddressOf(here) || first.address) : NEAR_MODE ? (nearAccountId(here) || first.address) : first.address) : first.address, evm: first.chain === 'evm' ? first.address : '', wallets: added, label: added.map((w) => what({ chain: w.chain, key: '', address: w.address })).join(', ') };
+}
 // ── recovery: the stored vault has no key in this browser, or wallets of a set-aside vault are not back yet ──
 // Drawn by the frame; every way out is a trusted click here. Nothing in this screen deletes anything.
-const addrList = (xs: { name: string; address: string }[]) => `<div class="dlg-list">${xs.slice(0, 12).map((x) => `<div><span>${escHtml(x.name || 'Wallet')}</span><code>${escHtml(x.address)}</code></div>`).join('')}${xs.length > 12 ? `<div class="more">and ${xs.length - 12} more</div>` : ''}</div>`;
+const addrList = (xs: { name: string; address: string }[]) => addrRows(xs);
 const stampText = (s: string) => { const m = /^(\d{4}-\d{2}-\d{2})-(\d{2})-(\d{2})/.exec(s); return m ? `${m[1]} ${m[2]}:${m[3]} UTC` : s; };
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 async function recoverDialog() {
@@ -3013,7 +3150,7 @@ async function recoverDialog() {
     if (!choice) return { ok: false, cancelled: true, ...summary() };
     if (choice === 'file') return restoreDialog();
     if (choice === 'account') { await startFresh(); post({ t: 'ev', name: 'trench:vaultrecover', detail: { via: 'account' } }); return { ok: true, via: 'account', ...summary() }; }
-    if (!(await ask({ title: 'Start a new empty vault?', danger: true, ok: 'Start a new vault', html: `<p>The ${plural(n, 'wallet')} above stay stored but unreadable in this browser until you restore them from your account or a backup file.</p><p class="dlg-note">Nothing is deleted. A script on the page cannot click this button.</p>` }))) return { ok: false, cancelled: true, ...summary() };
+    if (!(await ask({ title: 'Start a new empty vault?', danger: true, ok: 'Start a new vault', html: `${sub(`The ${plural(n, 'wallet')} above stay stored but unreadable in this browser until you restore them from your account or a backup file.`)}${muted('Nothing is deleted.')}` }))) return { ok: false, cancelled: true, ...summary() };
     const r = await startFresh();
     return { ok: true, via: 'fresh', aside: r.aside, ...summary() };
   }
@@ -3147,7 +3284,7 @@ const adoptServer = (j: CheckReply) => {
 // the one way another account's policy (and its codes) gets in: a trusted click inside this frame
 async function rebind() {
   const p = pendingPolicy; if (!p) return false;
-  const ok = await ask({ title: 'Two-factor: a different account', danger: true, ok: 'Use this account', html: `<p>The two-factor rules this vault follows were set by the account that last logged in here. The account logged in now is a different one and ${p.enabled ? 'has its own codes' : 'asks for no codes at all'}; its codes count here only after this click.</p><p class="dlg-note">Continue only if you logged in yourself. A script on the page cannot click this button.</p>` });
+  const ok = await ask({ title: 'A different account signed in', danger: true, ok: 'Use this account', html: `${sub(`The two-factor rules here were set by the account that signed in last. This account ${p.enabled ? 'has its own codes' : 'asks for no codes at all'}; they count here only after this click.`)}${muted('Continue only if you signed in yourself.')}` });
   if (!ok || pendingPolicy !== p) return false;
   serverPolicy = p; pendingPolicy = null;
   try { localStorage.setItem(TWOFA_KEY, JSON.stringify(serverPolicy)); } catch {}
@@ -3175,6 +3312,10 @@ const tokenOf = (auth: Auth) => (typeof auth === 'string' ? auth : auth && typeo
 // resolves when the action may proceed; throws TwoFactorRequired (no/invalid/expired token, or one of another account) or TwoFactorUnavailable (server unreachable)
 async function gate(action: GateAction, auth?: Auth): Promise<void> {
   if (!serverPolicy && access) await refreshPolicy();   // decide on the server's copy when one can be had
+  // Logged in, but the account's gates could not be read (the 2FA store down — it answers 503 rather than "off" — or the
+  // network): a vault that never held this account's copy does not guess "no 2FA" for withdrawals, exports and funded
+  // removals (review 2026-10-19 M3: a store that failed to load must never switch 2FA off)
+  if (!serverPolicy && access && FAIL_CLOSED.gates[action]) throw twoFactorUnavailable(action, 'the account\'s two-factor settings could not be read');
   const pol = policyNow();
   if (!pol.enabled || !pol.gates[action]) return;
   const su = stepUps.get(action);
@@ -3202,8 +3343,70 @@ const isOwn = (to: string) => ownAccounts().some((a) => (SOL_MODE ? solAddressOf
 // the outside path for a destination named by wallet id (distribute / consolidate / sweep): gate, then the address in a dialog
 async function outsideOk(to: Account, what: string, auth?: Auth) {
   await gate('withdraw', auth);
-  const ok = await ask({ title: 'Send outside the vault', danger: true, ok: 'Send', html: `<p>${what} to <b>${escHtml(to.name)}</b></p><p class="addr">${escHtml(to.address)}</p><p class="dlg-note">${to.ext ? 'A Privy wallet: its key is not in this vault.' : 'This address is not one of the vault\'s keys.'} The transfer cannot be undone.</p>` });
+  const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${what} to ${escHtml(to.name)}. ${to.ext ? 'Its key is held by your login provider, not by this vault.' : 'It isn\'t one of your wallets.'}`)}${destBox(to.address)}${muted('Check every character. This can\'t be undone.')}` });
   if (!ok) throw new Error('Cancelled');
+}
+// a NEAR implicit account's own ed25519 signature over a text (hex), from the same derived key as its transactions
+const nearSignText = (evmKeyHex: string, text: string) => Array.from(ed25519.sign(new TextEncoder().encode(text), nearKeys(evmKeyHex).seed), (b) => b.toString(16).padStart(2, '0')).join('');
+
+// ── transfers at most once per idempotency key (review 2026-10-19 M4: a leg that timed out but executed, re-sent) ──
+// transfer(from, to, amount, auth, { idempotencyKey }) and transferToken(from, token, to, amount, auth, { idempotencyKey }):
+// the caller names ONE logical transfer with a key of its own (8–100 of [A-Za-z0-9_.:-], e.g. a UUID per leg, made when
+// the user confirms the transfer and reused for every retry of that leg). Within IDEM_MS on this lane, in this browser's
+// vault (the record survives a frame reload):
+//   · same key, sent              → the same { ok, hash, … } again, with idempotent: true — nothing is sent twice
+//   · same key, still running here → the same pending promise
+//   · same key, started but the frame died before the outcome was recorded → throws TransferUnknown
+//     (name 'TransferUnknown', unknown: true): it may be on chain — check wallet activity, never auto-resend
+//   · same key, ended in an error after the send began → that error again (name kept, idempotent: true), not a resend
+//   · same key, another from / to / amount / token → throws (a key names one transfer)
+//   · an error BEFORE the send began (Cancelled, TwoFactorRequired, Invalid address, …) records nothing: the same key may
+//     be retried, e.g. after the user typed the 2FA code
+// A deliberate new transfer takes a new key. No key = as before (every call sends).
+type TransferOpts = { idempotencyKey?: string } | undefined;
+const IDEM_MS = 15 * 60_000;
+const IDEM_STORE = 'trenches.engine.idem.v1.' + MOVE_LANE;
+type IdemRec = { f: string; s: 'sending' | 'sent' | 'failed'; at: number; r?: Record<string, unknown>; e?: string; n?: string };
+const idemRead = (): Record<string, IdemRec> => { try { const o = JSON.parse(localStorage.getItem(IDEM_STORE) || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
+const idemWrite = (k: string, rec: IdemRec | null) => {
+  try {
+    const all = idemRead(); const t = Date.now();
+    for (const [x, v] of Object.entries(all)) if (!v || t - Number(v.at) > IDEM_MS) delete all[x];
+    if (rec) all[k] = rec; else delete all[k];
+    const keys = Object.keys(all); if (keys.length > 200) for (const x of keys.sort((a, b) => all[a].at - all[b].at).slice(0, keys.length - 200)) delete all[x];
+    localStorage.setItem(IDEM_STORE, JSON.stringify(all));
+  } catch {}
+};
+const idemLive = new Map<string, { f: string; p: Promise<any> }>();
+async function once<T extends Record<string, unknown>>(opts: TransferOpts, what: unknown[], run: (sending: () => void) => Promise<T>): Promise<T> {
+  const raw = opts && typeof opts === 'object' ? (opts as { idempotencyKey?: unknown }).idempotencyKey : undefined;
+  if (raw == null || raw === '') return run(() => {});
+  const k = String(raw);
+  if (!/^[A-Za-z0-9_.:-]{8,100}$/.test(k)) throw new Error('Bad idempotency key (8–100 of A–Z a–z 0–9 _ . : -)');
+  const f = JSON.stringify(what);
+  const live = idemLive.get(k);
+  if (live) { if (live.f !== f) throw new Error('This idempotency key belongs to another transfer'); return live.p.then((r) => ({ ...r, idempotent: true })); }
+  const rec = idemRead()[k];
+  if (rec && Date.now() - rec.at < IDEM_MS) {
+    if (rec.f !== f) throw new Error('This idempotency key belongs to another transfer');
+    if (rec.s === 'sent') return { ...(rec.r || {}), ok: true, idempotent: true } as unknown as T;
+    if (rec.s === 'sending') throw Object.assign(new Error('Status unknown — this transfer was started before and its outcome was not recorded; check wallet activity before sending again'), { name: 'TransferUnknown', unknown: true, idempotent: true });
+    throw Object.assign(new Error(rec.e || 'This transfer failed'), { name: rec.n || 'Error', idempotent: true });
+  }
+  let began = false;
+  const p = (async () => {
+    try {
+      const r = await run(() => { began = true; idemWrite(k, { f, s: 'sending', at: Date.now() }); });
+      if (began) idemWrite(k, { f, s: 'sent', at: Date.now(), r: JSON.parse(JSON.stringify(r)) });
+      return r;
+    } catch (e) {
+      // before the send: nothing happened, the key stays free; after: the outcome is this error, kept for the window
+      if (began) idemWrite(k, { f, s: 'failed', at: Date.now(), e: String((e as Error)?.message || e).slice(0, 500), n: String((e as Error)?.name || 'Error') });
+      throw e;
+    }
+  })();
+  idemLive.set(k, { f, p });
+  try { return await p; } finally { idemLive.delete(k); }
 }
 // a page script may only ever report; the gate decides from the server copy
 async function twofaPolicy(src: { accessToken?: unknown; enabled?: unknown; gates?: unknown } | null | undefined) {
@@ -3233,6 +3436,7 @@ function policy() {
       { method: 'bridgeSend', does: 'sends on another EVM chain', needs: ['transfer'], outside: ['click', 'withdraw'] },
       { method: 'bridgeDeposit', does: 'pays a Relay bridge quote to its recipient', needs: ['click', 'transfer'], outside: ['click', 'withdraw'] },
       { method: 'remove', does: 'erases a wallet key', needs: ['click'], funded: ['remove'] },
+      { method: 'importDialog', does: 'adds wallets from a key or recovery phrase typed into the engine dialog (EVM, Solana, NEAR; the key never leaves the frame)', needs: ['click'] },
       { method: 'buy/sell', does: 'signs a verified route for a token trade', needs: [] },
       { method: 'wrap/unwrap', does: 'wraps native coin in the same wallet', needs: [] },
       { method: 'signNote', does: 'signs two fixed note formats only (callout, BGC entry)', needs: [] },
@@ -3253,8 +3457,8 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
   const finalOf = (l: Leg) => { let x = l; for (let i = 0; i < MAX_HOPS + 1 && nextOf.get(x.id); i += 1) x = nextOf.get(x.id)!; return x; };
   const total = plan.legs.filter((l) => !l.after && outside.includes(lc(finalOf(l).to))).reduce((t, l) => t + (l.amount === 'max' ? 0 : humanOf(BigInt(l.amount), plan.asset)), 0);
   const ok = await ask({
-    title: 'Send outside the vault', danger: true, ok: `Send ${asset}`,
-    html: `<p><b>${escHtml(Number(total.toFixed(8)))} ${escHtml(asset)}</b> total${plan.hops ? ` through ${plan.hops} hop wallet${plan.hops === 1 ? '' : 's'}` : ''} to ${outside.length === 1 ? 'an address' : outside.length + ' addresses'} not in this vault:</p><div class="addr">${outside.map(escHtml).join('<br>')}</div><p class="dlg-note">Check every character. Transfers cannot be undone.</p>`,
+    title: 'Send outside your vault', danger: true, ok: `Send ${asset}`,
+    html: `${sub(`${escHtml(Number(total.toFixed(8)))} ${escHtml(asset)} in total${plan.hops ? ` through ${plan.hops} hop wallet${plan.hops === 1 ? '' : 's'}` : ''} to ${outside.length === 1 ? 'this address' : `these ${outside.length} addresses`}. ${outside.length === 1 ? 'It isn\'t' : 'They aren\'t'} your wallets.`)}${outside.map((a) => destBox(a)).join('')}${muted('Check every character. This can\'t be undone.')}`,
   });
   if (!ok) throw new Error('Cancelled');
 }
@@ -3276,8 +3480,8 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
 //   remove(id, auth)                          key erased                         click | funded: + 'remove'
 //   buy / sell / wrap / unwrap                trades on routes verified on chain (minOut, known venues); no gate — see trade()
 //   signNote(address, message)                two fixed note formats only; never arbitrary messages, never typed data, never calldata
-// Nothing here signs arbitrary calldata or an arbitrary message. restore() and
-// import() put keys IN. policy() tells the page which gates are on and that
+// Nothing here signs arbitrary calldata or an arbitrary message. restore(),
+// import() and importDialog() put keys IN (importDialog: typed in this frame's dialog). policy() tells the page which gates are on and that
 // they are enforced here; twofaPolicy() is how the page hands over its Privy
 // access token (to read the server's gates) and its own view, which never wins.
 const engine = {
@@ -3288,21 +3492,22 @@ const engine = {
   createVault, unlock, lock,
   reorder: async (ids: string[]) => { requireUnlocked(); meta.order = ids.filter((id, i) => ids.indexOf(id) === i); await persist(); return { ok: true, ...summary() }; },
   archive: async (id: string, on = true) => { const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet'); a.archived = on; if (on) meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); await persist(); return { ok: true, ...summary() }; },
-  transfer: async (fromId: string, to: string, amountEth: number | 'max', auth?: Auth) => {
+  transfer: async (fromId: string, to: string, amountEth: number | 'max', auth?: Auth, opts?: TransferOpts) => once(opts, ['native', fromId, to, amountEth], async (sending) => {
     const list = requireUnlocked(); const from = list.find((x) => x.id === fromId); if (!from) throw new Error('Unknown wallet');
     if (!(SOL_MODE ? SOL_ADDR.test(String(to)) : NEAR_MODE ? NEAR_ACCT.test(String(to).toLowerCase()) : /^0x[0-9a-fA-F]{40}$/.test(to))) throw new Error('Invalid address');
     if (!isOwn(to)) {
       // the only way out of the vault for native coin: the 'withdraw' gate, then a trusted click on the real address
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside the vault', danger: true, ok: 'Send', html: `<p>Send <b>${amountEth === 'max' ? 'the whole balance' : escHtml(amountEth) + ' ' + NATIVE}</b> from <b>${escHtml(from.name)}</b> to</p><p class="addr">${escHtml(to)}</p><p class="dlg-note">This address is not one of your wallets. The transfer cannot be undone.</p>` });
+      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: amountEth === 'max' ? 'Send everything' : `Send ${amountEth} ${NATIVE}`, html: `${sub(`${amountEth === 'max' ? 'The whole balance' : escHtml(amountEth) + ' ' + NATIVE} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else await gate('transfer', auth);
+    sending();
     return { ok: true, hash: await sendEth(fromId, to as `0x${string}`, amountEth === 'max' ? 'max' : parseEther(String(amountEth))) };
-  },
+  }),
   // A token out of a wallet — a stablecoin deposit (USDC / USDG / USDT) or any coin it holds (2026-10-17: a user's 2 USDC
   // showed in the header and could not be moved). The same doors as the native coin: outside the vault = the 'withdraw'
   // gate and a trusted click on the real address, with the token and the amount; between own wallets = 'transfer'.
-  transferToken: async (fromId: string, token: string, to: string, amount: number | 'max', auth?: Auth) => {
+  transferToken: async (fromId: string, token: string, to: string, amount: number | 'max', auth?: Auth, opts?: TransferOpts) => once(opts, ['token', fromId, token, to, amount], async (sending) => {
     const list = requireUnlocked(); const from = list.find((x) => x.id === fromId); if (!from) throw new Error('Unknown wallet');
     if (NEAR_MODE) throw new Error('Sending tokens on NEAR is not supported yet — export the key to move them');
     if (!(amount === 'max' || (typeof amount === 'number' && amount > 0 && Number.isFinite(amount)))) throw new Error('Invalid amount');
@@ -3311,10 +3516,10 @@ const engine = {
     const what = `${amount === 'max' ? 'all of its' : escHtml(amount)} <b>${escHtml(sym || (String(token).slice(0, 6) + '…' + String(token).slice(-4)))}</b>`;
     if (!isOwn(to)) {
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside the vault', danger: true, ok: 'Send', html: `<p>Send ${what} from <b>${escHtml(from.name)}</b> to</p><p class="addr">${escHtml(to)}</p><p class="dlg-note">Token <span class="addr">${escHtml(token)}</span>. This address is not one of your wallets. Check every character — a transfer cannot be reversed.</p>` });
+      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${what} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}<div class="dk-list">${addrRow(`${sym || 'Token'} contract`, token)}</div>${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else await gate('transfer', auth);
-    if (SOL_MODE) { const r = await solTokenTransfer(from as unknown as SolAcct, String(token), String(to), amount); return { ok: true, hash: r.hash, units: r.units, decimals: r.decimals }; }
+    if (SOL_MODE) { sending(); const r = await solTokenTransfer(from as unknown as SolAcct, String(token), String(to), amount); return { ok: true, hash: r.hash, units: r.units, decimals: r.decimals }; }
     const { account, client } = walletFor(fromId);
     const t = String(token).toLowerCase() as `0x${string}`;
     const bal = await publicClient.readContract({ address: t, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) as bigint;
@@ -3327,8 +3532,9 @@ const engine = {
     const gasPrice = await feeFor(1);
     const native = await publicClient.getBalance({ address: account.address });
     if (native < gas * gasPrice) throw new Error(`Needs ${formatEther(gas * gasPrice)} ${NATIVE} for gas — this wallet has ${formatEther(native)}`);
+    sending();
     return { ok: true, hash: await signAndSend(client, account, { to: t, data }, gasPrice, gas), units: units.toString(), decimals: dec };
-  },
+  }),
   // destinations are wallet ids resolved here, never addresses: these two cannot send outside the vault
   distribute: async (fromId: string, toIds: string[], amountEth: number, auth?: Auth) => { const list = requireUnlocked(); { const ext = toIds.map((id) => list.find((x) => x.id === id)).filter((t) => t && !isOwn(t.address)) as Account[]; if (ext.length) { for (const t of ext) await outsideOk(t, `Send <b>${escHtml(amountEth)} ${NATIVE}</b>`, auth); } else await gate('transfer', auth); } const results = []; for (const id of toIds) { const t = list.find((x) => x.id === id); if (!t) continue; try { results.push({ id, address: t.address, ok: true, hash: await sendEth(fromId, t.address, parseEther(String(amountEth))) }); } catch (e) { results.push({ id, address: t.address, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
   consolidate: async (fromIds: string[], toId: string, auth?: Auth) => { const list = requireUnlocked(); const to = list.find((x) => x.id === toId); if (!to) throw new Error('Unknown target'); if (!isOwn(to.address)) await outsideOk(to, `Sweep <b>${fromIds.filter((x) => x !== toId).length}</b> wallet(s)`, auth); else await gate('transfer', auth); const results = []; for (const id of fromIds) { if (id === toId) continue; try { results.push({ id, ok: true, hash: await sendEth(id, to.address, 'max') }); } catch (e) { results.push({ id, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
@@ -3350,11 +3556,35 @@ const engine = {
     // a BGC note naming a Solana address is also signed by that address's key, and only if it is this wallet's own
     const solLine = /\nSOL: ([1-9A-HJ-NP-Za-km-z]{32,44})(\n|$)/.exec(msg)?.[1] || '';
     if (solLine && solLine !== solAddressOf(a)) throw new Error('Refused: the SOL line names another wallet');
-    return { ok: true, address: a.address, signature: await privateKeyToAccount(a.key).signMessage({ message: msg }), ...(solLine ? { sol: solLine, solSignature: solSignText(a.key, msg) } : {}) };
+    // …and a NEAR line by that NEAR implicit account's own ed25519 key (review 2026-10-19 H5: the server accepts a NEAR
+    // claim only with it, server/bgc.mjs nearSigOk), only when it is this wallet's own account
+    const nearLine = /\nNEAR: ([0-9a-f]{64})(\n|$)/.exec(msg)?.[1] || '';
+    if (nearLine && nearLine !== nearAccountId(a)) throw new Error('Refused: the NEAR line names another wallet');
+    return { ok: true, address: a.address, signature: await privateKeyToAccount(a.key).signMessage({ message: msg }), ...(solLine ? { sol: solLine, solSignature: solSignText(a.key, msg) } : {}), ...(nearLine ? { near: nearLine, nearSignature: nearSignText(a.key, msg) } : {}) };
   },
-  create: async (name?: string) => {
+  create: async (name?: string, opts?: { recovery?: string; signature?: string }) => {
     await ready; requireUnlocked();
     const main = meta.main && seeds[lc(meta.main)] ? lc(meta.main) : '';
+    // Owner decision 2026-10-19: a NEW account whose main is an external wallet (Rabby / MetaMask) gets phone access in the
+    // same trusted click that creates its first wallet — one line in this dialog, no second window. The page hands over
+    // the account's Privy wallet and its signature over RECOVERY_MSG; nothing is sealed unless the user clicks here.
+    let rq: { r: string; sig: string } | null = null;
+    if (opts && typeof opts === 'object' && opts.recovery) {
+      if (!HOST) throw new Error('vault frame only');
+      if (!main) throw new Error('Main wallet not attached on this device');
+      const r = lc(opts.recovery);
+      if (!/^0x[0-9a-f]{40}$/.test(r) || r === main) throw new Error('Bad recovery wallet');
+      const signer = await recoverMessageAddress({ message: RECOVERY_MSG(main, r), signature: String(opts.signature || '') as `0x${string}` }).catch(() => '');
+      if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
+      const label = String(name || '').trim() || `Wallet ${subsOf(main).length + 1}`;
+      const first = !subsOf(main).length;
+      if (!(await ask({ title: first ? 'Create your first wallet' : 'Create a wallet', ok: 'Create wallet', cancelLabel: 'Not now', html: `${sub(`Create ${escHtml(label)}, back it up to your account and restore it on any device you log into.`)}${signedIn(main)}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
+      rq = { r, sig: String(opts.signature) };
+    }
+    if (rq && main) {
+      const rk = await sealRecovery(main, rq.r, rq.sig, seeds[main]);
+      recoveryChange.set(main, { rk, at: Date.now() });
+    }
     if (main) {
       const subs = subsOf(main);
       if (subs.length >= SUB_CAP) throw new Error(`Up to ${SUB_CAP} trading wallets per main wallet`);
@@ -3387,7 +3617,7 @@ const engine = {
     if (!same(signer, m)) throw new Error('That signature is not from this main wallet');
     // a main this vault has not worked with yet becomes the parent of every wallet created from now on: a page
     // script could attach its own (its own signature verifies too) — so the first attach of a main is a trusted click
-    if (!seeds[m] && !(await ask({ title: 'Attach your main wallet', ok: 'Attach', html: `<p>Trading wallets of the main wallet</p><p class="addr">${escHtml(m)}</p><p>will be restored and new ones created under it in this browser.</p><p class="dlg-note">Attach only the wallet you logged in with. A script on the page cannot click this button.</p>` }))) throw new Error('Cancelled');
+    if (!seeds[m] && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
     const seed = await seedOfSignature(String(src?.signature || ''));
     const fp = await fingerprint(seed);
     // the account's profile names the fingerprint of the seed it was built with: a different signature is refused before anything is kept
@@ -3398,12 +3628,82 @@ const engine = {
     await persist();
     return { ok: true, fp, mv, ...summary() };
   },
+  // ── account recovery v1 (opt-in): seal this main's seed to the account's Privy embedded wallet ──
+  // Only on a device where the main is attached (the seed is here), only after a trusted click in this frame: a page that
+  // could turn it on silently would widen who can open the account's wallets (see vaultRecovery.ts RECOVERY_MSG).
+  mainRecoverySeal: async (src: { address: string; recovery: string; signature: string }) => {
+    await ready; if (!HOST) throw new Error('vault frame only');
+    requireUnlocked();
+    const m = lc(src?.address), r = lc(src?.recovery);
+    if (!seeds[m]) throw new Error('Main wallet not attached on this device');
+    if (!/^0x[0-9a-f]{40}$/.test(r) || r === m) throw new Error('Bad recovery wallet');
+    const signer = await recoverMessageAddress({ message: RECOVERY_MSG(m, r), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
+    if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
+    if (!(await ask({ title: 'Turn on phone access', ok: 'Turn on', cancelLabel: 'Not now', html: `${sub('Sign in on your phone or any browser and your wallets appear there. No file, no login wallet.')}${signedIn(m)}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
+    const rk = await sealRecovery(m, r, String(src.signature), seeds[m]);
+    recoveryChange.set(m, { rk, at: Date.now() }); meta.changedAt = Date.now();
+    await persist(); pushBackupState();
+    return { ok: true, recovery: r };
+  },
+  mainRecoveryOff: async (src: { address: string }) => {
+    await ready; if (!HOST) throw new Error('vault frame only');
+    requireUnlocked();
+    const m = lc(src?.address); if (!seeds[m]) throw new Error('Main wallet not attached on this device');
+    if (!(await ask({ title: 'Turn off phone access', ok: 'Turn off', cancelLabel: 'Keep it on', html: `${sub('New devices will need your login wallet or a backup file to restore your wallets.')}${signedIn(m)}${muted('A device that already restored keeps its wallets, and a copy made while this was on still opens with your sign-in. To fully undo it, move your funds to new wallets.')}` }))) throw new Error('Cancelled');
+    recoveryChange.set(m, { rk: null, at: Date.now() }); meta.changedAt = Date.now();
+    await persist(); pushBackupState();
+    return { ok: true };
+  },
+  // A device logged in to the account without the main (an email login of a Rabby account): the account's Privy wallet
+  // signs the recovery text, the seed comes out of the profile's `rk`, must match the profile's fingerprint, and the
+  // wallets it opens are listed for ONE trusted click (the restore that follows adds exactly those).
+  mainAttachRecovery: async (src: { address: string; recovery: string; signature: string; profile: Profile; mv?: number; keepInBackup?: boolean }) => {
+    await ready; if (!HOST) throw new Error('main wallets attach in the vault frame only');
+    requireUnlocked();
+    const m = lc(src?.address), r = lc(src?.recovery), p = src?.profile;
+    if (seeds[m]) return { ok: true, already: true, ...summary() };
+    if (!p || lc(p.main) !== m || !validRecovery(p.rk) || lc(p.rk.addr) !== r) throw new Error('This account has no recovery copy for that wallet');
+    const signer = await recoverMessageAddress({ message: RECOVERY_MSG(m, r), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
+    if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
+    const seed = await openRecovery(p.rk, m, String(src.signature));
+    if (!seed) throw new Error('The recovery copy does not open with this account');
+    if (!p.fp || (await fingerprint(seed)) !== p.fp) throw new Error('fingerprint mismatch: the recovery copy does not match this account');
+    const o = await openProfile(p, seed, saltsOf());
+    const have = new Set(allAccounts().map((a) => lc(a.address)));
+    const v1: { name: string; address: string }[] = [];
+    for (let i = 0; i < Math.min(SUB_CAP, Math.max(0, Math.floor(Number(p.count) || 0))); i += 1) v1.push({ name: String(p.names?.[String(i)] || `Wallet ${i + 1}`), address: privateKeyToAccount(await subKey(seed, i)).address });
+    const list = [...v1, ...o.wallets.filter((w) => !have.has(lc(w.address))).map((w) => ({ name: w.name, address: w.address }))];
+    // "Create new anyway" (vault-client.js): the account is used here — new wallets join the SAME backup — and the backed-up
+    // wallets stay where they are, restorable any time. Still the trusted click: the seed this attaches decides where
+    // every new wallet comes from.
+    if (src?.keepInBackup) {
+      if (!(await ask({ title: 'Use your account here', ok: 'Continue', cancelLabel: 'Not now', html: `${sub(`${list.length ? `Your ${plural(list.length, 'wallet')} stay in your encrypted backup.` : 'Your encrypted backup stays as it is.'} New wallets you create here are added to it.`)}${signedIn(m)}${muted('Restore the others any time from Wallets.')}` }))) throw new Error('Cancelled');
+    } else if (!(await ask({ title: 'Restore your wallets', ok: list.length ? `Restore ${plural(list.length, 'wallet')}` : 'Restore', cancelLabel: 'Not now', html: `${sub(list.length ? `${plural(list.length, 'wallet')} available in your encrypted backup.` : 'Your encrypted backup is ready.')}${signedIn(m)}${list.length ? addrRows(list) : ''}${muted(`Check that you recognize ${recognizeAll(list.length)} before restoring.`)}` }))) throw new Error('Cancelled');
+    const mv = src?.mv === 2 ? 2 : 1;
+    seeds[m] = seed; meta.main = m;
+    if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
+    // the recovery copy stays the server's: this vault carries whatever the server holds on its next publish (no own copy)
+    if (!src?.keepInBackup) preApproved = { main: m, addrs: new Set(o.wallets.map((w) => lc(w.address))), at: Date.now() };
+    await persist();
+    return { ok: true, fp: p.fp, mv, ...summary() };
+  },
+  // Before a new wallet joins while the account backup holds wallets this device has not restored (vault-client.js asks
+  // only then): "Restore them first?" — the answer is the page's to act on; nothing changes here. A dialog of the frame
+  // so it shows where the page cannot draw (the app's hidden wallet frame).
+  restoreFirst: async (n: number, what?: string) => {
+    await ready;
+    const k = Math.max(1, Math.min(200, Math.floor(Number(n) || 0)));
+    const verb = what === 'import' ? 'Import' : 'Create';
+    const choice = await askChoice({ title: 'Restore your wallets first?', ok: '', cancel: false, html: sub(`You have ${plural(k, 'wallet')} in your encrypted backup. Your backup keeps ${k === 1 ? 'it' : 'all of them'} either way.`),
+      choices: [{ id: 'restore', label: `Restore ${plural(k, 'wallet')}`, primary: true }, { id: 'create', label: what === 'import' ? 'Import the new wallet instead' : 'Create a new wallet instead' }] });
+    return { ok: true, choice: choice === 'restore' || choice === 'create' ? choice : null };
+  },
   mainDetach: async () => { await ready; requireUnlocked(); meta.main = null; await persist(); return { ok: true, ...summary() }; },
   // The account's profile from the server, applied: v1 trading wallets re-derived from the count, the vault salts
   // taken back, every sealed wallet (backup v3; older v2/v1 wrapped keys too) opened. Wallets that arrive here
   // and are not in the vault yet are listed in a dialog and join on a trusted click — a page that can obtain the
   // main's signature could have sealed its own key into the profile to slip it in as "ours".
-  mainSync: async (src: { address: string; profile: Profile | null }) => {
+  mainSync: async (src: { address: string; profile: Profile | null; add?: boolean }) => {
     await ready; if (!HOST) throw new Error('vault frame only');
     requireUnlocked();
     const m = lc(src?.address); const seed = seeds[m]; if (!seed) throw new Error('Main wallet not attached');
@@ -3421,13 +3721,24 @@ const engine = {
         const removed = new Set(meta.removedAddrs || []);
         const incoming: OpenedWallet[] = [];
         for (const w of o.wallets) {
-          const have = requireUnlocked().find((a) => same(a.address, w.address));
+          const have = allAccounts().find((a) => same(a.address, w.address));
           if (have) { if (w.name && have.name !== w.name) have.name = w.name; continue; }
           if (removed.has(lc(w.address))) continue;   // removed here on purpose; the profile keeps it until no device publishes it
           incoming.push(w);
         }
-        if (incoming.length) {
-          const ok = await ask({ title: 'Restore wallets from your account', ok: `Add ${incoming.length}`, size: 'lg', html: `<p>Your account lists ${plural(incoming.length, 'wallet')} this browser does not hold yet:</p>${addrList(incoming)}<p class="dlg-note">Add them only if you recognise every address. A script on the page cannot click this button.</p>` });
+        const approved = preApproved && preApproved.main === m && Date.now() - preApproved.at < 120_000 && incoming.every((w) => preApproved!.addrs.has(lc(w.address)));
+        // add:false — the page's "Create new anyway": nothing joins, nothing is asked (adding is what needs the click,
+        // leaving out never does); the entries stay in the profile and every publish carries them
+        if (incoming.length && src?.add === false) declined = incoming.length;
+        else if (incoming.length && approved) {
+          preApproved = null;
+          for (const w of incoming) {
+            const slotTaken = w.main && w.index != null && subsOf(w.main).some((a) => a.index === w.index);
+            await addAccount(w.name || nextName(w.kind === 'imported' ? 'Imported' : 'Created'), w.key, { ...(w.kind === 'hop' ? { hop: true } : {}), ...(w.main && w.index != null && !slotTaken ? { main: w.main, index: w.index } : {}), ...(w.gen === 2 ? { gen: 2 as const } : {}), ...(w.kind === 'created' || w.kind === 'imported' ? { kind: w.kind } : {}), ...(w.archived ? { archived: true } : {}), ...(w.createdAt ? { createdAt: w.createdAt } : {}) });
+            unwrapped += 1;
+          }
+        } else if (incoming.length) {
+          const ok = await ask({ title: 'Restore your wallets', ok: `Restore ${plural(incoming.length, 'wallet')}`, cancelLabel: 'Not now', html: `${sub(`${plural(incoming.length, 'wallet')} in your encrypted backup ${incoming.length === 1 ? 'isn\'t' : 'aren\'t'} in this browser yet.`)}${signedIn(m)}${addrRows(incoming)}${muted(`Check that you recognize ${recognizeAll(incoming.length)} before restoring.`)}` });
           if (ok) {
             for (const w of incoming) {
               const slotTaken = w.main && w.index != null && subsOf(w.main).some((a) => a.index === w.index);
@@ -3451,18 +3762,38 @@ const engine = {
     requireUnlocked();
     const m = lc(address); const seed = seeds[m]; if (!seed) throw new Error('Main wallet not attached');
     const subs = subsV1Of(m);
-    const count = subs.reduce((n, a) => Math.max(n, (a.index ?? -1) + 1), 0);
+    let count = subs.reduce((n, a) => Math.max(n, (a.index ?? -1) + 1), 0);
     const names: Record<string, string> = {}; for (const a of subs) names[String(a.index)] = a.name;
     const fromServer = remote && typeof remote === 'object' && lc(remote.main) === m && Array.isArray(remote.attached) ? remote.attached : [];
+    // A publish is a strict union with the server copy (owner 2026-10-19): sealed entries are carried by buildProfile;
+    // the v1 count too — a device that declined the restore (or has not derived them yet) must not shrink it. Only a
+    // wallet removed here by the remove dialog (removedAddrs) stays out.
+    if (remote && typeof remote === 'object' && lc(remote.main) === m && (!remote.fp || remote.fp === await fingerprint(seed))) {
+      const removed = new Set(meta.removedAddrs || []);
+      const rc = Math.min(SUB_CAP, Math.max(0, Math.floor(Number(remote.count) || 0)));
+      for (let i = count; i < rc; i += 1) {
+        const addr = lc(privateKeyToAccount(await subKey(seed, i)).address);
+        if (removed.has(addr)) continue;
+        count = i + 1;
+        const nm = remote.names?.[String(i)]; if (nm && !names[String(i)]) names[String(i)] = String(nm).slice(0, 40);
+      }
+    }
     const r = await buildProfile({ main: m, seed, count, names, wallets: backupWalletsOf(m), salts: saltsOf(), carry: [...fromServer, ...(remoteCarry.get(m) || [])] as ProfileEntry[], forget: meta.removedAddrs || [], mv: mvOf(m) });
-    pendingPublish.set(r.digest, { main: m, addrs: r.covered });
+    // account recovery (rk): a change made in this frame by a trusted click (sealed here, or null = turned off here) until
+    // the server confirms it; otherwise exactly the server copy's, carried — never a copy this vault kept from before
+    const change = recoveryChange.get(m);
+    const rk = change ? change.rk : remote && lc(remote.main) === m && validRecovery(remote.rk) ? remote.rk : undefined;
+    if (rk !== undefined) { (r.profile as Profile).rk = rk; r.digest = r.digest.slice(0, 24) + (rk ? rk.iv.replace(/[^A-Za-z0-9]/g, '').slice(0, 8) : 'off00000'); }
+    pendingPublish.set(r.digest, { main: m, addrs: r.covered, ...(change ? { change } : {}) });
     if (pendingPublish.size > 20) pendingPublish.delete(pendingPublish.keys().next().value as string);
-    return { ok: true, profile: r.profile, digest: r.digest, covered: r.covered.length, dropped: r.dropped };
+    return { ok: true, profile: r.profile, digest: r.digest, covered: r.covered.length, own: r.covered, dropped: r.dropped };
   },
   // the page saved that profile and the server confirmed it: the account backup now covers exactly those wallets
   mainPublished: async (src: { digest: string; updatedAt?: number }) => {
     await ready; requireUnlocked();
     const p = pendingPublish.get(String(src?.digest || '')); if (!p) return { ok: false };
+    // the server holds this frame's phone-access change now: from here on its copy is the one carried
+    if (p.change && recoveryChange.get(p.main) === p.change) recoveryChange.delete(p.main);
     meta.account = { main: p.main, at: Math.min(Date.now(), Number(src?.updatedAt) || Date.now()), addrs: p.addrs, digest: String(src.digest) };
     await persist(); pushBackupState();
     return { ok: true };
@@ -3473,17 +3804,19 @@ const engine = {
     // keys from the page: a wallet in here is "ours" for every transfer, so a script must not be able to plant one
     // (its own key, then a sweep to it). The addresses are shown in the frame and join on a trusted click.
     const shown = (Array.isArray(items) ? items : []).slice(0, 200).map((it) => { try { return { name: String(it.name || '').trim(), address: privateKeyToAccount(String(it.privateKey).trim() as `0x${string}`).address }; } catch { return null; } }).filter(Boolean) as { name: string; address: string }[];
-    if (shown.length && !(await ask({ title: `Import ${shown.length} wallet${shown.length === 1 ? '' : 's'}`, ok: 'Import', html: `<p>These wallets join the vault and count as yours for transfers:</p><div class="addr">${shown.map((x) => escHtml((x.name ? x.name + ' · ' : '') + x.address)).join('<br>')}</div><p class="dlg-note">Import only keys you pasted yourself. A script on the page cannot click this button.</p>` }))) throw new Error('Cancelled');
+    if (shown.length && !(await ask({ title: shown.length === 1 ? 'Import a wallet' : 'Import wallets', ok: `Import ${plural(shown.length, 'wallet')}`, html: `${sub(`${shown.length === 1 ? 'It joins' : 'They join'} your vault and count${shown.length === 1 ? 's' : ''} as yours for transfers.`)}${addrRows(shown.map((x, i) => ({ name: x.name || `Imported ${i + 1}`, address: x.address })), 200)}${muted('Import only keys you pasted yourself.')}` }))) throw new Error('Cancelled');
     for (const it of items) { const name = String(it.name || '').trim() || nextName('Imported'); try { await addAccount(name, String(it.privateKey).trim() as `0x${string}`, { kind: 'imported' }); results.push({ ok: true, name }); } catch (e) { results.push({ ok: false, name, error: shortError(e) }); } }
     return { ok: true, results, ...summary() };
   },
+  // the same, but the key is typed into the engine's own dialog: nothing secret comes in from, or goes back to, the caller
+  importDialog: () => importKeyDialog(),
   rename: async (id: string, name: string) => { const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet'); a.name = name.trim() || a.name; await persist(); return { ok: true, ...summary() }; },
   remove: async (id: string, auth?: Auth) => { const list = requireUnlocked(); const i = list.findIndex((x) => x.id === id); if (i < 0) throw new Error('Unknown wallet'); if (list[i].ext) throw new Error('Privy wallets belong to your Privy account — log out to detach them');
     // a wallet that still holds anything (native, or a token this frame has seen) is a funds loss when its key goes: the 'remove' gate applies; an empty one only needs the click
     { const addr = lc(list[i].address); const held = (ethCache[addr] || 0) > 0 || Object.values(tokenCache).some((m) => (m[addr] || 0) > 0) || (!SOL_MODE && !NEAR_MODE && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n); if (held) await gate('remove', auth); }
-    if (!(await ask({ title: 'Remove wallet', danger: true, ok: 'Remove', html: `<p>Remove <b>${escHtml(list[i].name)}</b> (${escHtml(list[i].address)}) from the vault?</p><p class="dlg-note">Its key is erased here. Export or back it up first if it holds funds — this cannot be undone.</p>` }))) throw new Error('Cancelled'); if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
+    if (!(await ask({ title: `Remove ${list[i].name}?`, danger: true, ok: 'Remove wallet', cancelLabel: 'Keep it', html: `${sub('Its key is erased from this browser, and it leaves your encrypted backup.')}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted('Export or back it up first if it holds funds. This can\'t be undone.')}` }))) throw new Error('Cancelled'); if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
   setActive: async (id: string) => { requireUnlocked(); meta.activeAccountId = id; await persist(); return { ok: true, ...summary() }; },
-  setSelected: async (ids: string[]) => { const list = requireUnlocked(); meta.selectedAccountIds = ids.filter((id) => list.some((a) => a.id === id)); await persist(); return { ok: true, ...summary() }; },
+  setSelected: async (ids: string[]) => { const list = requireUnlocked(); meta.selectedAccountIds = [...ids.filter((id) => list.some((a) => a.id === id)), ...meta.selectedAccountIds.filter((id) => parked.some((a) => a.id === id))]; await persist(); return { ok: true, ...summary() }; },
   // the key is shown in the engine's own dialog and never returned to the caller
   export: async (id: string, auth?: Auth) => {
     const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
@@ -3492,8 +3825,8 @@ const engine = {
     // on the NEAR lane the wallet is its NEAR identity: the ed25519 secret in NEAR wallet format
     const shownAddr = SOL_MODE ? solAddressOf(a) || a.address : NEAR_MODE ? nearAccountId(a) || a.address : a.address;
     await ask({
-      title: SOL_MODE ? 'Solana Private Key' : NEAR_MODE ? 'NEAR Secret Key' : 'Private Key', ok: NEAR_MODE ? 'Show Secret Key' : 'Show Private Key', cancel: false, plain: true, size: 'sm', foot: PK_WARN,
-      html: `<div class="pk"><label>${SOL_MODE ? 'Solana Address' : NEAR_MODE ? 'NEAR Account' : 'Wallet Address'}</label>${pkBox(shownAddr.slice(0, 26) + '…' + shownAddr.slice(-4), { copy: shownAddr, title: 'Copy address' })}<label>${SOL_MODE ? 'Private Key (base58, imports into Phantom, Solflare, Backpack)' : NEAR_MODE ? 'Secret Key (ed25519, importable into any NEAR wallet)' : 'Private Key'}</label>${pkBox((SOL_MODE ? '' : NEAR_MODE ? 'ed25519:' : '0x') + '•'.repeat(64), { key: true, title: 'Copy private key' })}</div>`,
+      title: SOL_MODE ? 'Solana private key' : NEAR_MODE ? 'NEAR secret key' : 'Private key', ok: NEAR_MODE ? 'Show secret key' : 'Show private key', cancel: false, plain: true, size: 'sm', foot: PK_WARN,
+      html: `<div class="pk"><label>${SOL_MODE ? 'Solana address' : NEAR_MODE ? 'NEAR account' : 'Wallet address'}</label>${pkBox(shownAddr.slice(0, 26) + '…' + shownAddr.slice(-4), { copy: shownAddr, title: 'Copy address' })}<label>${SOL_MODE ? 'Private key (base58: imports into Phantom, Solflare, Backpack)' : NEAR_MODE ? 'Secret key (ed25519: imports into any NEAR wallet)' : 'Private key'}</label>${pkBox((SOL_MODE ? '' : NEAR_MODE ? 'ed25519:' : '0x') + '•'.repeat(64), { key: true, title: 'Copy private key' })}</div>`,
       stay: (root, btn) => reveal(root, btn, SOL_MODE ? solSecretKey(a.key) : NEAR_MODE ? nearSecretKey(a.key) : a.key),
     });
     return { ok: true, shown: true };
@@ -3501,10 +3834,10 @@ const engine = {
   exportMany: async (ids: string[], auth?: Auth) => {
     const list = requireUnlocked().filter((x) => ids.includes(x.id) && !x.ext); if (!list.length) throw new Error('No local wallets selected');
     await gate('export', auth);
-    const lines = list.map((a) => `${a.name},${a.key}`).join('\n');
+    const lines = list.map((a) => `${a.name},${nativeChainOf(a.key) ? nativeSecret(a.key) : a.key}`).join('\n');
     await ask({
-      title: `Private Keys (${list.length})`, ok: 'Show Private Keys', cancel: false, plain: true, size: 'sm', foot: PK_WARN,
-      html: `<div class="pk"><label>Wallets</label>${list.map((a) => pkBox(`${a.name} · ${a.address}`, { copy: a.address, title: 'Copy address' })).join('')}<label>Private keys <small>name,key — one per line, importable back into any copytrade vault</small></label>${pkBox(list.map((a) => `${a.name},0x` + '•'.repeat(64)).join('\n'), { key: true, title: 'Copy all keys' })}</div>`,
+      title: `Private keys (${list.length})`, ok: 'Show private keys', cancel: false, plain: true, size: 'sm', foot: PK_WARN,
+      html: `<div class="pk"><label>Wallets</label>${list.map((a) => pkBox(`${a.name} · ${a.address}`, { copy: a.address, title: 'Copy address' })).join('')}<label>Private keys <small>name,key, one per line: imports back into any motion vault</small></label>${pkBox(list.map((a) => `${a.name},0x` + '•'.repeat(64)).join('\n'), { key: true, title: 'Copy all keys' })}</div>`,
       stay: (root, btn) => reveal(root, btn, lines),
     });
     return { ok: true, shown: true, count: list.length };
@@ -3523,7 +3856,7 @@ const engine = {
     // the ceilings live apart from the settings a page writes: lowering the cap is free, raising it is a trusted click
     if (s && typeof s === 'object' && 'buyCap' in s) {
       const want = Math.max(0, Number(s.buyCap) || 0);
-      if (want > 0 && want !== buyCap() && (want < buyCap() || await ask({ title: 'Raise the buy cap', danger: true, ok: `Raise to ${want} ${laneUnit()}`, html: `<p>Buys up to <b>${escHtml(want)} ${laneUnit()}</b> per wallet will go out without asking (now: ${escHtml(buyCap())}).</p><p class="dlg-note">A script on the page cannot click this button.</p>` }))) { const l = loadLimits(); saveLimits({ ...l, cap: { ...(l.cap || {}), [laneKey()]: want } }); }
+      if (want > 0 && want !== buyCap() && (want < buyCap() || await ask({ title: 'Raise the buy cap', danger: true, ok: `Raise to ${want} ${laneUnit()}`, html: sub(`Buys up to ${escHtml(want)} ${laneUnit()} per wallet will go out without asking (now ${escHtml(buyCap())}).`) }))) { const l = loadLimits(); saveLimits({ ...l, cap: { ...(l.cap || {}), [laneKey()]: want } }); }
     }
     if (s && typeof s === 'object') { delete s.buyCap; delete s.slipOk; }
     const settings = saveSettings(s); if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } const rebuilt = rebuildClients(); if (rebuilt) { routeCache.clear(); verifyCache.clear(); } return { ok: true, settings, rpcs: rpcUrls, send: broadcastUrls() }; },
@@ -3545,7 +3878,7 @@ const engine = {
     await ready; if (!HOST) throw new Error('adopt runs in the vault frame only');
     // the old in-page vault hands its keys over through the page: same rule as import — shown, then a trusted click
     const fresh = (src?.accounts || []).filter((a) => /^0x[0-9a-fA-F]{64}$/.test(String(a?.key || ''))).map((a) => privateKeyToAccount(a.key).address).filter((ad) => !requireUnlocked().some((x) => same(x.address, ad)));
-    if (fresh.length && !(await ask({ title: 'Move wallets into the isolated vault', ok: `Move ${fresh.length}`, html: `<p>${fresh.length} wallet${fresh.length === 1 ? '' : 's'} from this site's old in-page vault:</p><div class="addr">${fresh.map(escHtml).join('<br>')}</div><p class="dlg-note">Move them only if you recognise them. A script on the page cannot click this button.</p>` }))) throw new Error('Cancelled');
+    if (fresh.length && !(await ask({ title: 'Move wallets into the isolated vault', ok: `Move ${plural(fresh.length, 'wallet')}`, cancelLabel: 'Not now', html: `${sub(`${plural(fresh.length, 'wallet')} from this site's old in-page vault.`)}${addrRows(fresh.map((a, i) => ({ name: `Wallet ${i + 1}`, address: String(a) })), 200)}${muted('Move them only if you recognize them.')}` }))) throw new Error('Cancelled');
     const added = await adoptAccounts({ ...src, seeds: {}, settings: undefined }); return { ok: true, added, ...summary() };
   },
   // The page's Privy wallets, attached for this session: they trade next to the
@@ -3572,8 +3905,8 @@ const engine = {
       if (fresh && !meta.selectedAccountIds.length) meta.selectedAccountIds.push(id);
       changed = true;
     });
-    if (meta.activeAccountId && !list.some((x) => x.id === meta.activeAccountId)) meta.activeAccountId = list.find((a) => !a.hop)?.id || null;
-    meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => list.some((a) => a.id === x));
+    if (meta.activeAccountId && !list.some((x) => x.id === meta.activeAccountId) && !parked.some((x) => x.id === meta.activeAccountId)) meta.activeAccountId = list.find((a) => !a.hop)?.id || null;
+    meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => list.some((a) => a.id === x) || parked.some((a) => a.id === x));
     if (changed) { await persist(); scheduleWatch(50); }
     return { ok: true, ...summary() };
   },
@@ -3626,7 +3959,7 @@ const engine = {
       await gate('withdraw', auth);
       // the login wallet (Privy) is the user's own, but its key is not in this vault: say so instead of "not one of your wallets"
       const login = list.find((x) => x.ext && same(x.address, rcpt));
-      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside the vault', danger: !login, ok: 'Bridge', html: `<p>Bridge from <b>${escHtml(a.name)}</b> to <b>${escHtml(dest)}</b>, landing at</p><p class="addr">${escHtml(rcpt)}</p><p class="dlg-note">${login ? `This is your login wallet <b>${escHtml(login.name)}</b>. It is yours, but its key is held by the login provider, not by this vault — so a bridge there counts as a withdrawal and needs this confirmation.` : 'This address is not one of your wallets.'} A bridge cannot be undone.</p>` });
+      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside your vault', danger: !login, ok: 'Bridge', html: `${sub(`From ${escHtml(a.name)} to ${escHtml(dest)}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted('Check every character. A bridge can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else {
       // between the vault's own wallets: the 'transfer' gate, then a trusted click on the engine's dialog (the page's click cannot count here)
@@ -3635,7 +3968,7 @@ const engine = {
       const from = BRIDGE_CHAINS[origin]?.name || (solOrigin ? 'Solana' : `chain ${origin}`);
       const sym = BRIDGE_CHAINS[origin]?.symbol || (solOrigin ? 'SOL' : '');
       const amt = /^\d{1,40}$/.test(String(quote?.amount || '')) ? formatUnits(BigInt(String(quote.amount)), solOrigin ? 9 : 18) : '?';
-      const ok = await ask({ title: 'Bridge between your wallets', ok: 'Bridge', html: `<p>Bridge <b>${escHtml(amt)} ${escHtml(sym)}</b> from <b>${escHtml(a.name)}</b> on <b>${escHtml(from)}</b> to <b>${escHtml(ownTo.name)}</b> on <b>${escHtml(dest)}</b>, landing at</p><p class="addr">${escHtml(rcpt)}</p><p class="dlg-note">Both are wallets of this vault. A bridge cannot be undone. A script on the page cannot click this button.</p>` });
+      const ok = await ask({ title: 'Bridge between your wallets', ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(from)} to ${escHtml(ownTo.name)} on ${escHtml(dest)}.`)}<div class="dk-list">${addrRow(ownTo.name, rcpt)}</div>${muted('A bridge can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     }
     // Where Relay pays out is fixed by the request id inside the deposit, and the id by the recipient it was quoted
@@ -3663,7 +3996,7 @@ const engine = {
     if (!/^0x[0-9a-fA-F]{40}$/.test(String(to))) throw new Error('Invalid address');
     if (!isOwn(to)) {
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside the vault', danger: true, ok: 'Send', html: `<p>Send <b>${amount === 'max' ? 'the whole balance' : escHtml(amount) + ' ' + c.symbol}</b> on <b>${c.name}</b> from <b>${escHtml(a.name)}</b> to</p><p class="addr">${escHtml(to)}</p>` });
+      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${amount === 'max' ? 'The whole balance' : escHtml(amount) + ' ' + c.symbol} on ${c.name} from ${escHtml(a.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else await gate('transfer', auth);
     return { ok: true, hash: await bridgeSend(a, Number(chainId), to, amount) };
@@ -3707,7 +4040,12 @@ if (HOST) {
       if (path.length > 2 || NO_CALL.has(name) || typeof fn !== 'function' || !Object.prototype.hasOwnProperty.call(holder, name)) throw new Error(`no such vault method: ${m}`);
       const v = await (fn as (...x: unknown[]) => unknown).apply(holder, Array.isArray(a) ? a : []);
       reply({ ok: true, v: v === undefined ? null : v });
-    } catch (err) { reply({ ok: false, e: (err as Error)?.message || String(err) }); }
+    } catch (err) {
+      // the name and the "outcome unknown" flag travel with the message (TransferUnknown, TwoFactorRequired, …): the page and the
+      // app must not have to guess them from the wording
+      const x = err as { message?: string; name?: string; unknown?: boolean; idempotent?: boolean };
+      reply({ ok: false, e: x?.message || String(err), n: typeof x?.name === 'string' ? x.name.slice(0, 40) : '', ...(x?.unknown ? { u: true } : {}), ...(x?.idempotent ? { i: true } : {}) });
+    }
   });
   for (const name of ['trench:balances', 'trench:jobs', 'trench:tx']) document.addEventListener(name, (e) => post({ t: 'ev', name, detail: (e as CustomEvent).detail }));
 } else {
