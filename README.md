@@ -54,6 +54,7 @@ report it (see [SECURITY.md](SECURITY.md)) and tell people.
 | `src/solEngine.ts` | the Solana lane: ed25519 identities, pump.fun / PumpSwap / Meteora DLMM trades, sending through Jito + RPC |
 | `src/nearEngine.ts` | the NEAR lane: NEAR identities, Rhea DCL swaps |
 | `src/bridgeEngine.ts` | balances and sends on other EVM chains for the Relay bridge leg |
+| `src/perpsEngine.ts`, `src/lighter/perpsCore.ts`, `src/lighter/signer.ts`, `src/lighter/wasmExec.js` | perpetuals on Lighter from the vault's own wallets: orders, deposits and withdrawals to the wallet's own address; transactions signed by Lighter's official WebAssembly signer, whose bytes are checked against a pinned sha256 before it runs |
 | `src/evmV4Router.ts`, `src/bnbRouter.ts`, `src/standardRouter.ts` | calldata for the venues the engine is allowed to trade through (Uniswap V4 / Universal Router, PancakeSwap Infinity, four.meme, Flap, standardreserve) |
 | `server/web/vault.html` | the vault frame document: one `<script>` tag, pinned to the engine by Subresource Integrity |
 | `vite.web-engine.config.ts` | the build (`src/webEngine.ts` → one IIFE, `server/web/vendor/engine.js`) |
@@ -132,9 +133,9 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   635464
-sha384  sha384-+6kytkFoUfhomiWsHoQKRkKv1GsEWIfP/pKRU4zkvK66EBaTYPPgii6qmqm8lxPi
-sha256  d3d098d1bee974dec5167fa3c4a06f9359eb7732c0e75a44bf6f3d93b2335fc2
+bytes   712161
+sha384  sha384-TapMv1EgPzruy83h62NvRAkPNoIcS46lgEe1Qrd7RFrXjU5z8Kv90a369UT/dvJ4
+sha256  264cea40bd932ba6eab7026c89708e0c0dbe638e64835b2f8c0106bf338cb05e
 ```
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.

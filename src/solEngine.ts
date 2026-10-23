@@ -1034,6 +1034,43 @@ export async function solTokenTransfer(a: SolAcct, mint: string, to: string, amo
   await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
   return { hash: b58e(sig), units: units.toString(), decimals: dec };
 }
+// ── wrapped SOL back to SOL (2026-10-20: a user held 6 wSOL the site could neither unwrap nor send) ──
+// None of the vault's own trades leaves wSOL behind (PumpSwap and DLMM open, fund and CLOSE the wSOL account in the same
+// transaction; the curve moves lamports). wSOL that came in from elsewhere had no way out but a token send. The way out:
+// one SPL Token CloseAccount (instruction 9) on the wallet's own wSOL associated account — account = ataOf(owner, wSOL),
+// destination = the owner, authority = the owner. A native account closes with any balance: its wSOL and its rent both
+// land as SOL in the same wallet. No amount and no destination can be named: nothing leaves the wallet.
+export const WSOL_UNWRAP_UNITS = 10_000, WSOL_UNWRAP_MICRO = 50_000;
+export const wsolAtaOf = (owner: string) => ataOf(owner, P.wsol, P.token);
+export const wsolUnwrapIxs = (owner: string): Ix[] => [...budget(WSOL_UNWRAP_UNITS, WSOL_UNWRAP_MICRO), closeAcc(wsolAtaOf(owner), owner, owner)];
+export const solUnwrapFee = (): bigint => 5_000n + BigInt(Math.ceil((WSOL_UNWRAP_UNITS * WSOL_UNWRAP_MICRO) / 1e6));
+// the SPL Token account (165 bytes) as read, before it is closed: wSOL mint @0, this owner @32, amount @64, state @108
+// (1 initialized, 2 frozen), is_native COption @109, close_authority COption @129 — none, or the owner itself
+export function wsolAccountCheck(acc: Got, owner: string): { units: bigint; lamports: bigint } {
+  if (acc === undefined) throw new Error(READ_FAIL);
+  if (!acc) throw new Error('This wallet holds no wrapped SOL');
+  const d = acc.data;
+  if (acc.owner !== P.token || d.length < 165 || rdKey(d, 0) !== P.wsol || rdKey(d, 32) !== owner) throw new Error('Not this wallet\'s wrapped-SOL account — nothing was sent');
+  if (d[108] !== 1) throw new Error(d[108] === 2 ? 'This wrapped-SOL account is frozen' : 'Not an open token account — nothing was sent');
+  if (rdU32(d, 109) !== 1) throw new Error('Not a native (wrapped SOL) account — nothing was sent');
+  if (rdU32(d, 129) === 1 && rdKey(d, 133) !== owner) throw new Error('Another address holds the close authority of this wrapped-SOL account — nothing was sent');
+  return { units: rdU64(d, 64), lamports: BigInt(acc.lamports) };
+}
+export async function solUnwrap(a: SolAcct): Promise<{ hash: string; units: string; lamports: string }> {
+  if (!a.key || a.ext) throw new Error('No Solana key for this wallet');
+  const me = solKeys(a.key).address;
+  const [acc, wallet] = await accounts([wsolAtaOf(me), me]);
+  const { units, lamports } = wsolAccountCheck(acc, me);
+  if (wallet === undefined) throw new Error(READ_FAIL);
+  const have = BigInt(wallet?.lamports || 0), fee = solUnwrapFee();
+  const sol7 = (l: bigint) => (Number(l) / 1e9).toFixed(7).replace(/0+$/, '').replace(/\.$/, '');
+  if (have < fee) throw new Error(`Needs ${sol7(fee)} SOL for the network fee — this wallet has ${sol7(have)} SOL`);
+  const { tx, sig } = signMessage(compileLegacy(me, wsolUnwrapIxs(me), await blockhash()), solKeys(a.key).seed);
+  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  return { hash: b58e(sig), units: units.toString(), lamports: lamports.toString() };
+}
+// every wallet's wSOL (the token balance of its wSOL account; 0 when it has none, left out when the read failed)
+export const solWsolBalancesFor = (addrs: string[]) => solTokenBalancesFor(P.wsol, addrs);
 // ── wallet-to-wallet moves (src/moveChains.ts, 2026-10-19) ──
 // The same compute budget as solTransfer / tokenTransferIxs above (1 000 CU · 50 000 µlamports for SOL, 80 000 CU for a
 // token send), so a move costs what a withdrawal costs. Pure builders (tests decode the bytes), plus the reads a move needs.

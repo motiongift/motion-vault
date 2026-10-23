@@ -14,7 +14,7 @@ import { createPublicClient, createWalletClient, defineChain, http, fallback, pa
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
 import { ed25519 } from '@noble/curves/ed25519';
 import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS } from './nearEngine';
-import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
+import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, solUnwrap, solWsolBalancesFor, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
 import {
   bootVault, resetVault, openWith, lostBlobs, unrecovered, webLocker, KEY_LOCK, LOST_PREFIX, type Boot, type KeyStore, type LostBlob,
@@ -33,6 +33,10 @@ import {
 } from './bnbRouter';
 import { readKey, KEY_TEXT, CHAIN_LABEL, type KeyCandidate } from './importKey';
 import { nativeChainOf, nativeSlotOf, nativeAddress, nativeSecret, storableKey, NEAR_NAMED } from './nativeKeys';
+// perps phase 2 (2026-10-22): Lighter on Robinhood Chain — src/perpsEngine.ts, the signer in src/lighter/signer.ts
+import { createPerps, type LtRec, type Pc } from './perpsEngine';
+import { loadSigner, SIGNER, LIGHTER_CHAIN_ID } from './lighter/signer';
+import { l1TextProblem, ltMerge, apiKeySeed, API_KEY_INDEX } from './lighter/perpsCore';
 
 // The page says which chain it is on (chain.js loads first); the same vault
 // keys sign on every EVM chain, so only the endpoints and venues change.
@@ -438,7 +442,9 @@ const EXACT_INPUT_SINGLE_ABI = [{
 // main/index: a trading wallet derived from the account's main wallet (its seed comes from one signature of the main), so it is the same on every device
 // gen 2: a trading wallet derived under this vault's own salt (see subKeyV2) — not reproducible from the main's signature alone
 // kind: how the wallet came in (carried in the account backup so a restore keeps it)
-type Account = { id: string; name: string; address: `0x${string}`; key: `0x${string}`; createdAt: number; archived?: boolean; hop?: boolean; ext?: 'privy'; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported' };
+type Account = { id: string; name: string; address: `0x${string}`; key: `0x${string}`; createdAt: number; archived?: boolean; hop?: boolean; ext?: 'privy'; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; lt?: LtRec };
+// lt (perps phase 2): this wallet's Lighter API key and account (src/perpsEngine.ts) — encrypted at rest with the vault's device AES key like the wallet keys, never
+// in a summary, a message or the account backup (a new device registers a new key; the old one is replaced at slot 77)
 // account: the last profile the server confirmed (vault-client → mainPublished) and which addresses it covers
 // removedAddrs: wallets removed here on a trusted click — a publish does not carry them back into the profile
 // mergedBlobs / recoveryDismissed: set-aside vaults already merged back, and missing wallets the user chose to forget
@@ -486,6 +492,34 @@ const keyAddress = (key: string) => (nativeSlotOf(key) || privateKeyToAccount(ke
 let seeds: Record<string, string> = {};          // main address (lower) → 32-byte seed hex, from one signature of that main
 let storagePersisted = false;
 let storageEstimate: { quota?: number; usage?: number } | null = null;
+// ── keeping this frame's storage across launches (2026-10-20, iPhone home-screen app) ──
+// In an iOS home-screen (standalone) app the vault frame started EMPTY on every launch while the page kept its own
+// storage (the Privy login survived), so every launch ran the restore and asked for its clicks again. On the trusted OK
+// of the account dialogs (AskOpts.keep) the frame asks for storage access — only where document.hasStorageAccess exists
+// and said no — and asks to persist its storage. WebKit grants both only inside a user gesture, so keepStorage() runs
+// synchronously in the click handler, before anything is awaited. Feature-detected; every failure is silent and changes
+// nothing else. The outcome rides in mainStatus / mainAttach / mainSync as `sa` (granted | denied | unasked | na) and
+// `persisted` (true | false | na) for the page's restore diag beacon — flags only.
+type SaDoc = Document & { hasStorageAccess?: () => Promise<boolean>; requestStorageAccess?: () => Promise<void> };
+let storageAccess: 'granted' | 'denied' | 'unasked' | 'na' = 'na';
+const saDoc = (): SaDoc | null => (typeof document !== 'undefined' ? document as SaDoc : null);
+function readStorageAccess() {
+  const d = saDoc();
+  if (!d || typeof d.hasStorageAccess !== 'function') { storageAccess = 'na'; return; }
+  if (storageAccess === 'na') storageAccess = 'unasked';
+  try { d.hasStorageAccess().then((v) => { if (v) storageAccess = 'granted'; else if (storageAccess === 'granted') storageAccess = 'unasked'; }, () => {}); } catch {}
+}
+function keepStorage() {
+  if (!HOST) return;
+  const d = saDoc();
+  try {
+    if (d && typeof d.hasStorageAccess === 'function' && typeof d.requestStorageAccess === 'function' && storageAccess !== 'granted') {
+      d.requestStorageAccess().then(() => { storageAccess = 'granted'; }, () => { storageAccess = 'denied'; });
+    }
+  } catch { storageAccess = 'denied'; }
+  try { navigator.storage?.persist?.().then((v) => { storagePersisted = !!v; }, () => {}); } catch {}
+}
+const storageFlags = () => ({ sa: storageAccess, persisted: typeof navigator !== 'undefined' && typeof navigator.storage?.persist === 'function' ? storagePersisted : 'na' as const });
 let cryptoKey: CryptoKey | null = null;
 let meta: VaultMeta = freshMeta();
 // the stored vault is here but its device key is not (or a different one is): nothing opens, nothing is written
@@ -505,6 +539,10 @@ async function mergeFromDisk() {
   if (!unlocked) return;
   const disk = await decryptStored(); if (!disk) return;
   for (const a of disk.accounts) if (!removedIds.has(a.id) && !unlocked.some((x) => x.id === a.id) && !parked.some((x) => x.id === a.id)) (hereOk(a) ? unlocked : parked).push(a);
+  // a perps key another tab registered (Account.lt): the newer record wins, so a write here never drops it
+  // (M1: on the same time a finished registration, st 'ok', wins over a pending one; the region declaration of either is
+  // kept — ltMerge)
+  for (const a of disk.accounts) { if (!a.lt) continue; const mine = allAccounts().find((x) => x.id === a.id); if (mine && mine !== a) mine.lt = ltMerge(a.lt, mine.lt); }
   for (const id of disk.meta.order) if (!meta.order.includes(id) && allAccounts().some((x) => x.id === id)) meta.order.push(id);
   for (const [m, sd] of Object.entries(disk.seeds || {})) if (!seeds[m]) { seeds[m] = sd; if (disk.meta.mainMv?.[m] === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; }
 }
@@ -591,6 +629,7 @@ const ready: Promise<void> = (async () => {
   await openBoot(b);
   // the browser is asked to keep this origin's storage out of its eviction sweeps, and how much room is left
   try { storagePersisted = !!(await navigator.storage?.persist?.()); } catch {}
+  readStorageAccess();
   checkStorage();
 })();
 // the explicit start-over (a trusted click): the stored vault is copied aside (verified) before an empty one replaces it
@@ -813,11 +852,11 @@ async function sendEth(fromId: string, to: `0x${string}`, amountWei: bigint | 'm
     return (await nearTransfer(a, String(to).toLowerCase(), amountWei === 'max' ? 'max' : Number(amountWei) / 1e18)) as `0x${string}`;
   }
   const { account, client } = walletFor(fromId);
-  const gasPrice = await feeFor(1);
-  let value = amountWei === 'max' ? (await publicClient.getBalance({ address: account.address })) - gasPrice * 21_000n - GAS_RESERVE : amountWei;
+  const gasPrice = await feeFor(1), gas = await syncEthGas(account.address, to);
+  let value = amountWei === 'max' ? (await publicClient.getBalance({ address: account.address })) - gasPrice * gas - GAS_RESERVE : amountWei;
   if (value <= 0n) throw new Error('Nothing to send after gas');
   // through the wallet's send lane: the nonce comes from the shared counter, so a transfer between two trades does not leave the next trade signing a used nonce
-  return signAndSend(client, account, { to, value }, gasPrice, 21_000n);
+  return signAndSend(client, account, { to, value }, gasPrice, gas);
 }
 async function wrap(id: string, amountWei: bigint) { const { account, client } = walletFor(id); const gasPrice = await feeFor(1); const sim = await publicClient.simulateContract({ account, address: WETH, abi: WETH_ABI, functionName: 'deposit', value: amountWei, gasPrice }); return sendCall(client, account, sim.request, gasPrice); }
 async function unwrap(id: string, amountWei: bigint) { const { account, client } = walletFor(id); const gasPrice = await feeFor(1); const sim = await publicClient.simulateContract({ account, address: WETH, abi: WETH_ABI, functionName: 'withdraw', args: [amountWei], gasPrice }); return sendCall(client, account, sim.request, gasPrice); }   // the lane's nonce: an unwrap behind a sell must not poison the next sell's counter
@@ -2494,7 +2533,21 @@ const MOVE_EVM = !SOL_MODE && !NEAR_MODE;
 const moveLanePublic = (k: string) => (k === 'bsc' ? 'bnb' : k);   // the name the app and the site pass as spec.chain
 const JOBS_KEY = 'trenches.jobs.v2.' + MOVE_LANE;
 const RUNNER_LOCK = 'trenches-jobs-runner.v2.' + MOVE_LANE;
-const ETH_GAS = 21_000n, ERC20_GAS = 80_000n, MAX_HOPS = 4;
+let ETH_GAS = 21_000n;
+const ERC20_GAS = 80_000n, MAX_HOPS = 4;
+// A native send's gas on this lane. 21,000 on BNB; more on Robinhood Chain, an Arbitrum chain where the L1 data fee is
+// paid in L2 gas, so a hard 21,000 was refused "The amount of gas (21000) provided for the transaction is too low" on every
+// move between wallets (user report 2026-10-19). Estimated against the node from the sending wallet, 40 % headroom when
+// above 21,000 (the L1 part follows the L1 base fee), refreshed every 2 min; the last value when the node does not answer.
+let ethGasAt = 0;
+async function syncEthGas(from: `0x${string}`, to?: `0x${string}`) {
+  if (Date.now() - ethGasAt < 120_000) return ETH_GAS;
+  try {
+    const g = await publicClient.estimateGas({ account: from, to: to || from, value: 1n });
+    ETH_GAS = g > 21_000n ? (g * 14n) / 10n : 21_000n; ethGasAt = Date.now();
+  } catch { ethGasAt = Date.now() - 90_000; }
+  return ETH_GAS;
+}
 const readJobs = (): Job[] => { try { const all = JSON.parse(localStorage.getItem(JOBS_KEY) || '[]'); return Array.isArray(all) ? all.filter((j: Job) => j && j.chain === MOVE_LANE) : []; } catch { return []; } };
 const jobs: Job[] = readJobs();
 let isRunner = false;
@@ -2559,6 +2612,7 @@ async function planMove(spec: MoveSpec) {
   moveLaneCheck(spec?.chain);
   const list = requireUnlocked();
   const sources = spec.fromIds.map((id) => list.find((a) => a.id === id)).filter(Boolean) as Account[];
+  if (sources[0]) await syncEthGas(sources[0].address);   // the plan's fees and reserves use this lane's real send gas
   const dests = [
     ...(spec.toIds || []).map((id) => list.find((a) => a.id === id)).filter(Boolean).map((a) => ({ address: a!.address, name: a!.name, id: a!.id })),
     ...(spec.toAddresses || []).filter((x) => /^0x[0-9a-fA-F]{40}$/.test(x)).map((x) => ({ address: x as `0x${string}`, name: 'external', id: '' })),
@@ -2717,6 +2771,7 @@ async function sendLeg(job: Job, leg: Leg) {
     leg.nonce = nonce;
     let hash: `0x${string}`;
     if (leg.asset.kind === 'eth') {
+      await syncEthGas(account.address, leg.to as `0x${string}`);
       const bal = await publicClient.getBalance({ address: account.address });
       const value = leg.amount === 'max' ? bal - gasPrice * ETH_GAS : BigInt(leg.amount);
       if (value <= 0n) throw new Error('nothing left after gas');
@@ -2830,7 +2885,7 @@ function copyText(text: string) {
 }
 let dialogsOpen = 0;
 type AskChoice = { id: string; label: string; primary?: boolean; danger?: boolean };
-type AskOpts = { title: string; html: string; ok: string; danger?: boolean; cancel?: boolean; cancelLabel?: string; size?: 'sm' | 'md' | 'lg'; copy?: string; plain?: boolean; foot?: string; choices?: AskChoice[]; validate?: (root: HTMLElement, choice: string) => Promise<string | null> | string | null; stay?: (root: HTMLElement, btn: HTMLButtonElement) => boolean; mount?: (root: HTMLElement) => void };
+type AskOpts = { title: string; html: string; ok: string; danger?: boolean; cancel?: boolean; cancelLabel?: string; size?: 'sm' | 'md' | 'lg'; copy?: string; plain?: boolean; foot?: string; choices?: AskChoice[]; validate?: (root: HTMLElement, choice: string) => Promise<string | null> | string | null; stay?: (root: HTMLElement, btn: HTMLButtonElement) => boolean; mount?: (root: HTMLElement) => void; keep?: boolean };
 function ask(o: AskOpts): Promise<boolean> { return askChoice(o).then((v) => v === 'ok'); }
 // the same dialog with several confirm buttons (the recovery screen): each one is a trusted click on a visible dialog; resolves to its id, or null
 function askChoice(o: AskOpts): Promise<string | null> {
@@ -2843,6 +2898,7 @@ function askChoice(o: AskOpts): Promise<string | null> {
     wrap.innerHTML = `<div class="dlg w-${o.size || 'md'}${o.plain ? ' plain' : ''}${o.choices?.length ? ' multi' : ''}" role="dialog"><div class="dlg-h"><h3>${escHtml(o.title)}<span class="dk-lock" role="img" aria-label="${SEC_LABEL}" title="${SEC_LABEL}">${LOCK_SVG}</span></h3><button class="dlg-x" data-x aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="dlg-b">${o.html}<div class="dlg-err" hidden></div></div><div class="dlg-f">${buttons}${o.cancel === false || !o.cancelLabel || o.cancelLabel === 'Cancel' ? '' : `<button class="dlg-btn" data-no>${escHtml(o.cancelLabel)}</button>`}${o.foot || ''}</div></div>`;
     const dlg = wrap.querySelector('.dlg') as HTMLElement;
     try { o.mount?.(dlg); } catch {}
+    if (o.keep) readStorageAccess();   // known before the click, so the click itself only has to call (no await in the gesture)
     const err = wrap.querySelector('.dlg-err') as HTMLElement;
     let visible = true, io: IntersectionObserver | null = null;
     dialogsOpen += 1; post({ t: 'dialog', open: true });
@@ -2862,6 +2918,8 @@ function askChoice(o: AskOpts): Promise<string | null> {
       if (okBtn) {
         const choice = okBtn.dataset.ok || 'ok';
         if (!e.isTrusted) return;                                   // a synthetic click confirms nothing
+        // an account dialog (keep): ask to keep this frame's storage — synchronously, while the gesture is live (see keepStorage)
+        if (o.keep) keepStorage();
         for (let i = 0; HOST && !visible && i < 8; i += 1) await new Promise((r) => setTimeout(r, 100));   // the observer reports with a delay: give it a reading or two
         if (HOST && !visible) { fail('The vault dialog is covered or off screen — bring it into view and click again.'); return; }
         if (o.validate) { const m = await o.validate(dlg, choice); if (m) { fail(m); return; } }
@@ -2931,7 +2989,8 @@ async function passKey(pass: string, salt: Uint8Array, rounds: number) {
 }
 type BackupFile = { v: 1; kind: 'copytrade-vault-backup' | 'motion-vault-backup'; createdAt: number; chain?: string; addresses: { name: string; address: string }[]; kdf: { name: 'PBKDF2'; hash: 'SHA-256'; rounds: number; salt: string }; iv: string; ct: string };
 async function makeBackup(pass: string): Promise<BackupFile> {
-  requireUnlocked(); const list = allAccounts();
+  // L3: a backup file carries the wallets, never the perps API key (Account.lt): a restored wallet registers a new one
+  requireUnlocked(); const list = allAccounts().map(({ lt: _lt, ...a }) => a);
   const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await passKey(pass, salt, BACKUP_ROUNDS);
   const body = JSON.stringify({ accounts: list, meta, settings: loadSettings(), seeds });
@@ -3484,6 +3543,63 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
 // import() and importDialog() put keys IN (importDialog: typed in this frame's dialog). policy() tells the page which gates are on and that
 // they are enforced here; twofaPolicy() is how the page hands over its Privy
 // access token (to read the server's gates) and its own view, which never wins.
+// ── perps (phase 2): Lighter on Robinhood Chain, from this vault's own wallets (src/perpsEngine.ts) ──
+const perps = createPerps({
+  lane: () => !SOL_MODE && !NEAR_MODE && CFG.key === 'robinhood',
+  wallet: (id) => {
+    const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
+    if (a.ext) throw new Error('Perps trade from your vault wallets — a Privy wallet cannot sign here');
+    if (a.hop || nativeChainOf(a.key) || !/^0x[0-9a-fA-F]{64}$/.test(a.key)) throw new Error('This wallet cannot trade perps');
+    return { id: a.id, name: a.name, address: a.address, lt: a.lt ? { ...a.lt } : undefined };
+  },
+  saveLt: async (id, rec) => { const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet'); if (rec) a.lt = rec; else delete a.lt; await persist(); },
+  // B1: the wallet key signs only a text that PARSES as one of Lighter's two (src/lighter/perpsCore.ts l1TextProblem): a
+  // registration for this wallet's own Lighter account (the one stored with its key, which the engine took from Lighter's
+  // account read of this wallet's address), or a transfer from that account to the pinned withdrawal pool with this
+  // wallet's address in the memo (no pool pinned in this release: every Transfer text is refused)
+  l1Sign: async (id, text, account) => {
+    if (!/^(Register Lighter Account|Transfer)\n\n/.test(text) || !text.endsWith('\nOnly sign this message for a trusted client!') || text.length > 900) throw new Error('Refused: not a Lighter text');
+    const a = requireUnlocked().find((x) => x.id === id); if (!a || a.ext) throw new Error('Unknown wallet');
+    if (!Number.isSafeInteger(account) || a.lt?.a !== account) throw new Error('Refused: not this wallet\'s perps account');
+    const why = l1TextProblem(text, { account, address: a.address, chainId: LIGHTER_CHAIN_ID });
+    if (why) throw new Error('Refused: ' + why);
+    return privateKeyToAccount(a.key).signMessage({ message: text });
+  },
+  // one Lighter API key per wallet, the same on every device (2026-10-22): its seed is HMAC-SHA256(wallet key,
+  // "motion/lighter-api-key/v1" + Lighter chain id + this wallet's own Lighter account + slot 77) — perpsCore apiKeySeed.
+  // The wallet key never leaves this function; the seed only goes to the signer (Lighter's seed → key derivation), never
+  // to the page, a log or a message. Only the vault's own EVM-key wallets (as perps.wallet()).
+  apiKeySeed: async (id, account) => {
+    const a = requireUnlocked().find((x) => x.id === id); if (!a || a.ext || a.hop || nativeChainOf(a.key) || !/^0x[0-9a-fA-F]{64}$/.test(a.key)) throw new Error('This wallet cannot trade perps');
+    if (!Number.isSafeInteger(account) || account < 0) throw new Error('Bad perps account');
+    return apiKeySeed(a.key, LIGHTER_CHAIN_ID, account, API_KEY_INDEX);
+  },
+  idemSeen: (k) => { const rec = idemRead()[k]; return !!rec && Date.now() - Number(rec.at) < IDEM_MS; },
+  sendTx: async (id, tx, gas) => { const { account, client } = walletFor(id); return signAndSend(client, account, tx, await feeFor(1), gas); },
+  gasPrice: () => feeFor(1),
+  receipt: async (hash, ms) => { const r = await landed(hash, ms); return { status: r.status }; },
+  pc: {
+    readContract: (a) => publicClient.readContract(a as never),
+    simulateContract: (a) => publicClient.simulateContract(a as never) as Promise<{ result: unknown }>,
+    estimateGas: (a) => publicClient.estimateGas(a as never),
+    getBalance: (a) => publicClient.getBalance(a),
+  } as Pc,
+  ask: (o) => ask(o),
+  html: { esc: escHtml, sub, muted, addrRow, destBox },
+  once: (opts, what, run) => once(opts, what, run),
+  emit: (detail) => document.dispatchEvent(new CustomEvent('trench:perps', { detail })),
+  fetch: (u, i) => fetch(u, i),
+  // the pinned wasm next to the engine on this frame's own origin (vault.motion.gift; motion.gift in the app's native host)
+  signer: () => loadSigner(async () => {
+    const r = await fetch(new URL('/vendor/' + SIGNER.file, document.baseURI).href, { cache: 'force-cache', credentials: 'omit' });
+    if (!r.ok) throw new Error(`The perps signer did not load (${r.status})`);
+    return r.arrayBuffer();
+  }),
+  now: () => Date.now(),
+  store: { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } },
+  // one perps lane per wallet across this browser's tabs (a second tab waits), else per tab
+  lock: <T,>(key: string, fn: () => Promise<T>) => { const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined; return lk?.request ? lk.request('trench-' + key, () => fn()) as Promise<T> : inLane(key, fn); },
+});
 const engine = {
   version: 2,
   ready,
@@ -3538,9 +3654,24 @@ const engine = {
   // destinations are wallet ids resolved here, never addresses: these two cannot send outside the vault
   distribute: async (fromId: string, toIds: string[], amountEth: number, auth?: Auth) => { const list = requireUnlocked(); { const ext = toIds.map((id) => list.find((x) => x.id === id)).filter((t) => t && !isOwn(t.address)) as Account[]; if (ext.length) { for (const t of ext) await outsideOk(t, `Send <b>${escHtml(amountEth)} ${NATIVE}</b>`, auth); } else await gate('transfer', auth); } const results = []; for (const id of toIds) { const t = list.find((x) => x.id === id); if (!t) continue; try { results.push({ id, address: t.address, ok: true, hash: await sendEth(fromId, t.address, parseEther(String(amountEth))) }); } catch (e) { results.push({ id, address: t.address, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
   consolidate: async (fromIds: string[], toId: string, auth?: Auth) => { const list = requireUnlocked(); const to = list.find((x) => x.id === toId); if (!to) throw new Error('Unknown target'); if (!isOwn(to.address)) await outsideOk(to, `Sweep <b>${fromIds.filter((x) => x !== toId).length}</b> wallet(s)`, auth); else await gate('transfer', auth); const results = []; for (const id of fromIds) { if (id === toId) continue; try { results.push({ id, ok: true, hash: await sendEth(id, to.address, 'max') }); } catch (e) { results.push({ id, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
-  wrap: async (id: string, amountEth: number) => ({ ok: true, hash: await wrap(id, parseEther(String(amountEth))) }),
-  unwrap: async (id: string, amountEth: number) => ({ ok: true, hash: await unwrap(id, parseEther(String(amountEth))) }),
-  wethBalances: async (addresses: string[]) => (NEAR_MODE || SOL_MODE ? Object.fromEntries(addresses.map((a) => [a.toLowerCase(), 0])) : Object.fromEntries(await Promise.all(addresses.map(async (a) => [a.toLowerCase(), Number(formatEther(await publicClient.readContract({ address: WETH, abi: WETH_ABI, functionName: 'balanceOf', args: [a as `0x${string}`] }).catch(() => 0n)))])))),
+  // WETH / WBNB on the EVM frames. The Solana and NEAR frames have no wrap here: this used to fall through to the EVM
+  // client (a SOL-frame wrap() would have wrapped ETH on Robinhood).
+  wrap: async (id: string, amountEth: number) => { if (SOL_MODE || NEAR_MODE) throw new Error(SOL_MODE ? 'Trades on Solana pay in SOL — there is nothing to wrap' : 'Wrapping is not available on NEAR here'); return { ok: true, hash: await wrap(id, parseEther(String(amountEth))) }; },
+  // Solana (2026-10-20): unwrap = close this wallet's own wSOL account (src/solEngine.ts solUnwrap) — all its wSOL plus the
+  // account rent become SOL in the SAME wallet; no amount, no destination. Like the EVM unwrap, no gate and no dialog:
+  // nothing leaves the wallet. A repeat cannot move more (the second close finds no account and fails at preflight).
+  unwrap: async (id: string, amountEth?: number | 'max') => {
+    if (SOL_MODE) {
+      if (amountEth !== undefined && amountEth !== 'max') throw new Error('On Solana the whole wSOL balance unwraps at once — ask for "max"');
+      const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
+      const r = await solUnwrap(a); return { ok: true, hash: r.hash, units: r.units, decimals: 9, lamports: r.lamports };
+    }
+    if (NEAR_MODE) throw new Error('Unwrapping is not available on NEAR here');
+    return { ok: true, hash: await unwrap(id, parseEther(String(amountEth))) };
+  },
+  // the wrapped native per wallet, keyed lower-case like every caller reads it (portfolio.js, move.js, the app): on Solana
+  // the wSOL account's token balance (an address whose read failed is left out, never shown as 0)
+  wethBalances: async (addresses: string[]) => (SOL_MODE ? Object.fromEntries(Object.entries(await solWsolBalancesFor(addresses.map(String))).map(([a, v]) => [a.toLowerCase(), v])) : NEAR_MODE ? Object.fromEntries(addresses.map((a) => [a.toLowerCase(), 0])) : Object.fromEntries(await Promise.all(addresses.map(async (a) => [a.toLowerCase(), Number(formatEther(await publicClient.readContract({ address: WETH, abi: WETH_ABI, functionName: 'balanceOf', args: [a as `0x${string}`] }).catch(() => 0n)))])))),
   onChange: (f: () => void) => listeners.add(f),
   accounts: async () => summary(),
   // A plain-text attestation from one of the vault's wallets (a callout says
@@ -3602,7 +3733,7 @@ const engine = {
     return { ok: true, id, ...summary() };
   },
   // ── main wallet: attach (one signature), sync with the account profile, publish the profile, detach ──
-  mainStatus: async (address: string) => { await ready; const m = lc(address); return { ok: true, attached: !!seeds[m], current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: seeds[m] ? await fingerprint(seeds[m]) : '', mv: mvOf(m), keyMissing: !!keyMissing }; },
+  mainStatus: async (address: string) => { await ready; const m = lc(address); return { ok: true, attached: !!seeds[m], current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: seeds[m] ? await fingerprint(seeds[m]) : '', mv: mvOf(m), keyMissing: !!keyMissing, ...storageFlags() }; },
   // the main is a Privy embedded wallet or the external wallet the user logged in with (MetaMask & co. sign the same text)
   // mv: which fixed text was signed — 1 (copytrade.gg, every older account) or 2 (motion.gift, accounts created since)
   mainAttach: async (src: { address: string; signature: string; expectFp?: string; mv?: number }) => {
@@ -3616,8 +3747,13 @@ const engine = {
     const signer = await recoverMessageAddress({ message: MAIN_MSG(m, mv), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
     if (!same(signer, m)) throw new Error('That signature is not from this main wallet');
     // a main this vault has not worked with yet becomes the parent of every wallet created from now on: a page
-    // script could attach its own (its own signature verifies too) — so the first attach of a main is a trusted click
-    if (!seeds[m] && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
+    // script could attach its own (its own signature verifies too) — so the first attach of a main is a trusted click.
+    // NOT a substitute for this click (reviewed 2026-10-20, iPhone home-screen launches): "the seed opens an entry of the
+    // account backup". The backup reaches this frame through the page, so a page script builds one for ITS OWN main
+    // (buildProfile under its own seed: the entry opens, profile.fp matches) and would attach that main with no click —
+    // and mainProfile(main) then seals every key of this vault under that seed. Same for expectFp and the profile: page
+    // data. An empty frame has no anchor of its own to tell the account's main from a foreign one; only this click does.
+    if (!seeds[m] && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
     const seed = await seedOfSignature(String(src?.signature || ''));
     const fp = await fingerprint(seed);
     // the account's profile names the fingerprint of the seed it was built with: a different signature is refused before anything is kept
@@ -3626,7 +3762,7 @@ const engine = {
     seeds[m] = seed; meta.main = m;
     if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
     await persist();
-    return { ok: true, fp, mv, ...summary() };
+    return { ok: true, fp, mv, ...storageFlags(), ...summary() };
   },
   // ── account recovery v1 (opt-in): seal this main's seed to the account's Privy embedded wallet ──
   // Only on a device where the main is attached (the seed is here), only after a trusted click in this frame: a page that
@@ -3677,15 +3813,15 @@ const engine = {
     // wallets stay where they are, restorable any time. Still the trusted click: the seed this attaches decides where
     // every new wallet comes from.
     if (src?.keepInBackup) {
-      if (!(await ask({ title: 'Use your account here', ok: 'Continue', cancelLabel: 'Not now', html: `${sub(`${list.length ? `Your ${plural(list.length, 'wallet')} stay in your encrypted backup.` : 'Your encrypted backup stays as it is.'} New wallets you create here are added to it.`)}${signedIn(m)}${muted('Restore the others any time from Wallets.')}` }))) throw new Error('Cancelled');
-    } else if (!(await ask({ title: 'Restore your wallets', ok: list.length ? `Restore ${plural(list.length, 'wallet')}` : 'Restore', cancelLabel: 'Not now', html: `${sub(list.length ? `${plural(list.length, 'wallet')} available in your encrypted backup.` : 'Your encrypted backup is ready.')}${signedIn(m)}${list.length ? addrRows(list) : ''}${muted(`Check that you recognize ${recognizeAll(list.length)} before restoring.`)}` }))) throw new Error('Cancelled');
+      if (!(await ask({ title: 'Use your account here', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub(`${list.length ? `Your ${plural(list.length, 'wallet')} stay in your encrypted backup.` : 'Your encrypted backup stays as it is.'} New wallets you create here are added to it.`)}${signedIn(m)}${muted('Restore the others any time from Wallets.')}` }))) throw new Error('Cancelled');
+    } else if (!(await ask({ title: 'Restore your wallets', ok: list.length ? `Restore ${plural(list.length, 'wallet')}` : 'Restore', cancelLabel: 'Not now', keep: true, html: `${sub(list.length ? `${plural(list.length, 'wallet')} available in your encrypted backup.` : 'Your encrypted backup is ready.')}${signedIn(m)}${list.length ? addrRows(list) : ''}${muted(`Check that you recognize ${recognizeAll(list.length)} before restoring.`)}` }))) throw new Error('Cancelled');
     const mv = src?.mv === 2 ? 2 : 1;
     seeds[m] = seed; meta.main = m;
     if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
     // the recovery copy stays the server's: this vault carries whatever the server holds on its next publish (no own copy)
     if (!src?.keepInBackup) preApproved = { main: m, addrs: new Set(o.wallets.map((w) => lc(w.address))), at: Date.now() };
     await persist();
-    return { ok: true, fp: p.fp, mv, ...summary() };
+    return { ok: true, fp: p.fp, mv, ...storageFlags(), ...summary() };
   },
   // Before a new wallet joins while the account backup holds wallets this device has not restored (vault-client.js asks
   // only then): "Restore them first?" — the answer is the page's to act on; nothing changes here. A dialog of the frame
@@ -3738,7 +3874,7 @@ const engine = {
             unwrapped += 1;
           }
         } else if (incoming.length) {
-          const ok = await ask({ title: 'Restore your wallets', ok: `Restore ${plural(incoming.length, 'wallet')}`, cancelLabel: 'Not now', html: `${sub(`${plural(incoming.length, 'wallet')} in your encrypted backup ${incoming.length === 1 ? 'isn\'t' : 'aren\'t'} in this browser yet.`)}${signedIn(m)}${addrRows(incoming)}${muted(`Check that you recognize ${recognizeAll(incoming.length)} before restoring.`)}` });
+          const ok = await ask({ title: 'Restore your wallets', ok: `Restore ${plural(incoming.length, 'wallet')}`, cancelLabel: 'Not now', keep: true, html: `${sub(`${plural(incoming.length, 'wallet')} in your encrypted backup ${incoming.length === 1 ? 'isn\'t' : 'aren\'t'} in this browser yet.`)}${signedIn(m)}${addrRows(incoming)}${muted(`Check that you recognize ${recognizeAll(incoming.length)} before restoring.`)}` });
           if (ok) {
             for (const w of incoming) {
               const slotTaken = w.main && w.index != null && subsOf(w.main).some((a) => a.index === w.index);
@@ -3752,7 +3888,7 @@ const engine = {
     if (derived || unwrapped) meta.changedAt = Date.now();
     await persist();
     pushBackupState();
-    return { ok: true, derived, unwrapped, mismatch, sealed, declined, salts, ...summary() };
+    return { ok: true, derived, unwrapped, mismatch, sealed, declined, salts, ...storageFlags(), ...summary() };
   },
   // What the server keeps for this account: the v1 count and names, the vault salts and every other keyed wallet
   // sealed under the seed key (backup v3), plus whatever the server copy holds that this vault did not write
@@ -3814,7 +3950,7 @@ const engine = {
   remove: async (id: string, auth?: Auth) => { const list = requireUnlocked(); const i = list.findIndex((x) => x.id === id); if (i < 0) throw new Error('Unknown wallet'); if (list[i].ext) throw new Error('Privy wallets belong to your Privy account — log out to detach them');
     // a wallet that still holds anything (native, or a token this frame has seen) is a funds loss when its key goes: the 'remove' gate applies; an empty one only needs the click
     { const addr = lc(list[i].address); const held = (ethCache[addr] || 0) > 0 || Object.values(tokenCache).some((m) => (m[addr] || 0) > 0) || (!SOL_MODE && !NEAR_MODE && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n); if (held) await gate('remove', auth); }
-    if (!(await ask({ title: `Remove ${list[i].name}?`, danger: true, ok: 'Remove wallet', cancelLabel: 'Keep it', html: `${sub('Its key is erased from this browser, and it leaves your encrypted backup.')}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted('Export or back it up first if it holds funds. This can\'t be undone.')}` }))) throw new Error('Cancelled'); if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
+    if (!(await ask({ title: `Remove ${list[i].name}?`, danger: true, ok: 'Remove wallet', cancelLabel: 'Keep it', html: `${sub('Its key is erased from this browser, and it leaves your encrypted backup.')}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted('Export or back it up first if it holds funds. This can\'t be undone.')}` }))) throw new Error('Cancelled'); if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); perps.forget(list[i].lt?.a).catch(() => {}); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
   setActive: async (id: string) => { requireUnlocked(); meta.activeAccountId = id; await persist(); return { ok: true, ...summary() }; },
   setSelected: async (ids: string[]) => { const list = requireUnlocked(); meta.selectedAccountIds = [...ids.filter((id) => list.some((a) => a.id === id)), ...meta.selectedAccountIds.filter((id) => parked.some((a) => a.id === id))]; await persist(); return { ok: true, ...summary() }; },
   // the key is shown in the engine's own dialog and never returned to the caller
@@ -3910,6 +4046,8 @@ const engine = {
     if (changed) { await persist(); scheduleWatch(50); }
     return { ok: true, ...summary() };
   },
+  // perps phase 2: perps.<method>({ … }) — one object each, shapes checked in src/lighter/perpsCore.ts (args)
+  perps: { status: perps.status, quote: perps.quote, open: perps.open, close: perps.close, cancel: perps.cancel, cancelAll: perps.cancelAll, deposit: perps.deposit, withdrawQuote: perps.withdrawQuote, withdraw: perps.withdraw, claim: perps.claim, history: perps.history, setup: perps.setup, leverage: perps.leverage, margin: perps.margin, trigger: perps.trigger },
   buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => trade('buy', token, amount, accountIds, hint, opts),
   sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => trade('sell', token, percent, accountIds, hint, opts),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
@@ -4034,7 +4172,7 @@ if (HOST) {
     try {
       await ready;
       const path = String(m || '').split('.');
-      const holder = (path.length === 2 && path[0] === 'move' ? engine.move : engine) as unknown as Record<string, unknown>;
+      const holder = (path.length === 2 && path[0] === 'move' ? engine.move : path.length === 2 && path[0] === 'perps' ? engine.perps : engine) as unknown as Record<string, unknown>;
       const name = path[path.length - 1];
       const fn = holder[name];
       if (path.length > 2 || NO_CALL.has(name) || typeof fn !== 'function' || !Object.prototype.hasOwnProperty.call(holder, name)) throw new Error(`no such vault method: ${m}`);
@@ -4047,7 +4185,7 @@ if (HOST) {
       reply({ ok: false, e: x?.message || String(err), n: typeof x?.name === 'string' ? x.name.slice(0, 40) : '', ...(x?.unknown ? { u: true } : {}), ...(x?.idempotent ? { i: true } : {}) });
     }
   });
-  for (const name of ['trench:balances', 'trench:jobs', 'trench:tx']) document.addEventListener(name, (e) => post({ t: 'ev', name, detail: (e as CustomEvent).detail }));
+  for (const name of ['trench:balances', 'trench:jobs', 'trench:tx', 'trench:perps']) document.addEventListener(name, (e) => post({ t: 'ev', name, detail: (e as CustomEvent).detail }));
 } else {
   // Inline in a page (the same-origin fallback and the self-test): the engine
   // never sits on window. bridge.js takes it exactly once; a script that merely
