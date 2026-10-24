@@ -95,12 +95,23 @@ async function rpcAt(url: string, method: string, params: unknown, ms = 20000): 
 // A 429 / rate limit is one too (it used to end a read on the first node). Only a standalone 5xx code counts:
 // NEAR errors carry long yocto amounts and `5\d\d` alone matched inside them.
 const transient = (m: string) => /timeout|timed out|fetch|network|aborted|Unexpected token|\b5\d\d\b|\b429\b|rate.?limit|too many requests/i.test(m);
-export async function nearRpc(method: string, params: unknown): Promise<any> {
+// F-38/F-10 V12: an optional validator runs on a node's result inside the loop. If it returns a message the
+// result is malformed for this call (a bad or forged shape, not a verdict): that node is skipped like a transient
+// failure and the next one is tried, instead of the bad result being returned to the caller.
+export async function nearRpc(method: string, params: unknown, validate?: (r: any) => string | void): Promise<any> {
   let last: unknown;
-  for (let i = 0; i < NEAR_RPCS.length; i += 1) {
-    const url = NEAR_RPCS[(rpcIdx + i) % NEAR_RPCS.length];
-    try { return await rpcAt(url, method, params); }
-    catch (e) { last = e; const m = String((e as Error).message || ''); if (!transient(m)) throw e; rpcIdx = (rpcIdx + 1) % NEAR_RPCS.length; }
+  // F-39 V12: snapshot the start index so the loop counter `i` advances independently of the rotation pointer.
+  // Before, mutating rpcIdx inside the index expression skipped a node (with two defaults the second was never tried).
+  const n = NEAR_RPCS.length, s = rpcIdx;
+  for (let i = 0; i < n; i += 1) {
+    const url = NEAR_RPCS[(s + i) % n];
+    try {
+      const r = await rpcAt(url, method, params);
+      const bad = validate ? validate(r) : undefined;
+      if (bad) { last = new Error(bad); rpcIdx = (s + i + 1) % n; continue; }
+      return r;
+    }
+    catch (e) { last = e; const m = String((e as Error).message || ''); if (!transient(m)) throw e; rpcIdx = (s + i + 1) % n; }
   }
   throw last as Error;
 }
@@ -135,8 +146,19 @@ export async function nearTokenMeta(token: string) {
 // used (the key imported elsewhere) comes back as InvalidNonce and is re-read once.
 const ACCESS_TTL = 5 * 60_000;
 const accessCache = new Map<string, { nonce: bigint; blockHash: Uint8Array; at: number }>();
+// F-10 V12: before an access key is cached and used to sign, its shape must be sound — a decimal nonce (≤20
+// digits, a u64), a 32-byte block hash, and FullAccess permission. A node that answers with anything else is
+// treated as a failed endpoint (nearRpc tries the next). A genuine "no such key/account" error is left to flow
+// through unchanged (r.error / rpcAt), so the caller's InvalidNonce / missing-account handling still fires.
+export function validAccessKey(r: any): string | void {
+  if (!r || typeof r !== 'object' || r.error) return;
+  if (!/^\d{1,20}$/.test(String(r.nonce))) return 'access key: bad nonce shape';
+  if (r.permission !== 'FullAccess') return 'access key: not a full-access key';
+  let bh: Uint8Array; try { bh = b58decode(String(r.block_hash)); } catch { return 'access key: bad block_hash'; }
+  if (bh.length !== 32) return 'access key: block_hash is not 32 bytes';
+}
 async function accessKey(accountId: string, pubB58: string) {
-  const r = await nearRpc('query', { request_type: 'view_access_key', finality: 'final', account_id: accountId, public_key: pubB58 });
+  const r = await nearRpc('query', { request_type: 'view_access_key', finality: 'final', account_id: accountId, public_key: pubB58 }, validAccessKey);
   if (r.error) throw new Error(String(r.error));
   return { nonce: BigInt(r.nonce), blockHash: b58decode(r.block_hash) };
 }
@@ -161,8 +183,10 @@ const txHashOf = (tx: Uint8Array) => b58encode(sha256(tx));
 // Did a hash reach the chain? Only a definite "doesn't exist" says no; anything unclear counts as yes,
 // so a transaction is never signed again with a new nonce while the first one may still land.
 async function knownOnChain(hash: string, sender: string) {
-  try { await nearRpc('tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'NONE' }); return true; }
-  catch (e) { return !/doesn't exist|does not exist|UNKNOWN_TRANSACTION/i.test(String((e as Error).message)); }
+  // F-64 V12: a single node's "doesn't exist" is not a verdict — the tx is treated as dropped only when EVERY node
+  // agrees it is missing (nearTxState aggregates them). Any other state (pending / unknown / known) counts as still
+  // possibly on chain, so a transaction is never re-signed with a new nonce while the first one may still land.
+  return (await nearTxState(hash, sender)).state !== 'missing';
 }
 // rejects only when every copy failed, with the first error carrying all of them (`.all`)
 const firstOk = <T>(list: Promise<T>[]) => new Promise<T>((resolve, reject) => { let left = list.length; const errs: unknown[] = []; for (const p of list) p.then(resolve, (e) => { errs.push(e); if (--left === 0) { const e0 = errs[0] as { all?: unknown[] }; if (e0 && typeof e0 === 'object') e0.all = errs; reject(errs[0]); } }); });
@@ -177,9 +201,30 @@ const msgOf = (e: unknown) => String((e as Error)?.message || e || '');
 // wait 'EXECUTED_OPTIMISTIC' (transfers, unwraps): as before, the call returns the full outcome.
 const sendQueue = new Map<string, Promise<unknown>>();
 type SendWait = 'INCLUDED' | 'EXECUTED_OPTIMISTIC';
+// F-17 V12: a NEAR send whose response was lost (transient / TIMEOUT_ERROR) may still have executed. The wallet is
+// held by account id until a node settles the hash: webEngine's once() detects a NearSendUnknown and keeps the job
+// "sending" rather than "failed", so the user never re-presses and signs a second transfer of the same funds.
+export class NearSendUnknown extends Error { hash = ''; }
+const nearHold = new Map<string, { hash: string; nonce: bigint | null }>();
+// refuse any outflow from a held account until the prior unknown send settles: nearTxState shows it succeeded or
+// failed, or the key's on-chain nonce has reached ours (so the signed bytes can no longer land) while it is not
+// already success. Only then is the wallet free; otherwise the send is refused and the reason said.
+async function nearHoldGate(a: NearAcct, accountId: string): Promise<void> {
+  const held = nearHold.get(accountId);
+  if (!held) return;
+  const st = await nearTxState(held.hash, accountId);
+  if (st.state === 'success' || st.state === 'failed') { nearHold.delete(accountId); return; }
+  // the key's on-chain nonce has reached ours: the signed bytes carry a nonce that can no longer land (success was
+  // already handled above), so the prior send is terminal and the wallet is freed
+  const n = await nearKeyNonce(a);
+  if (n != null && held.nonce != null && n >= held.nonce) { nearHold.delete(accountId); return; }
+  throw new Error(`Your previous NEAR send from this wallet (${held.hash.slice(0, 8)}…) has an unknown status and may still land — wait until it settles before sending again`);
+}
 export async function nearSend(a: NearAcct, receiverId: string, actions: Action[], opts: { wait?: SendWait } = {}): Promise<{ hash: string; outcome: any; pending?: boolean }> {
   if (!a.key || a.ext) throw new Error('This wallet cannot sign NEAR (Privy wallets are EVM only)');
   const k = nearKeys(a.key); const pubB58 = nearPublicKey(a.key);
+  // F-17 V12: hold the wallet while a prior send from it is unknown (covers trades, transfers and unwraps)
+  await nearHoldGate(a, k.accountId);
   const wait: SendWait = opts.wait || 'EXECUTED_OPTIMISTIC';
   let lastHash = '';
   const send = async (fresh: boolean): Promise<{ hash: string; res: any; pending?: boolean }> => {
@@ -202,8 +247,19 @@ export async function nearSend(a: NearAcct, receiverId: string, actions: Action[
         accessCache.delete(k.accountId); throw e;
       }
     }
-    try { return { hash, res: await nearRpc('send_tx', { signed_tx_base64: b64(signed), wait_until: 'EXECUTED_OPTIMISTIC' }) }; }
-    catch (e) { const m = String((e as Error).message); if (/method not found|-32601/i.test(m)) return { hash, res: await nearRpc('broadcast_tx_commit', [b64(signed)]) }; accessCache.delete(k.accountId); throw e; }
+    const broadcastOpt = async () => {
+      try { return await nearRpc('send_tx', { signed_tx_base64: b64(signed), wait_until: 'EXECUTED_OPTIMISTIC' }); }
+      catch (e) { if (/method not found|-32601/i.test(String((e as Error).message))) return await nearRpc('broadcast_tx_commit', [b64(signed)]); throw e; }
+    };
+    try { return { hash, res: await broadcastOpt() }; }
+    catch (e) {
+      const m = String((e as Error).message);
+      // F-17 V12: a transient / TIMEOUT_ERROR here is not a verdict — the transaction may well have executed but the
+      // response was lost. Return pending and KEEP the access-key cache: deleting it would re-read a nonce and let a
+      // retry sign a SECOND transfer of the same funds. The caller holds the wallet until a node settles the hash.
+      if (transient(m) || /TIMEOUT_ERROR/i.test(m)) return { hash, res: null, pending: true };
+      accessCache.delete(k.accountId); throw e;
+    }
   };
   const run = async () => {
     try { return await send(false); }
@@ -250,12 +306,21 @@ export const nearTransient = (m: string) => transient(m);
 // what the chain says about one hash: executed (success / failed), known but not executed yet, unknown to EVERY node, or no answer
 export async function nearTxState(hash: string, sender: string): Promise<{ state: 'success' | 'failed' | 'pending' | 'missing' | 'unknown'; error?: string }> {
   const got = await Promise.allSettled(NEAR_RPCS.map((u) => rpcAt(u, 'tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'NONE' }, 8000)));
-  let missing = 0, known = false;
+  // F-64 V12: collect every node's verdict instead of trusting the first. A success from any node wins — it landed;
+  // a Failure counts only when NO node contradicts it with a success (a lone forged/partial Failure must not release
+  // the hold and let the same funds be sent again). Each node's result must be THIS transaction (executed checks the
+  // outcome id against the hash) before it is read as a verdict at all.
+  let missing = 0, known = false, success = false, failure = '';
   for (const g of got) {
-    if (g.status === 'fulfilled') { if (executed(g.value)) { const f = failureOf(g.value); return f ? { state: 'failed', error: f } : { state: 'success' }; } known = true; continue; }
+    if (g.status === 'fulfilled') {
+      if (executed(g.value, hash)) { const f = failureOf(g.value); if (f) failure ||= f; else success = true; } else known = true;
+      continue;
+    }
     const m = String((g.reason as Error)?.message || '');
     if (/doesn't exist|does not exist|UNKNOWN_TRANSACTION/i.test(m)) missing += 1; else if (!transient(m)) known = true;
   }
+  if (success) return { state: 'success' };
+  if (failure) return { state: 'failed', error: failure };
   return known ? { state: 'pending' } : missing === got.length && got.length > 0 ? { state: 'missing' } : { state: 'unknown' };
 }
 // the access key's nonce on chain (final): a transaction whose nonce is at or below it can no longer land
@@ -278,7 +343,13 @@ const usedOf = (outcome: any): bigint | null => { try { const sv = outcome?.stat
 type Verdict = { status: 'success' | 'reverted'; error?: string; outcome: any };
 const verdicts = new Map<string, Verdict & { at: number }>();
 const watching = new Map<string, Promise<void>>();
-const executed = (r: any) => !!r?.status && (!r.final_execution_status || /EXECUTED|FINAL/.test(String(r.final_execution_status)));
+// F-64 V12: a status object is a final verdict only when it carries EXACTLY ONE of SuccessValue / SuccessReceiptId /
+// Failure — a node still assembling the outcome answers with none (or an interim shape), which is not executed.
+const finalStatus = (s: any): boolean => !!s && typeof s === 'object' && ['SuccessValue', 'SuccessReceiptId', 'Failure'].filter((key) => key in s).length === 1;
+// executed only when the result is THIS transaction (its transaction_outcome.id equals the hash we asked about — a
+// node must not answer one hash with another's receipt), its status is a single final verdict, and (when present)
+// the final_execution_status says EXECUTED / FINAL. Otherwise it is still pending, not a verdict.
+const executed = (r: any, expectHash?: string) => finalStatus(r?.status) && (!expectHash || r?.transaction_outcome?.id === expectHash) && (!r?.final_execution_status || /EXECUTED|FINAL/.test(String(r.final_execution_status)));
 function watchTx(hash: string, sender: string, judge: (outcome: any) => Verdict) {
   if (!hash || watching.has(hash) || verdicts.has(hash)) return;
   const t0 = Date.now(); let seenMissing = false, answered = false;
@@ -286,7 +357,7 @@ function watchTx(hash: string, sender: string, judge: (outcome: any) => Verdict)
     while (Date.now() - t0 < 90_000) {
       try {
         const r = await nearRpc('tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'EXECUTED_OPTIMISTIC' });
-        if (executed(r)) { verdicts.set(hash, { ...judge(r), at: Date.now() }); return; }
+        if (executed(r, hash)) { verdicts.set(hash, { ...judge(r), at: Date.now() }); return; }
         answered = true;   // the chain knows it (in a block, receipts still running)
         await new Promise((ok) => setTimeout(ok, 600));
       } catch (e) {
@@ -297,8 +368,11 @@ function watchTx(hash: string, sender: string, judge: (outcome: any) => Verdict)
       }
     }
     // only the chain saying "no such transaction" for 90 s is a verdict; a watcher that never got an answer (offline,
-    // every node down) leaves the trade unknown — pending to the page, never "failed", so nothing is bought twice
-    if (seenMissing && !answered) verdicts.set(hash, { status: 'reverted', error: 'Not seen on chain within 90 s — the network dropped it', outcome: null, at: Date.now() });
+    // every node down) leaves the trade unknown — pending to the page, never "failed", so nothing is bought twice.
+    // F-64 V12: confirm with ALL nodes before calling it dropped — the single-node poll above seeing "missing" is not
+    // enough; only when every node agrees 'missing' is the transaction truly gone (any other state stays pending).
+    if (seenMissing && !answered && (await nearTxState(hash, sender).catch(() => ({ state: 'unknown' as const }))).state === 'missing')
+      verdicts.set(hash, { status: 'reverted', error: 'Not seen on chain within 90 s — the network dropped it', outcome: null, at: Date.now() });
   })();
   watching.set(hash, p); p.catch(() => {}).finally(() => watching.delete(hash));
   for (const [x, v] of verdicts) if (Date.now() - v.at > 30 * 60_000) verdicts.delete(x);
@@ -306,7 +380,6 @@ function watchTx(hash: string, sender: string, judge: (outcome: any) => Verdict)
 
 // ── the route: what the factory says the coin is ──
 const routeCache = new Map<string, { r: NearRoute; at: number }>();
-const bridgeOk = (id: string, quote: string) => { const p = String(id).split('|'); return p.length === 3 && p.includes(NEAR.wnear) && p.includes(quote) && /^\d+$/.test(p[2]); };
 // the NEAR → quote pool that actually fills: four fee tiers may exist with
 // nothing in them (RHEA's DCL pools are empty; its market is a classic pool), so
 // the pick is by what 0.1 NEAR buys, not by existence
@@ -322,7 +395,9 @@ async function findBridgePool(quote: string) {
 export async function nearRoute(token: string, hint?: any): Promise<NearRoute> {
   const t = String(token || '').toLowerCase(); if (!NEAR_ACCT.test(t)) throw new Error('Invalid NEAR token account');
   const live = { price: Number(hint?.price) || 0, nearUsd: Number(hint?.nearUsd) || 0 };
-  const c = routeCache.get(t); if (c && Date.now() - c.at < 10 * 60000) return { ...c.r, ...(live.price ? live : {}) };
+  // F-21 V12: route cache cut from 10 min to 60 s — the bridge pool and the launch state are re-read before signing.
+  const c = routeCache.get(t); if (c && Date.now() - c.at < 60_000) return { ...c.r, ...(live.price ? live : {}) };
+  const startedAt = Date.now();
   // the page's hint is a hint; the receivers of a signed call come from the factory's own record
   const l = await nearView<any>(NEAR.factory, 'get_launch_by_token', { token: t });
   if (!l?.pool_id) throw new Error('Not a nearly.trade coin');
@@ -331,9 +406,14 @@ export async function nearRoute(token: string, hint?: any): Promise<NearRoute> {
   const [qm, tm] = await Promise.all([nearTokenMeta(quote), nearTokenMeta(t)]);
   let bridgePool: string | null = null;
   // a coin priced in something else than NEAR: buys go NEAR → quote → coin when Rhea has that first leg; without it buys need the quote itself and sells pay out in it
-  if (quote !== NEAR.wnear) bridgePool = typeof hint?.bridgePool === 'string' && bridgeOk(hint.bridgePool, quote) ? hint.bridgePool : await findBridgePool(quote);
+  // F-21 V12: the NEAR→quote bridge pool is always discovered on chain (findBridgePool) and never taken from the
+  // page hint — a compromised page must not choose a leg of a signed swap.
+  if (quote !== NEAR.wnear) bridgePool = await findBridgePool(quote);
   const r: NearRoute = { token: t, pool: String(l.pool_id), quote, quoteDecimals: qm.decimals, decimals: tm.decimals, bridgePool, symbol: String(l.symbol || tm.symbol), quoteSymbol: qm.symbol, ...live };
-  routeCache.set(t, { r, at: Date.now() });
+  // F-21 V12: a slow lookup that started earlier must not overwrite a fresher route written by a later one —
+  // `at` holds when this read began, and we only write if no newer entry is already cached.
+  const cur = routeCache.get(t);
+  if (!cur || cur.at < startedAt) routeCache.set(t, { r, at: startedAt });
   return r;
 }
 // the wallets of one click ask for the same quote in the same tick: one view call answers them all
@@ -369,7 +449,10 @@ const register = (a: NearAcct, token: string, me: string, deposit: bigint): Acti
 // a refund the watcher could not unwrap (the tab closed first) is still wNEAR in the wallet, invisible in the NEAR
 // balance: the first trade of a session on that wallet turns it back into NEAR (same receiver and method as above)
 const swept = new Set<string>();
-const sweepOnce = (a: NearAcct, me: string) => { if (swept.has(me)) return; swept.add(me); unwrapLeftover(a, me).catch(() => {}); };
+// F-11 V12: the wallet is marked swept optimistically to keep one sweep per session, but if the sweep fails
+// (including a failed balance read, which now throws) the mark is dropped so the next trade retries — leftover
+// wNEAR is never silently stranded.
+const sweepOnce = (a: NearAcct, me: string) => { if (swept.has(me)) return; swept.add(me); unwrapLeftover(a, me).catch(() => swept.delete(me)); };
 
 // ── trades ──
 export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRoute, size: number, slippage: number): Promise<{ hash: string }> {
@@ -386,7 +469,9 @@ export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRou
     if (size > spendable) throw new Error(`Not enough NEAR: ${spendable.toFixed(3)} spendable after storage and gas`);
     let minOut: bigint;
     if (q != null) minOut = (q * (10000n - slip)) / 10000n;
-    else { if (!(r.price > 0 && r.nearUsd > 0)) throw new Error('No quote from Rhea'); const exp = ((size * r.nearUsd) / r.price) * 0.99; minOut = BigInt(Math.floor(exp * (1 - Number(slip) / 10000) * 10 ** r.decimals)); }
+    // F-21 V12: no page-price fallback for the signed minimum — if Rhea gives no live DCL quote, refuse rather than
+    // trust hint.price/nearUsd (a compromised page could set a minOut that makes a bad fill look acceptable).
+    else throw new Error('No quote from Rhea');
     // the coin must know the wallet before the pool can hand it tokens (separate receiver → its own tx);
     // it goes first in this wallet's send queue and the swap follows once it is in a block: the swap's
     // payout runs ~3 blocks after that, by then the registration has executed
@@ -416,7 +501,8 @@ export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRou
   const q = await dclQuote(pools, r.token, outToken, amount);
   let minOut: bigint;
   if (q != null) minOut = (q * (10000n - slip)) / 10000n;
-  else { if (!toNear || !(r.price > 0 && r.nearUsd > 0)) throw new Error('No quote from Rhea'); const expNear = ((Number(amount) / 10 ** r.decimals) * r.price / r.nearUsd) * 0.99; minOut = nearToYocto(expNear * (1 - Number(slip) / 10000)); }
+  // F-21 V12: no page-price fallback for the signed minimum — refuse the sell if Rhea gives no live DCL quote.
+  else throw new Error('No quote from Rhea');
   // the payout account registration rides ahead of the swap in the same send queue; no block wait in between
   if (regOut) nearSend(a, outToken, [register(a, outToken, me, regOut)], { wait: 'INCLUDED' }).catch(() => {});
   const swap = toNear ? { pool_ids: pools, output_token: outToken, min_output_amount: minOut.toString(), skip_unwrap_near: false } : { pool_ids: pools, output_token: outToken, min_output_amount: minOut.toString(), swap_out_recipient: me };
@@ -431,7 +517,9 @@ export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRou
 }
 // wNEAR sitting in the wallet (a refused swap, an exchange that paid in wrapped) is turned back into NEAR
 export async function unwrapLeftover(a: NearAcct, me: string) {
-  const bal = BigInt(await nearView<string>(NEAR.wnear, 'ft_balance_of', { account_id: me }).catch(() => '0'));
+  // F-11 V12: a failed balance read must throw (not resolve 0) so sweepOnce's catch un-marks the wallet and the
+  // leftover is retried, instead of a transient read error being mistaken for "nothing to sweep".
+  const bal = BigInt(await nearView<string>(NEAR.wnear, 'ft_balance_of', { account_id: me }));
   if (bal <= 10n ** 20n) return;   // dust under 0.0001
   // in a block is enough: nothing reads its outcome, and a full wait here would hold this wallet's next trade in the queue
   await nearSend(a, NEAR.wnear, [{ fn: { method: 'near_withdraw', args: { amount: bal.toString() }, gas: 10n * TGAS, deposit: 1n } }], { wait: 'INCLUDED' });
@@ -476,7 +564,11 @@ export async function nearTransfer(a: NearAcct, to: string, amountNear: number |
   if (amount <= 0n) throw new Error('Nothing to send');
   // a named account must exist; an implicit (64-hex) account is created by the transfer itself
   if (!/^[0-9a-f]{64}$/.test(to) && !(await nearAccountState(to))) throw new Error(`Account ${to} does not exist on NEAR`);
-  const { hash, outcome } = await nearSend(a, to, [{ transfer: amount }]);
+  const { hash, outcome, pending } = await nearSend(a, to, [{ transfer: amount }]);
+  // F-17 V12: the send's response was lost — it may still land. Hold this wallet (by the nonce the signed bytes
+  // carry, read back from the cache nearSend kept) and throw a NearSendUnknown so webEngine's once() keeps the job
+  // "sending", never "failed": the user must not re-press and send the same NEAR a second time.
+  if (pending) { nearHold.set(me, { hash, nonce: accessCache.get(me)?.nonce ?? null }); const err = new NearSendUnknown('Your NEAR transfer went out but no node confirmed it — it may still land; wait before sending again'); err.hash = hash; throw err; }
   const f = failureOf(outcome); if (f) throw new Error(f);
   return hash;
 }
@@ -488,7 +580,7 @@ export async function nearReceipt(hash: string) {
   if (watching.has(hash)) return { ok: true, pending: true };
   const sender = txSender.get(hash); if (!sender) return { ok: true, pending: true };
   const r = await nearRpc('tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'NONE' }).catch(() => null);
-  if (!executed(r)) return { ok: true, pending: true };
+  if (!executed(r, hash)) return { ok: true, pending: true };
   const f = failureOf(r) || (usedOf(r) === 0n ? 'Swap did not fill' : '');
   return { ok: true, pending: false, status: f ? 'reverted' : 'success', ...(f ? { error: f } : {}), block: 0, gasUsed: Number(r.transaction_outcome?.outcome?.gas_burnt || 0), feeEth: yoctoToNear(burntOf(r)) };
 }

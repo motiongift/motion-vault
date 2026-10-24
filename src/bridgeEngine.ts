@@ -9,8 +9,19 @@
 // to the same contract, the calldata names this wallet as depositor, and the
 // value is exactly the amount the user typed — a tampered page cannot redirect
 // funds anywhere but Relay.
-import { createPublicClient, createWalletClient, defineChain, http, fallback, formatEther, parseEther } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, http, fallback, formatEther, parseEther, serializeTransaction } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+
+// F-44 (V12): OP-stack chains charge an L1 data fee ON TOP of the L2 gas (gas × maxFeePerGas), billed at execution and
+// not reflected in the gas estimate. A "max" transfer that reserves only L2 gas leaves too little and the tx fails.
+// The GasPriceOracle predeploy quotes that L1 fee for a given serialized tx; on non-OP chains the call reverts → 0.
+const OP_STACK = new Set([10, 8453]);   // Optimism, Base (Arbitrum/Robinhood fold the L1 cost into the inflated gas estimate)
+const L1_GAS_ORACLE = '0x420000000000000000000000000000000000000F' as const;
+const L1_FEE_ABI = [{ type: 'function', name: 'getL1Fee', stateMutability: 'view', inputs: [{ name: '_data', type: 'bytes' }], outputs: [{ name: '', type: 'uint256' }] }] as const;
+async function opL1Fee(pc: ReturnType<typeof createPublicClient>, chainId: number, serialized: `0x${string}`): Promise<bigint> {
+  if (!OP_STACK.has(chainId)) return 0n;
+  try { return await pc.readContract({ address: L1_GAS_ORACLE, abi: L1_FEE_ABI, functionName: 'getL1Fee', args: [serialized] }) as bigint; } catch { return 0n; }
+}
 
 export const BRIDGE_CHAINS: Record<number, { id: number; key: string; name: string; symbol: string; rpcs: string[]; explorer: string }> = {
   1: { id: 1, key: 'ethereum', name: 'Ethereum', symbol: 'ETH', rpcs: ['https://ethereum-rpc.publicnode.com'], explorer: 'https://etherscan.io' },
@@ -44,7 +55,8 @@ export function publicFor(chainId: number) {
 }
 export async function bridgeBalances(chainId: number, addresses: string[]): Promise<Record<string, number>> {
   const pc = publicFor(chainId); const out: Record<string, number> = {};
-  await Promise.all([...new Set(addresses.map((a) => a.toLowerCase()))].map(async (a) => { try { out[a] = Number(formatEther(await pc.getBalance({ address: a as `0x${string}` }))); } catch { out[a] = 0; } }));
+  // F-29 (V12): a failed read is OMITTED, never reported as 0 — a rate-limited node must not make a funded wallet look empty.
+  await Promise.all([...new Set(addresses.map((a) => a.toLowerCase()))].map(async (a) => { try { out[a] = Number(formatEther(await pc.getBalance({ address: a as `0x${string}` }))); } catch { /* omit */ } }));
   return out;
 }
 
@@ -91,8 +103,21 @@ export async function bridgeSend(a: Acct, chainId: number, to: string, amount: n
   const fees = await pc.estimateFeesPerGas();
   const gas = 21_000n; const gasCost = gas * (fees.maxFeePerGas || 0n);
   let value: bigint;
-  if (amount === 'max') { const bal = await pc.getBalance({ address: account.address }); value = bal - gasCost - gasCost / 5n; if (value <= 0n) throw new Error('Nothing to send after gas'); }
-  else value = parseEther(String(amount));
+  if (amount === 'max') {
+    const bal = await pc.getBalance({ address: account.address });
+    // F-44 (V12): reserve the L2 gas (+20%) AND the OP-stack L1 data fee (+20%), so "max" keeps enough for both
+    let l1 = 0n;
+    if (OP_STACK.has(chainId)) {
+      try {
+        const nonce = await pc.getTransactionCount({ address: account.address });
+        const sample = serializeTransaction({ chainId, nonce, to: to as `0x${string}`, value: bal, gas, maxFeePerGas: fees.maxFeePerGas || 0n, maxPriorityFeePerGas: fees.maxPriorityFeePerGas || 0n });
+        l1 = await opL1Fee(pc, chainId, sample);
+      } catch { l1 = 0n; }
+    }
+    value = bal - gasCost - gasCost / 5n - l1 - l1 / 5n;
+    if (value <= 0n) throw new Error('Nothing to send after gas');
+  } else value = parseEther(String(amount));
+  if (value <= 0n) throw new Error('Nothing to send');   // F-67 (V12): a non-positive value is refused before anything is signed
   const wc = createWalletClient({ account, chain: chainOf(chainId), transport: http(BRIDGE_CHAINS[chainId].rpcs[0], { timeout: 20000 }) });
   return wc.sendTransaction({ to: to as `0x${string}`, value, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
 }

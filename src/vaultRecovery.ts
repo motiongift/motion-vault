@@ -177,13 +177,18 @@ export async function resetVault(d: BootDeps): Promise<Extract<Boot, { state: 'o
 export type ProfileEntry = { address: string; name: string; iv: string; ct: string };
 export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2; rk?: RecoveryBlob | null };
 // key: an EVM key, or a chain-only key string (nativeKeys.ts 'sol:…' / 'near:…') whose address is its placeholder slot
-export type BackupWallet = { address: string; name: string; key: `0x${string}`; kind: 'created' | 'imported' | 'derived' | 'hop'; main?: string; index?: number; gen?: 2; archived?: boolean; createdAt?: number };
+// V12 F-34: `via:'page'` marks a wallet whose key was handed in by the page (legacy engine.import), never typed in this
+// frame. It rides in the sealed v3 body as `p:1` so it stays untrusted as a transfer destination on every device.
+export type BackupWallet = { address: string; name: string; key: `0x${string}`; kind: 'created' | 'imported' | 'derived' | 'hop'; main?: string; index?: number; gen?: 2; archived?: boolean; createdAt?: number; via?: 'page' };
 export type OpenedWallet = BackupWallet & { v: 1 | 2 | 3 };
 export const PROFILE_CAP = 200;   // the server refuses a profile with more attached entries
 // The server keeps only {address, name, iv, ct} per entry, so a salt rides in an entry of its own under a reserved
 // pseudo-address ("5a17" ~ salt) that no key can have. Old engines see an entry they cannot open and count it as sealed.
 export const SALT_SLOT = (i: number) => '0x5a17' + i.toString(16).padStart(36, '0');
-export const isSaltSlot = (a: string) => /^0x5a17[0-9a-f]{36}$/i.test(String(a || ''));
+// V12 F-18: match ONLY the exact salt-slot shape (0x5a17 + 32 zeros + 4-hex index), not every 0x5a17… address — a
+// grindable 16-bit prefix let a real wallet land in this range and be hidden from the backup. Salts are few (≤ cap),
+// so a 4-hex index is ample. A wallet that merely starts 0x5a17 now goes through the normal wallet path.
+export const isSaltSlot = (a: string) => /^0x5a170{32}[0-9a-f]{4}$/i.test(String(a || ''));
 const AAD_W = (address: string) => buf(enc.encode('motion/backup/v3/wallet/' + lc(address)));
 const AAD_S = buf(enc.encode('motion/backup/v3/salt'));
 const KIND_CODE: Record<BackupWallet['kind'], string> = { created: 'c', imported: 'i', derived: 'd', hop: 'h' };
@@ -215,6 +220,7 @@ export async function buildProfile(src: { main: string; seed: string; count: num
     if (w.main && w.index != null) { body.m = lc(w.main); body.x = w.index; }
     if (w.gen === 2) body.g = 2;
     if (w.archived) body.a = 1;
+    if (w.via === 'page') body.p = 1;   // V12 F-34: page-supplied import stays an outside destination everywhere
     if (w.createdAt) body.c = Math.floor(w.createdAt);
     attached.push({ address: w.address, name: String(w.name || '').slice(0, 40), ...(await seal(kb, AAD_W(w.address), body)) });
     covered.push(lc(w.address));
@@ -244,18 +250,21 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
   const entries = (Array.isArray(profile?.attached) ? profile!.attached : []).slice(0, PROFILE_CAP).filter(validEntry);
   const kb = await backupKeyV3(seed);
   const salts: string[] = []; const wallets: OpenedWallet[] = []; const unopened: ProfileEntry[] = [];
+  // V12 F-18: a salt-slot entry that opens as a salt is consumed here; one that does not falls through to the wallet
+  // pass (an exact-address collision is astronomically unlikely, but then the key is opened rather than hidden).
+  const saltOpened = new Set<ProfileEntry>();
   for (const e of entries) {
     if (!isSaltSlot(e.address)) continue;
     const t = await unseal(kb, AAD_S, e); let s = '';
     try { s = String(JSON.parse(t || 'null')?.s || ''); } catch {}
-    if (/^0x[0-9a-f]{64}$/.test(s)) { if (!salts.includes(s)) salts.push(s); } else unopened.push(e);
+    if (/^0x[0-9a-f]{64}$/.test(s)) { saltOpened.add(e); if (!salts.includes(s)) salts.push(s); }
   }
   const allSalts = [...new Set([...localSalts, ...salts])];
   const k2s = await Promise.all(allSalts.map((s) => wrapKeyV2(seed, s)));
   const k1 = await wrapKeyV1(seed);
   const seen = new Set<string>();
   for (const e of entries) {
-    if (isSaltSlot(e.address)) continue;
+    if (saltOpened.has(e)) continue;   // V12 F-18: only entries actually consumed as salts are skipped here
     let w: OpenedWallet | null = null;
     const t3 = await unseal(kb, AAD_W(e.address), e);
     if (t3) {
@@ -263,7 +272,7 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
         const p = JSON.parse(t3);
         // an older engine opens only EVM keys here and carries a chain-only entry verbatim (it never drops it)
         if (p && p.v === 3 && storableKey(p.k)) {
-          w = { v: 3, key: p.k, address: e.address, name: String(e.name || ''), kind: CODE_KIND[p.t] || 'imported', ...(p.m && Number.isInteger(p.x) && p.x >= 0 ? { main: lc(p.m), index: Number(p.x) } : {}), ...(p.g === 2 ? { gen: 2 as const } : {}), ...(p.a ? { archived: true } : {}), ...(Number(p.c) > 0 ? { createdAt: Number(p.c) } : {}) };
+          w = { v: 3, key: p.k, address: e.address, name: String(e.name || ''), kind: CODE_KIND[p.t] || 'imported', ...(p.m && Number.isInteger(p.x) && p.x >= 0 ? { main: lc(p.m), index: Number(p.x) } : {}), ...(p.g === 2 ? { gen: 2 as const } : {}), ...(p.a ? { archived: true } : {}), ...(p.p === 1 ? { via: 'page' as const } : {}), ...(Number(p.c) > 0 ? { createdAt: Number(p.c) } : {}) };
         }
       } catch {}
     }
@@ -294,16 +303,33 @@ const AAD_R = (main: string, recovery: string) => buf(enc.encode('motion/recover
 export const recoveryKeyV1 = async (recoverySig: string) => aesKey(await hmac(await seedOfSignature(recoverySig), 'motion/recovery/v1'));
 export const validRecovery = (rk: unknown): rk is RecoveryBlob => !!rk && typeof rk === 'object' && (rk as RecoveryBlob).v === 1
   && /^0x[0-9a-fA-F]{40}$/.test(String((rk as RecoveryBlob).addr || '')) && /^[A-Za-z0-9+/=]{16}$/.test(String((rk as RecoveryBlob).iv || '')) && /^[A-Za-z0-9+/=]{20,400}$/.test(String((rk as RecoveryBlob).ct || ''));
-export async function sealRecovery(main: string, recovery: string, recoverySig: string, seed: string): Promise<RecoveryBlob> {
+// V12 F-28: the sealed seed is now BOUND to the main wallet's own signature. The body is {v:2, s, ms, mv}: `ms` is the
+// main's MAIN_MSG signature (seedOfSignature(ms) === s) and `mv` the text version. A reader (mainAttachRecovery) re-checks
+// that ms is the main's signature over MAIN_MSG(main, mv) AND that it derives exactly this seed, so a page that controls
+// only the recovery wallet can no longer plant a seed it chose. The OUTER RecoveryBlob stays {v:1, addr, iv, ct}: the
+// server's validProfile and wire shape are untouched — the version bump lives inside the encrypted body. A legacy {v:1}
+// body (no ms) still opens, but its seed is unverified (the caller marks it seedSrc 'rk1').
+export type RecoveryBody = { v: 1; s: string } | { v: 2; s: string; ms: string; mv: MainMsgVersion };
+export type OpenedRecovery = { seed: string; ms?: string; mv?: MainMsgVersion };
+export async function sealRecovery(main: string, recovery: string, recoverySig: string, seed: string, mainSig: string, mv: MainMsgVersion = 1): Promise<RecoveryBlob> {
   if (!/^0x[0-9a-f]{64}$/.test(seed)) throw new Error('No seed to seal');
-  const s = await seal(await recoveryKeyV1(recoverySig), AAD_R(main, recovery), { v: 1, s: seed });
+  if (!/^0x[0-9a-fA-F]{130}$/.test(String(mainSig || ''))) throw new Error('No main-wallet signature to bind the recovery copy');
+  const body: RecoveryBody = { v: 2, s: seed, ms: String(mainSig), mv: mv === 2 ? 2 : 1 };
+  const s = await seal(await recoveryKeyV1(recoverySig), AAD_R(main, recovery), body);
   return { v: 1, addr: lc(recovery), iv: s.iv, ct: s.ct };
 }
-// the seed, or null when this signature / main / recovery wallet does not open the blob
-export async function openRecovery(rk: RecoveryBlob, main: string, recoverySig: string): Promise<string | null> {
+// the opened seed (plus the bound main signature when the body is v2), or null when this signature / main / recovery
+// wallet does not open the blob
+export async function openRecovery(rk: RecoveryBlob, main: string, recoverySig: string): Promise<OpenedRecovery | null> {
   if (!validRecovery(rk)) return null;
   const t = await unseal(await recoveryKeyV1(recoverySig), AAD_R(main, rk.addr), { address: rk.addr, name: '', iv: rk.iv, ct: rk.ct });
-  try { const s = String(JSON.parse(t || 'null')?.s || ''); return /^0x[0-9a-f]{64}$/.test(s) ? s : null; } catch { return null; }
+  try {
+    const p = JSON.parse(t || 'null');
+    const s = String(p?.s || '');
+    if (!/^0x[0-9a-f]{64}$/.test(s)) return null;
+    if (p && p.v === 2 && /^0x[0-9a-fA-F]{130}$/.test(String(p.ms || ''))) return { seed: s, ms: String(p.ms), mv: p.mv === 2 ? 2 : 1 };
+    return { seed: s };   // legacy {v:1}: opens, but unbound — the caller treats the seed cautiously
+  } catch { return null; }
 }
 
 // ── storage health: a browser short of disk space discards site data, and the vault key with it ──

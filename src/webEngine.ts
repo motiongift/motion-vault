@@ -10,10 +10,10 @@
 // broadcast straight to the RPC; the board server never sees a key or a
 // transaction. Export shows a key only on a real click, in the engine's own
 // dialog, and the engine signs only routes it has verified on chain itself.
-import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, parseGwei, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
 import { ed25519 } from '@noble/curves/ed25519';
-import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS } from './nearEngine';
+import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS, NearSendUnknown } from './nearEngine';
 import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, solUnwrap, solWsolBalancesFor, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
 import {
@@ -25,6 +25,7 @@ import {
 import {
   UNIVERSAL_ROUTER, UNIVERSAL_ROUTER_ABI, PERMIT2, PERMIT2_ABI, MAX_UINT160, MAX_UINT48, V4_QUOTER, V4_QUOTER_ABI, NATIVE_CURRENCY,
   encodeV4BuyNative, encodeV4BuyViaPath, encodeV4BuyViaWeth, encodeV4Sell, encodeV4SellViaPath, encodeV3Path, v4PairCurrency, type V4PoolKey, KNOWN_LAUNCHER_HOOKS,
+  DYNAMIC_FEE_FLAG, MAX_STATIC_FEE,
 } from './evmV4Router';
 import { STANDARD, STANDARD_ROUTER_ABI, STANDARD_FACTORY_ABI, STANDARD_CURVE_ABI, V4_QUOTER_PATH_ABI, NO_FEE, standardPath, encodeStandardSwap, sameHop, type StdHop } from './standardRouter';
 import {
@@ -50,6 +51,10 @@ type ChainCfg = {
   ponsFactory?: `0x${string}`; fourManager?: `0x${string}`; fourHelper?: `0x${string}`; flapPortal?: `0x${string}`; infPoolManager?: `0x${string}`;
   standard?: typeof STANDARD;
   knownHooks: string[]; bridgeTokens: string[];
+  // F-73 (V12): hard ceilings so a spoofed node / fee read cannot drain a wallet on fees.
+  // maxGasPrice ≈ 20× the observed p99 gas price for the chain (feeFloor throws above it);
+  // maxFeeWei caps the absolute gas*price a single transaction may pay. Generous on purpose.
+  maxGasPrice?: bigint; maxFeeWei?: bigint;
 };
 const CHAIN_CFGS: Record<string, ChainCfg> = {
   robinhood: {
@@ -62,6 +67,7 @@ const CHAIN_CFGS: Record<string, ChainCfg> = {
     standard: STANDARD,   // standardreserve.xyz: stock-quoted curves → V4 pools behind its hook (src/standardRouter.ts)
     knownHooks: [...KNOWN_LAUNCHER_HOOKS, '0x745d717620052a97a22deee2e5eba59583f3e0cc'],   // Pons V4, Long (Doppler), DART
     bridgeTokens: ['0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168'],   // WETH, USDG
+    maxGasPrice: parseGwei('20'), maxFeeWei: parseEther('0.1'),   // F-73: generous placeholders — confirm against live p99 (this L2's gas is sub-gwei)
   },
   bsc: {
     id: BSC.id, key: 'bsc', name: 'BNB Chain', symbol: 'BNB', rpc: BSC.rpc, rpc2: BSC.rpc2, rpcSingle: BSC.rpcSingle, explorer: BSC.explorer, wrapped: BSC.wrapped, stable: BSC.stable,
@@ -71,6 +77,7 @@ const CHAIN_CFGS: Record<string, ChainCfg> = {
     knownHooks: ['0xff17f41c5efd6cce944af0912f300097d62df5c9'],   // genius.fun Infinity hook
     // WBNB, USDT, USDC, USD1, BTCB, ETH — what a bridge leg may pass through on the way to a quote asset
     bridgeTokens: [BSC.wrapped, BSC.stable, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d', '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', '0x2170Ed0880ac9A755fd29B2688956BD959F933F8'],
+    maxGasPrice: parseGwei('50'), maxFeeWei: parseEther('0.5'),   // F-73: generous placeholders — BSC floor is ~1 gwei, spikes a few gwei; confirm against live p99
   },
 };
 // Host mode: this module is running inside the vault frame (vault.html on the
@@ -225,7 +232,10 @@ async function broadcast(raw: `0x${string}`, round = 0, lostBefore = false): Pro
   const local = keccak256(raw);   // the transaction's own hash: what a node that "already knows" it is holding
   const attempts = broadcastUrls().map((u) => ({ u, p: (async () => {
     const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_sendRawTransaction', params: [raw] }), signal: AbortSignal.timeout(8000) }).then((x) => x.json());
-    if (r?.result) return r.result as `0x${string}`;
+    // F-41 (V12): the transaction's hash is keccak256(raw) — computed here, never taken from the node. A node that
+    // reports a DIFFERENT hash is lying about what it accepted (a proxy that re-signed or swapped the tx): reject it,
+    // never follow or settle a hash we did not compute. Every success returns `local`.
+    if (r?.result) { if (String(r.result).toLowerCase() !== local.toLowerCase()) { errors.push('node returned a different transaction hash'); throw new Error('node returned a different transaction hash'); } return local; }
     const msg = String(r?.error?.message || 'no result');
     // a node that already has it (from a faster sibling, or from the first round) holds it: that is a success
     if (/already known|known transaction|already imported/i.test(msg)) return local;
@@ -301,6 +311,13 @@ function inLane<T>(address: string, fn: () => Promise<T>): Promise<T> {
   tail.then(() => { if (lanes.get(k) === tail) lanes.delete(k); });
   return run;
 }
+// F-22 (V12): one wallet's sends serialized ACROSS TABS (the cross-tab Web Lock trench-lane-<addr>) and within this
+// frame (inLane), so two drivers can never sign a transaction from the same wallet at the same nonce. Used by the
+// move runner's write-ahead signing; falls back to the in-frame lane when Web Locks are unavailable.
+function laneLock<T>(address: string, fn: () => Promise<T>): Promise<T> {
+  const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  return lk?.request ? (lk.request('trench-lane-' + lc(address), () => inLane(address, fn)) as Promise<T>) : inLane(address, fn);
+}
 // prepare (nonce, gas) → sign locally → broadcast everywhere: what writeContract does, minus the single-node send
 async function signAndSend(wallet: ReturnType<typeof createWalletClient>, account: ReturnType<typeof privateKeyToAccount>, tx: { to: `0x${string}`; data?: `0x${string}`; value?: bigint }, gasPrice: bigint, gas?: bigint, clock?: Shared): Promise<`0x${string}`> {
   const tq = performance.now();
@@ -312,6 +329,11 @@ async function signAndSend(wallet: ReturnType<typeof createWalletClient>, accoun
         ? { to: tx.to, data: tx.data ?? '0x', value: tx.value ?? 0n, gasPrice, gas, nonce, type: 'legacy' }       // nothing left to ask the node
         : await wallet.prepareTransactionRequest({ account, chain, to: tx.to, data: tx.data ?? '0x', value: tx.value ?? 0n, gasPrice, nonce, type: 'legacy' } as any);
       const t1 = performance.now();
+      // F-73 (V12): last line of defence before signing — refuse a gas price or absolute fee
+      // that only a spoofed node / manipulated estimate could produce, so nothing drains on fees.
+      const effGas = gas ?? ((prepared as { gas?: bigint }).gas ?? 0n);
+      if (CFG.maxGasPrice && gasPrice > CFG.maxGasPrice * 5n) throw new Error('Refusing to sign: gas price is far above normal for this chain');
+      if (CFG.maxFeeWei && effGas > 0n && effGas * gasPrice > CFG.maxFeeWei) throw new Error('Refusing to sign: this transaction would spend an abnormal amount on gas');
       // signed by the account itself: wallet.signTransaction asks the node for eth_chainId on every signature
       // just to compare it with the chain this frame pins (one round trip, 60-120 ms, measured) — the chain id
       // signed in is chain.id either way, so a node on another chain still cannot replay it. Same bytes.
@@ -442,13 +464,19 @@ const EXACT_INPUT_SINGLE_ABI = [{
 // main/index: a trading wallet derived from the account's main wallet (its seed comes from one signature of the main), so it is the same on every device
 // gen 2: a trading wallet derived under this vault's own salt (see subKeyV2) — not reproducible from the main's signature alone
 // kind: how the wallet came in (carried in the account backup so a restore keeps it)
-type Account = { id: string; name: string; address: `0x${string}`; key: `0x${string}`; createdAt: number; archived?: boolean; hop?: boolean; ext?: 'privy'; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; lt?: LtRec };
+// V12 F-34: `via:'page'` = a key the page handed in through the legacy engine.import. Such a wallet is NOT one of the
+// vault's own for transfers (excluded from ownAccounts), so sending to it takes the outside / withdrawal path.
+type Account = { id: string; name: string; address: `0x${string}`; key: `0x${string}`; createdAt: number; archived?: boolean; hop?: boolean; ext?: 'privy'; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; via?: 'page'; lt?: LtRec };
 // lt (perps phase 2): this wallet's Lighter API key and account (src/perpsEngine.ts) — encrypted at rest with the vault's device AES key like the wallet keys, never
 // in a summary, a message or the account backup (a new device registers a new key; the old one is replaced at slot 77)
 // account: the last profile the server confirmed (vault-client → mainPublished) and which addresses it covers
 // removedAddrs: wallets removed here on a trusted click — a publish does not carry them back into the profile
 // mergedBlobs / recoveryDismissed: set-aside vaults already merged back, and missing wallets the user chose to forget
-type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[]; mainMv?: Record<string, 2>; recovery?: Record<string, RecoveryBlob | null> };
+type VaultMeta = { activeAccountId: string | null; selectedAccountIds: string[]; order: string[]; changedAt?: number; backedUpAt?: number; main?: string | null; walletAddedAt?: number; account?: { main: string; at: number; addrs: string[]; digest: string } | null; removedAddrs?: string[]; mergedBlobs?: string[]; recoveryDismissed?: string[]; mainMv?: Record<string, 2>; recovery?: Record<string, RecoveryBlob | null>;
+  // V12 F-28: where a main's seed came from — 'main' (its own verified signature, full backup) or 'rk1' (an unbound
+  // legacy recovery copy; publish only what that account restored and generate new wallets off it). rk1[m] records the
+  // addresses restored from that profile and its salts, so mainProfile seals exactly those and nothing else.
+  seedSrc?: Record<string, 'main' | 'rk1'>; rk1?: Record<string, { addrs: string[]; salts: string[] }> };
 type StoredVault = { v: 2; iv: string; ct: string; siv?: string; sct?: string; meta: VaultMeta; addresses: { id: string; name: string; address: string; archived?: boolean; hop?: boolean }[] };
 const VAULT_KEY = 'trenches.vault';
 const SETTINGS_KEY = 'trenches.engine.settings';
@@ -489,6 +517,15 @@ let parked: Account[] = [];
 const hereOk = (a: Account) => { const c = nativeChainOf(a.key); return !c || (c === 'sol' ? SOL_MODE : NEAR_MODE); };
 const allAccounts = (): Account[] => [...(unlocked || []), ...parked];
 const keyAddress = (key: string) => (nativeSlotOf(key) || privateKeyToAccount(key as `0x${string}`).address) as `0x${string}`;
+// V12 F-23: read ONE legacy-import item into the exact key string the vault stores (an EVM 0x-key, or a chain-only
+// 'sol:'/'near:' key) and the address to SHOW for it (a chain-only key under its native address). null = unreadable.
+// import() parses every item through this up front, so one bad entry fails the whole batch before anything is shown.
+const readKeyOrNull = (it: { name?: string; privateKey?: string } | null | undefined): { name: string; key: string; address: string } | null => {
+  const key = String(it?.privateKey ?? '').trim();
+  const name = String(it?.name ?? '').trim();
+  if (!storableKey(key)) return null;
+  try { const address = nativeChainOf(key) ? nativeAddress(key) : privateKeyToAccount(key as `0x${string}`).address; return address ? { name, key, address } : null; } catch { return null; }
+};
 let seeds: Record<string, string> = {};          // main address (lower) → 32-byte seed hex, from one signature of that main
 let storagePersisted = false;
 let storageEstimate: { quota?: number; usage?: number } | null = null;
@@ -548,12 +585,15 @@ async function mergeFromDisk() {
 }
 let persisting: Promise<void> = Promise.resolve();
 let replacing = false;                       // the first write of a vault that replaces a set-aside one (inside the key lock)
-function persist() { persisting = persisting.then(persistNow, persistNow); return persisting; }
-async function persistNow() {
+function persist() { persisting = persisting.then(() => persistNow(), () => persistNow()); return persisting; }
+async function persistNow(retry = 0) {
   if (!unlocked || !cryptoKey) throw new Error(keyMissing ? KEY_MISSING_MSG : 'Vault not ready');
   // Never write over a vault this key cannot open. Another tab may have started over (a new key, its own
   // vault): if the key store's key opens what is on disk now, this tab switches to it and its wallets join
   // that vault; otherwise nothing is written.
+  // V12 F-25: remember the exact stored value we checked here, so we can tell just before the write whether another
+  // tab changed it under us (a reset in another tab writing a new key + empty vault) and redo rather than clobber it.
+  const before = localStorage.getItem(VAULT_KEY);
   const disk = readVault();
   if (disk && disk.ct && !replacing && !(await openWith(cryptoKey, disk))) {
     const now = await idbGet('vault').catch(() => undefined);
@@ -569,6 +609,10 @@ async function persistNow() {
   const siv = crypto.getRandomValues(new Uint8Array(12));
   const sct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(siv) }, cryptoKey, buf(enc.encode(JSON.stringify(seeds)))));
   const next: StoredVault = { v: 2, iv: b64(iv), ct: b64(ct), siv: b64(siv), sct: b64(sct), meta, addresses: own.map((a) => ({ id: a.id, name: a.name, address: a.address, archived: !!a.archived, hop: !!a.hop })) };
+  // V12 F-25: if the stored value changed since the check at the top of this call (another tab reset or rewrote the
+  // vault), redo the whole merge + encrypt against the new value instead of overwriting it — up to 3 times. mergeFromDisk
+  // above already folds in another tab's wallets; this guards the narrow window between that merge and the write.
+  if (!replacing && retry < 3 && localStorage.getItem(VAULT_KEY) !== before) return persistNow(retry + 1);
   localStorage.setItem(VAULT_KEY, JSON.stringify(next));
   // read-after-write: the ciphertext on disk must decrypt to every key we hold
   const check = await decryptStored();
@@ -677,7 +721,7 @@ function nextName(kind: 'Created' | 'Imported' | 'Wallet') {
   for (const a of list) { const m = re.exec(a.name); if (m) n = Math.max(n, Number(m[1])); }
   return `${kind} ${n + 1}`;
 }
-async function addAccount(name: string, key: `0x${string}`, opts: { hop?: boolean; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; createdAt?: number; archived?: boolean } = {}) {
+async function addAccount(name: string, key: `0x${string}`, opts: { hop?: boolean; main?: string; index?: number; gen?: 2; kind?: 'created' | 'imported'; createdAt?: number; archived?: boolean; via?: 'page' } = {}) {
   requireUnlocked();
   if (!storableKey(key)) throw new Error('key must be 0x + 64 hex');
   const acct = { address: keyAddress(key) };
@@ -685,7 +729,7 @@ async function addAccount(name: string, key: `0x${string}`, opts: { hop?: boolea
   const id = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const here = !nativeChainOf(key) || (nativeChainOf(key) === 'sol' ? SOL_MODE : NEAR_MODE);
   const list = here ? requireUnlocked() : parked;
-  list.push({ id, name: name || nextName('Created'), address: acct.address, key, createdAt: opts.createdAt || Date.now(), ...(opts.hop ? { hop: true } : {}), ...(opts.archived ? { archived: true } : {}), ...(opts.main ? { main: lc(opts.main), index: opts.index } : {}), ...(opts.gen === 2 ? { gen: 2 as const } : {}), ...(opts.kind ? { kind: opts.kind } : {}) });
+  list.push({ id, name: name || nextName('Created'), address: acct.address, key, createdAt: opts.createdAt || Date.now(), ...(opts.hop ? { hop: true } : {}), ...(opts.archived ? { archived: true } : {}), ...(opts.main ? { main: lc(opts.main), index: opts.index } : {}), ...(opts.gen === 2 ? { gen: 2 as const } : {}), ...(opts.kind ? { kind: opts.kind } : {}), ...(opts.via === 'page' ? { via: 'page' as const } : {}) });
   // a hop wallet is plumbing: it never becomes the primary and never joins batch trades
   if (!opts.hop && !opts.archived) {
     if (!meta.activeAccountId && here) meta.activeAccountId = id;
@@ -752,7 +796,7 @@ const kindOf = (a: Account): BackupWallet['kind'] => (a.hop ? 'hop' : a.main && 
 const backupWalletsOf = (main: string): BackupWallet[] => allAccounts()
   .filter((a) => !a.ext && storableKey(a.key) && !(a.main === lc(main) && a.index != null && a.gen !== 2))
   .sort((x, y) => Number(!!x.hop) - Number(!!y.hop) || Number(!!x.archived) - Number(!!y.archived))
-  .map((a) => ({ address: a.address, name: a.name, key: a.key, kind: kindOf(a), ...(a.main && a.index != null ? { main: a.main, index: a.index } : {}), ...(a.gen === 2 ? { gen: 2 as const } : {}), ...(a.archived ? { archived: true } : {}), createdAt: a.createdAt }));
+  .map((a) => ({ address: a.address, name: a.name, key: a.key, kind: kindOf(a), ...(a.main && a.index != null ? { main: a.main, index: a.index } : {}), ...(a.gen === 2 ? { gen: 2 as const } : {}), ...(a.archived ? { archived: true } : {}), ...(a.via === 'page' ? { via: 'page' as const } : {}), createdAt: a.createdAt }));
 async function deriveSubs(main: string, count: number, names: Record<string, string>) {
   const seed = seeds[lc(main)]; if (!seed) throw new Error('No seed for this main wallet');
   const list = requireUnlocked();
@@ -821,6 +865,9 @@ async function feeFloor(): Promise<bigint> {
       const [gp, block] = await Promise.all([publicClient.getGasPrice(), publicClient.getBlock().catch(() => null)]);
       const base = block?.baseFeePerGas ?? gp;
       const floor = (base > gp ? base : gp) * 125n / 100n;
+      // F-73 (V12): a spoofed node reporting an absurd gas price would otherwise be multiplied
+      // by the boost and signed; refuse above the chain's ceiling instead (and never cache it).
+      if (CFG.maxGasPrice && floor > CFG.maxGasPrice) throw new Error('Gas price is far above normal for this chain — refusing to trade (check your network node)');
       feeCache = { floor, at: Date.now() };
       return floor;
     } finally { feeInflight = null; }
@@ -910,6 +957,8 @@ const same = (a?: string, b?: string) => !!a && !!b && lc(a) === lc(b);
 const BRIDGE_TOKENS = new Set(CFG.bridgeTokens.map(lc));
 const KNOWN_HOOKS = new Set(CFG.knownHooks.map(lc));
 const V3_TIERS = new Set([100, 500, 2500, 3000, 10000]);
+// F-57 (V12): the tokenised stocks a V3 route is allowed to be quoted in (besides the bridge assets).
+const STD_STOCKS = new Set(Object.keys(CFG.standard?.stocks || {}).map(lc));
 const PONS_GET_LAUNCHED = toFunctionSelector('function getLaunchedToken(address)');
 const FLAP_GET_TOKEN_V8 = '0xf1159a49';
 const padAddr = (a: string) => lc(a).slice(2).padStart(64, '0');
@@ -981,13 +1030,22 @@ async function checkRoute(token: `0x${string}`, route: Route): Promise<void> {
     quote = route.quoteToken;
   } else if (route.type === 'v3') {
     if (!V3_TIERS.has(Number(route.fee))) reject('unknown V3 fee tier');
+    // F-57 (V12): a V3 route must be quoted in a known bridge asset or a known Standard
+    // stock — not an arbitrary token a spoofed route could point the sell approval at.
+    if (!knownQuote(route.quoteToken) && !STD_STOCKS.has(lc(route.quoteToken))) reject('V3 quote asset is not a known one');
     quote = route.quoteToken;
   } else if (route.type === 'v4') {
     const pk = route.poolKey; const cs = [lc(pk.currency0), lc(pk.currency1)];
     if (!cs.includes(lc(token))) reject('V4 pool does not contain this token');
     const other = cs[0] === lc(token) ? cs[1] : cs[0];
     if (route.quoteToken && !same(route.quoteToken, other)) reject('V4 quote asset is not in the pool');
-    if (!KNOWN_HOOKS.has(lc(pk.hooks)) && !same(pk.hooks, ZERO) && !knownQuote(other)) reject('V4 pool has an unknown hook and an unknown quote asset');
+    // F-36 + F-65 (V12): bind the declared pair mode to the pool's real other currency,
+    // reject unknown hooks unless the pool is hookless with a known quote, and cap the
+    // fee (a dynamic-fee flag is only allowed behind a known hook).
+    if (route.pair === 'native' ? !same(other, ZERO) : route.pair === 'weth' ? !same(other, WETH) : route.pair === 'usdg' ? !same(other, USDG) : false) reject('V4 pair mode does not match the pool');
+    const knownV4 = KNOWN_HOOKS.has(lc(pk.hooks)), hooklessV4 = same(pk.hooks, ZERO);
+    if (!knownV4 && !(hooklessV4 && knownQuote(other))) reject('V4 pool has an unknown hook and an unknown quote asset');
+    const feeV4 = Number(pk.fee); if (feeV4 === DYNAMIC_FEE_FLAG ? !knownV4 : feeV4 > MAX_STATIC_FEE) reject('V4 fee is above the ceiling');
     quote = other;
   } else if (route.type === 'inf') {
     const pk = route.poolKey; const cs = [lc(pk.currency0), lc(pk.currency1)];
@@ -995,7 +1053,11 @@ async function checkRoute(token: `0x${string}`, route: Route): Promise<void> {
     if (!cs.includes(lc(token))) reject('Infinity pool does not contain this token');
     const other = cs[0] === lc(token) ? cs[1] : cs[0];
     if (!same(route.quoteToken, other)) reject('Infinity quote asset is not in the pool');
-    if (!KNOWN_HOOKS.has(lc(pk.hooks)) && !same(pk.hooks, ZERO) && !knownQuote(other)) reject('Infinity pool has an unknown hook and an unknown quote asset');
+    // F-36 + F-65 (V12): mirror of the V4 branch (Infinity pairs only native/weth/other).
+    if (route.pair === 'native' ? !same(other, ZERO) : route.pair === 'weth' ? !same(other, WETH) : false) reject('Infinity pair mode does not match the pool');
+    const knownInf = KNOWN_HOOKS.has(lc(pk.hooks)), hooklessInf = same(pk.hooks, ZERO);
+    if (!knownInf && !(hooklessInf && knownQuote(other))) reject('Infinity pool has an unknown hook and an unknown quote asset');
+    const feeInf = Number(pk.fee); if (feeInf === DYNAMIC_FEE_FLAG ? !knownInf : feeInf > MAX_STATIC_FEE) reject('Infinity fee is above the ceiling');
     quote = other;
   }
   // bridge legs: wrapped gas token → known assets → the verified quote, on known fee tiers
@@ -1157,7 +1219,9 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
   // this wallet's node for its own heavy calls (estimate, per-wallet router simulations): spread, see heavyFor
   const hv = heavyFor(Math.max(0, shared.addresses.findIndex((a) => same(a, account.address))));
   const slippageBps = BigInt(Math.round(s.slippage * 100));
-  const applySlippage = (q: bigint) => (q * (10_000n - slippageBps)) / 10_000n;
+  // F-6 (V12): a non-positive minimum-out is an unbounded swap (any output accepted) —
+  // a spoofed/zero quote must stop the trade, never go out with a 0 floor.
+  const applySlippage = (q: bigint) => { const floor = (q * (10_000n - slippageBps)) / 10_000n; if (floor <= 0n) throw new Error('Refusing to trade without a minimum-out floor'); return floor; };
   // a buy-side quote is the same number for every wallet: made once per click, shared
   const quoteOnce = <T,>(key: string, fn: () => Promise<T>) => (side === 'buy' ? shared.once(key, fn) : fn());
   // The venue quotes, one definition each, keyed so that every wallet of the
@@ -1487,6 +1551,8 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     if (quoted <= 0n) throw new Error('Curve sell quote returned zero');
     await approveIfNeeded(token, route.curve, amountIn);
     const req = await sim({ address: route.curve, abi: PONS_CURVE_ABI, functionName: 'sell', args: [amountIn, applySlippage(headroom(quoted)), account.address] });
+    // F-53 (V12): pair-asset balance before the sell, so the walk-back sweeps only this sell's proceeds
+    const beforePair = !nativePair ? await publicClient.readContract({ address: route.pairToken, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : 0n;
     const hash = await send(req.request);
     // the curve pays in its pair asset (NVDA, META…): swap it back to ETH so the
     // trader ends up with something spendable, not a stock they did not ask for
@@ -1496,13 +1562,17 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
       if (bridge) landed(hash, 90_000).then(async (r) => {
         if (r.status !== 'success') return;
         const bal = await publicClient.readContract({ address: route.pairToken, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-        if (bal <= 0n) return;
-        await approveIfNeeded(route.pairToken, UNISWAP_V3_ROUTER, bal);
-        const back = await publicClient.simulateContract({ account, address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path: bridge.reverse, recipient: account.address, amountIn: bal, amountOutMinimum: 0n }] });
+        // F-53 (V12): this sell's proceeds (bal − before) plus any recorded engine leftovers, never the user's pre-held pair asset
+        const owed = leftoverOwed(account.address, route.pairToken);
+        let amount = (bal > beforePair ? bal - beforePair : 0n) + owed;
+        if (amount > bal) amount = bal;
+        if (amount <= 0n) return;
+        await approveIfNeeded(route.pairToken, UNISWAP_V3_ROUTER, amount);
+        const back = await publicClient.simulateContract({ account, address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path: bridge.reverse, recipient: account.address, amountIn: amount, amountOutMinimum: 0n }] });
         // signed with the simulated output as its floor (1 %, or the user's tighter slippage), never 0
         const h2 = await send({ ...back.request, args: [{ ...back.request.args[0], amountOutMinimum: bridgeMin(back.result as bigint) }] });
         const r2 = await landed(h2, 90_000).catch(() => null);
-        if (r2?.status === 'success') await unwrap(acct.id, (back.result as bigint) - (back.result as bigint) / 50n).catch(() => {});
+        if (r2?.status === 'success') { if (owed > 0n) leftoverClear(account.address, route.pairToken); await unwrap(acct.id, (back.result as bigint) - (back.result as bigint) / 50n).catch(() => {}); }
       }).catch(() => {});
     }
     return hash;
@@ -1649,6 +1719,9 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     const q = (await bridgeQuote(quote, bridge.path, amountIn)).result as bigint;
     if (q <= 0n) throw new Error('Quote-asset swap quote returned zero');
     const floor = bridgeMin(q);
+    // F-53 (V12): the leg delivers ~q but the venue consumes `floor`; the ~1% left in the wallet
+    // as the quote asset is this engine's, recorded so the coin's next sell walks it back too.
+    leftoverAdd(account.address, quote, q - floor);
     const leg = { address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path: bridge.path, recipient: account.address, amountIn, amountOutMinimum: floor }], value: amountIn };
     const [venue, allowance] = await Promise.all([venueAt(floor), bscAllowance(quote, spender)]);
     const approve = allowance <= MAX_UINT256 / 2n ? [bscApprove(quote, spender)] : [];
@@ -1663,8 +1736,11 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     if (ah && (await bscReceipt(ah)).status !== 'success') throw new Error('Approval reverted');
     return send((await sim(venue)).request);
   };
-  // …and a sell's proceeds in the quote asset back to the gas token, behind the trade
-  const bridgeBack = (quote: `0x${string}`, r: Bridge, hash: `0x${string}`) => {
+  // …and a sell's proceeds in the quote asset back to the gas token, behind the trade.
+  // F-53 (V12): `before` is the quote-asset balance read BEFORE the sell; the walk-back
+  // sweeps only this sell's proceeds (bal − before) plus this engine's recorded leftovers,
+  // never the user's pre-held balance of the same asset.
+  const bridgeBack = (quote: `0x${string}`, r: Bridge, hash: `0x${string}`, before: bigint) => {
     const bridge = bridgeOf(r, quote);
     if (!bridge) return;
     bscReceipt(hash, 90_000).then(async (rc) => {
@@ -1673,13 +1749,16 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
         publicClient.readContract({ address: quote, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }),
         publicClient.readContract({ address: quote, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, UNISWAP_V3_ROUTER] }),
       ]);
-      if (bal <= 0n) return;
-      const backCall = { address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path: bridge.reverse, recipient: account.address, amountIn: bal, amountOutMinimum: 0n }] };
+      const owed = leftoverOwed(account.address, quote);
+      let amount = (bal > before ? bal - before : 0n) + owed;
+      if (amount > bal) amount = bal;   // never more than the wallet actually holds
+      if (amount <= 0n) return;
+      const backCall = { address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path: bridge.reverse, recipient: account.address, amountIn: amount, amountOutMinimum: 0n }] };
       let h2: `0x${string}`, got: bigint;
       // every walk back is signed with the simulated output as its floor (1 %, or the user's tighter slippage): a
       // zero floor on BSC is a free sandwich. Without a simulated output (turbo, no eth_simulateV1) there is no send.
       const floored = (got: bigint) => ({ ...backCall, args: [{ ...backCall.args[0], amountOutMinimum: bridgeMin(got) }] });
-      if (allowance >= bal) {
+      if (allowance >= amount) {
         const back = await publicClient.simulateContract({ account, ...backCall } as any);
         got = back.result as bigint; h2 = await send({ ...back.request, args: floored(got).args });
       } else {
@@ -1695,7 +1774,7 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
         }
       }
       const r2 = await bscReceipt(h2, 90_000).catch(() => null);
-      if (r2?.status === 'success' && got > 0n) await unwrap(acct.id, got - got / 50n).catch(() => {});
+      if (r2?.status === 'success') { if (owed > 0n) leftoverClear(account.address, quote); if (got > 0n) await unwrap(acct.id, got - got / 50n).catch(() => {}); }
     }).catch(() => {});
   };
   // The sell quotes of every wallet in the click in one Multicall3 call (each
@@ -1732,15 +1811,17 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     }
     const sellCall = { address: route.manager, abi: FOUR_MANAGER_ABI, functionName: 'sellToken', args: [token, amountIn] };
     const early = bscEstimate('sell', sellCall);   // sellToken carries no minimum: the early estimate IS the final call
-    const [sq, allowance] = await Promise.all([
+    const [sq, allowance, before] = await Promise.all([
       bscSellQuote<readonly [string, string, bigint, bigint]>('four', (amt) => ({ address: route.helper, abi: FOUR_HELPER_ABI, functionName: 'trySell', args: [token, amt] }))
         .then((v) => v ?? publicClient.readContract({ address: route.helper, abi: FOUR_HELPER_ABI, functionName: 'trySell', args: [token, amountIn] })),
       bscAllowance(token, route.manager),
+      // F-53 (V12): quote-asset balance before the sell, so the walk-back sweeps only its proceeds
+      nativeQuote ? Promise.resolve(0n) : publicClient.readContract({ address: route.quoteToken, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }),
     ]);
     const [, , funds] = sq;
     if (funds <= 0n) throw new Error('four.meme sell quote returned zero');
     const hash = await bscSendAfter(allowance >= amountIn ? [] : [bscApprove(token, route.manager)], sellCall, early, 'the four.meme sell');
-    if (!nativeQuote) bridgeBack(route.quoteToken, route, hash);
+    if (!nativeQuote) bridgeBack(route.quoteToken, route, hash, before as bigint);
     return hash;
   }
   // Flap: one Portal call; address(0) is BNB, and the Portal itself swaps BNB
@@ -1771,8 +1852,10 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     ]);
     if (q <= 0n && !nativeQuote) { output = route.quoteToken; q = await quoteVia(token, output, amountIn); }
     if (q <= 0n) throw new Error('Flap sell quote returned zero');
+    // F-53 (V12): quote-asset balance before a bridged sell, so the walk-back sweeps only its proceeds
+    const before = output.toLowerCase() !== ZERO ? await publicClient.readContract({ address: output, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : 0n;
     const hash = await bscSendAfter(allowance >= amountIn ? [] : [bscApprove(token, route.portal)], sellAt(output, applySlippage(q - q / 100n)), output === ZERO ? early : null, 'the Flap sell');
-    if (output.toLowerCase() !== ZERO) bridgeBack(output, route, hash);
+    if (output.toLowerCase() !== ZERO) bridgeBack(output, route, hash, before);
     return hash;
   }
   // PancakeSwap V2 pair (fee-on-transfer safe: Flap tax tokens keep taxing after listing)
@@ -1802,15 +1885,17 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     const fn = toNative ? 'swapExactTokensForETHSupportingFeeOnTransferTokens' : 'swapExactTokensForTokensSupportingFeeOnTransferTokens';
     const sellAt = (min: bigint) => ({ address: router, abi: PANCAKE_V2_ROUTER_ABI, functionName: fn, args: [amountIn, min, path, account.address, dl] });
     const early = bscEstimate('sell', sellAt(0n));
-    const [amounts, allowance] = await Promise.all([
+    const [amounts, allowance, before] = await Promise.all([
       bscSellQuote<readonly bigint[]>('v2', (amt) => ({ address: router, abi: PANCAKE_V2_ROUTER_ABI, functionName: 'getAmountsOut', args: [amt, path] }))
         .then((v) => v ?? publicClient.readContract({ address: router, abi: PANCAKE_V2_ROUTER_ABI, functionName: 'getAmountsOut', args: [amountIn, path] })),
       bscAllowance(token, router),
+      // F-53 (V12): quote-asset balance before a bridged sell, so the walk-back sweeps only its proceeds
+      toNative ? Promise.resolve(0n) : publicClient.readContract({ address: route.quoteToken, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }),
     ]);
     const q = lastOf(amounts);
     if (q <= 0n) throw new Error('V2 sell quote returned zero');
     const hash = await bscSendAfter(allowance >= amountIn ? [] : [bscApprove(token, router)], sellAt(applySlippage(q - q / 100n)), early, 'the V2 sell');
-    if (!toNative) bridgeBack(route.quoteToken, route, hash);
+    if (!toNative) bridgeBack(route.quoteToken, route, hash, before as bigint);
     return hash;
   }
   // PancakeSwap Infinity CL pool (genius.fun after graduation) through PancakeSwap's Universal Router
@@ -1904,6 +1989,22 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     }
     return bscSendAfter(approvals, exec(encoded), early, 'the Infinity sell');
   }
+  // F-57 (V12): a spoofed route can steer a V3 sell to a thin / manipulated fee tier so
+  // the pool's own quote — and with it the minOut floor — is low. On BSC (PancakeSwap's
+  // QuoterV2 needs no allowance) compare the token → quote hop across every standard tier
+  // in one call; if another tier would pay materially more, the chosen tier is suspect.
+  // Robinhood ships no V3 quoter, so this guard is BSC-only (see the report).
+  const v3TierGuard = async (quoteAsset: `0x${string}`) => {
+    if (side !== 'sell' || CFG.key !== 'bsc' || !multicallOk) return;
+    const tiers = [...V3_TIERS];
+    const res = await publicClient.multicall({ contracts: tiers.map((fee) => ({ address: BSC.v3Quoter, abi: V3_QUOTER_ABI, functionName: 'quoteExactInput', args: [encodeV3Path([token, quoteAsset], [fee]), amountIn] })) as any, allowFailure: true }).catch(() => null);
+    if (!res) return;
+    const out = (i: number) => (res[i]?.status === 'success' ? (res[i].result as readonly [bigint])[0] : 0n);
+    const chosen = out(tiers.indexOf(Number(route.fee)));
+    if (chosen <= 0n) return;   // the chosen tier did not quote here; the live swap's own quote + slippage floor govern
+    let best = 0n; for (let i = 0; i < tiers.length; i += 1) if (tiers[i] !== Number(route.fee) && out(i) > best) best = out(i);
+    if (best * 100n > chosen * 102n) reject('a PancakeSwap V3 pool at another fee tier pays materially more for this sell — the route tier looks manipulated');
+  };
   // Uniswap V3 (Varo). A pool quoted in a tokenised stock is still reachable
   // from ETH: one exactInput hops ETH → quote → token (and back on a sell), so
   // it stays a single transaction.
@@ -1913,21 +2014,41 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     const path = side === 'buy' ? encodeV3Path([...bridge.hops, token], [...bridge.fees, route.fee])
       : encodeV3Path([token, ...[...bridge.hops].reverse()], [route.fee, ...[...bridge.fees].reverse()]);
     const base = { path, recipient: account.address, amountIn, amountOutMinimum: 0n };
+    // F-57 (V12): the wrapped gas token held BEFORE the sell — only what this sell delivers gets unwrapped (overlaps the quote).
+    const beforeWethP = side === 'sell' ? publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : Promise.resolve(0n);
     const quoted = (await quoteV3Path(path, amountIn, side === 'buy')).result;
     if (quoted <= 0n) throw new Error('V3 quote returned zero');
-    if (side === 'sell') await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn);
+    if (side === 'sell') { await v3TierGuard(route.quoteToken); await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn); }
+    const beforeWeth = await beforeWethP;
     const bridged = await sim({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ ...base, amountOutMinimum: applySlippage(quoted) }], value: side === 'buy' ? amountIn : undefined });
     const hash = await send(bridged.request);
-    // a sell lands in WETH: unwrap it behind the trade so the wallet holds ETH
-    if (side === 'sell') landed(hash, 90_000).then((r) => { if (r.status === 'success') unwrap(acct.id, quoted).catch(() => {}); }).catch(() => {});
+    // a sell lands in WETH: unwrap what the sell actually delivered (never `quoted`: a
+    // fill under quote would make the withdraw revert, or unwrap pre-held WETH)
+    if (side === 'sell') landed(hash, 90_000).then(async (r) => {
+      if (r.status !== 'success') return;
+      const afterWeth = await publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+      const got = afterWeth - beforeWeth;
+      if (got > 0n) await unwrap(acct.id, got).catch(() => {});
+    }).catch(() => {});
     return hash;
   }
   const tokenIn = side === 'buy' ? WETH : token, tokenOut = side === 'buy' ? token : route.quoteToken;
   const args = v3SingleArgs(tokenIn, tokenOut, route.fee, amountIn);
+  // F-57 (V12): a WETH-quoted sell lands in the wrapped gas token; capture the pre-sell balance (overlaps the quote) so the delta is unwrapped.
+  const beforeWethP = side === 'sell' ? publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : Promise.resolve(0n);
   const q = await quoteV3Single(tokenIn, tokenOut, route.fee, amountIn, side === 'buy');
-  if (side === 'sell') await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn);
+  if (side === 'sell') { await v3TierGuard(WETH); await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn); }
+  const beforeWeth = await beforeWethP;
   const req = await sim({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [{ ...args, amountOutMinimum: applySlippage(q.result) }], value: side === 'buy' ? amountIn : undefined });
-  return send(req.request);
+  const hash = await send(req.request);
+  // the sell's proceeds arrive as WETH: unwrap only what this sell delivered, behind the trade
+  if (side === 'sell') landed(hash, 90_000).then(async (r) => {
+    if (r.status !== 'success') return;
+    const afterWeth = await publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+    const got = afterWeth - beforeWeth;
+    if (got > 0n) await unwrap(acct.id, got).catch(() => {});
+  }).catch(() => {});
+  return hash;
 }
 // ── preflight ──────────────────────────────────────────────────────────────
 // The same route, the same quote, the same calldata as a real trade — but it
@@ -2257,6 +2378,17 @@ async function preview(side: 'buy' | 'sell', token: string, size: number, accoun
   }));
   return { ok: true, ms: Math.round(performance.now() - t0), route: route.type, slippage: s.slippage, previews };
 }
+// F-53 (V12): the engine's own bridged-buy leftovers — the quote asset a bridge leg
+// delivered above what the venue consumed — are tracked per wallet+quote so that a later
+// sell's walk-back sweeps ONLY this engine's funds (that sell's proceeds plus these
+// recorded leftovers), never the user's unrelated holdings of the same asset.
+const LEFTOVER_KEY = 'trenches.engine.leftovers';
+const leftKey = (wallet: string, quote: string) => `${lc(wallet)}:${lc(quote)}`;
+const loadLeftovers = (): Record<string, string> => { try { const v = JSON.parse(localStorage.getItem(LEFTOVER_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } };
+const bigOr0 = (v: unknown): bigint => { try { return BigInt(String(v || '0')); } catch { return 0n; } };
+const leftoverOwed = (wallet: string, quote: string): bigint => bigOr0(loadLeftovers()[leftKey(wallet, quote)]);
+const leftoverAdd = (wallet: string, quote: string, amount: bigint) => { if (amount <= 0n) return; try { const m = loadLeftovers(); const k = leftKey(wallet, quote); m[k] = String(bigOr0(m[k]) + amount); localStorage.setItem(LEFTOVER_KEY, JSON.stringify(m)); } catch {} };
+const leftoverClear = (wallet: string, quote: string) => { try { const m = loadLeftovers(); delete m[leftKey(wallet, quote)]; localStorage.setItem(LEFTOVER_KEY, JSON.stringify(m)); } catch {} };
 // receipt for a hash the engine broadcast: "sent" is not "landed"
 async function receipt(hash: string) {
   if (SOL_MODE) return solReceipt(hash);
@@ -2279,25 +2411,73 @@ const CAP_DEFAULT: Record<string, number> = { robinhood: 1, bsc: 5, sol: 25, nea
 const SLIP_FREE = 22;
 const laneKey = () => (SOL_MODE ? 'sol' : NEAR_MODE ? 'near' : CFG.key);
 const laneUnit = () => (SOL_MODE ? 'SOL' : NEAR_MODE ? 'NEAR' : NATIVE);
-type Limits = { cap?: Record<string, number>; slipOk?: number };
+type Limits = { cap?: Record<string, number>; slipOk?: number; buys?: Record<string, [number, number][]> };
 const loadLimits = (): Limits => { try { const v = JSON.parse(localStorage.getItem(LIMITS_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } };
 const saveLimits = (l: Limits) => { try { localStorage.setItem(LIMITS_KEY, JSON.stringify(l)); } catch {} };
 const buyCap = () => { const v = Number(loadLimits().cap?.[laneKey()]); return v > 0 ? v : CAP_DEFAULT[laneKey()] ?? 1; };
-async function tradeLimits(side: 'buy' | 'sell', size: number, s: Settings) {
+// F-70 (V12): a rolling one-hour ledger of what every buy has spent on this lane (per-wallet size × wallet count),
+// so a cluster of individually-under-cap buys from a hostile page cannot drain a wallet set without ever asking.
+// Recorded BEFORE the trade goes out; re-read right before the write and the new entry APPENDED (old entries are
+// merged, never dropped by a racing tab) and only pruned by age. Returns the last-hour total including this buy.
+const BUY_WINDOW_MS = 60 * 60_000;
+const walletCount = (ids?: string[]) => (ids?.length ? ids.length : meta.selectedAccountIds.length ? meta.selectedAccountIds.length : meta.activeAccountId ? 1 : 1);
+const recordBuy = (total: number): number => {
+  try {
+    const l = loadLimits(); const lane = laneKey(); const now = Date.now();
+    const all = l.buys && typeof l.buys === 'object' ? l.buys : {};
+    const prev = Array.isArray(all[lane]) ? all[lane].filter((e) => Array.isArray(e) && now - Number(e[0]) < BUY_WINDOW_MS) : [];
+    const merged = [...prev, [now, total] as [number, number]].slice(-500);
+    saveLimits({ ...l, buys: { ...all, [lane]: merged } });
+    return merged.reduce((s, [, a]) => s + (Number(a) || 0), 0);
+  } catch { return total; }
+};
+async function tradeLimits(side: 'buy' | 'sell', size: number, s: Settings, wallets = 1) {
   const slip = Number(s.slippage) || 0;
   if (slip > SLIP_FREE && slip > (Number(loadLimits().slipOk) || SLIP_FREE)) {
     const ok = await ask({ title: 'High slippage', danger: true, ok: `Trade at ${slip}%`, html: `${sub(`Slippage is set to ${escHtml(slip)}%: a trade may fill up to ${escHtml(slip)}% worse than quoted.`)}${muted('Confirm once. Trades at this setting or lower won\'t ask again.')}` });
     if (!ok) throw new Error('Cancelled: slippage above 22% needs one confirmation in the vault');
     saveLimits({ ...loadLimits(), slipOk: slip });
   }
-  if (side === 'buy' && size > buyCap()) {
-    const ok = await ask({ title: 'Large buy', danger: true, ok: `Buy ${size} ${laneUnit()}`, html: `${sub(`${escHtml(size)} ${laneUnit()} per wallet is above your cap of ${escHtml(buyCap())} ${laneUnit()}.`)}${muted('The cap is in Settings.')}` });
-    if (!ok) throw new Error(`Cancelled: ${size} ${laneUnit()} is above the per-wallet cap`);
+  if (side === 'buy') {
+    const total = size * Math.max(1, wallets);
+    if (size > buyCap()) {
+      const ok = await ask({ title: 'Large buy', danger: true, ok: `Buy ${size} ${laneUnit()}`, html: `${sub(`${escHtml(size)} ${laneUnit()} per wallet is above your cap of ${escHtml(buyCap())} ${laneUnit()}.`)}${muted('The cap is in Settings.')}` });
+      if (!ok) throw new Error(`Cancelled: ${size} ${laneUnit()} is above the per-wallet cap`);
+      recordBuy(total);
+    } else {
+      // under the per-wallet cap: no per-click ask, but the hour's running total is watched — above ~5× the cap, ask once
+      const sum = recordBuy(total);
+      if (sum > buyCap() * 5) {
+        const ok = await ask({ title: 'Large hourly buy total', danger: true, ok: 'Continue', html: `${sub(`Buys in the last hour total ${escHtml(Number(sum.toFixed(6)))} ${laneUnit()} across your wallets — above 5× your cap of ${escHtml(buyCap())} ${laneUnit()}.`)}${muted('Confirm once. The cap is in Settings.')}` });
+        if (!ok) throw new Error(`Cancelled: the last hour's buys total above 5× the per-wallet cap`);
+      }
+    }
   }
+}
+// F-43/F-22 (V12): one trade per wallet+token+side is in flight at a time, held ACROSS TABS by a Web Lock
+// (ifAvailable — a contending press is turned away, never queued) and kept until the receipt lands or 120 s,
+// whichever first — NOT released the instant the broadcast returns. Before, the key was freed on 'submitted', so a
+// second press (or another tab) in the window between broadcast and receipt signed and spent the wallet again.
+const inFlightTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const releaseInFlight = (key: string) => { inFlight.delete(key); const t = inFlightTimers.get(key); if (t) { clearTimeout(t); inFlightTimers.delete(key); } };
+async function tradeGuard<T>(key: string, busy: () => T, fn: () => Promise<{ ret: T; landed?: Promise<unknown> | null }>): Promise<T> {
+  if (inFlight.has(key)) return busy();
+  const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (lk?.request) {
+    return lk.request('trench-trade-' + key, { ifAvailable: true }, async (lock) => {
+      if (!lock || inFlight.has(key)) return busy();
+      inFlight.add(key);
+      try { const { ret, landed } = await fn(); await Promise.race([Promise.resolve(landed ?? undefined).catch(() => {}), new Promise((r) => setTimeout(r, 120_000))]); return ret; }
+      finally { releaseInFlight(key); }
+    }) as Promise<T>;
+  }
+  inFlight.add(key);
+  try { const { ret, landed } = await fn(); inFlightTimers.set(key, setTimeout(() => releaseInFlight(key), 120_000)); Promise.resolve(landed ?? undefined).then(() => releaseInFlight(key), () => releaseInFlight(key)); return ret; }
+  catch (e) { releaseInFlight(key); throw e; }
 }
 async function trade(side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown, opts?: unknown) {
   tradesInFlight += 1; post({ t: 'busy', v: true });
-  try { await tradeLimits(side, Number(size), loadSettings()); return await tradeInner(side, token, size, accountIds, hint, opts); } finally { tradesInFlight -= 1; post({ t: 'busy', v: tradesInFlight > 0 }); }
+  try { await tradeLimits(side, Number(size), loadSettings(), walletCount(accountIds)); return await tradeInner(side, token, size, accountIds, hint, opts); } finally { tradesInFlight -= 1; post({ t: 'busy', v: tradesInFlight > 0 }); }
 }
 async function tradeInner(side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown, opts?: unknown) {
   keepHot();
@@ -2314,18 +2494,19 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
     let route: Awaited<ReturnType<typeof solRoute>>;
     try { route = await solRoute(token, hint); }
     catch (e) { const error = shortError(e); for (const a of targets) txEvent({ id, address: solOf(a), state: 'not_started', error }); throw e; }
-    const follow = (hash: string, address: string) => { (async () => { for (let i = 0; i < 90; i++) { await new Promise((ok) => setTimeout(ok, i < 20 ? 700 : 1500)); const r = await solReceipt(hash).catch(() => null); if (r && !r.pending) { txEvent({ id, address, state: r.status === 'success' ? 'confirmed' : 'reverted', hash, ...(r.error ? { error: r.error } : {}) }); return; } } })(); };
+    const follow = (hash: string, address: string) => (async () => { for (let i = 0; i < 90; i++) { await new Promise((ok) => setTimeout(ok, i < 20 ? 700 : 1500)); const r = await solReceipt(hash).catch(() => null); if (r && !r.pending) { txEvent({ id, address, state: r.status === 'success' ? 'confirmed' : 'reverted', hash, ...(r.error ? { error: r.error } : {}) }); return; } } })();
     const results: Result[] = await pooled(targets, poolSize('sol'), async (a) => {
       const address = solOf(a); const key = `${side}:${token}:${address}`;
-      if (inFlight.has(key)) { const error = `A ${side} of this token from this wallet is still being sent`; txEvent({ id, address, state: 'not_started', error }); return { name: a.name, address, ok: false, error, state: 'not_started' as TxState }; }
-      inFlight.add(key);
-      try { const { hash } = await solTradeOne(a, side, route, size, s); txEvent({ id, address, state: 'submitted', hash }); follow(hash, address); return { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }; }
-      catch (e) {
-        const error = shortError(e); const unknown = e instanceof SolSendUnknown && e.hash ? e.hash : '';
-        const state: TxState = unknown ? 'unknown' : 'not_started';
-        txEvent({ id, address, state, error, ...(unknown ? { hash: unknown } : {}) }); if (unknown) follow(unknown, address);
-        return { name: a.name, address, ok: false, error, state, ...(unknown ? { hash: unknown } : {}) };
-      } finally { inFlight.delete(key); }
+      const busy = (): Result => { const error = `A ${side} of this token from this wallet is still being sent`; txEvent({ id, address, state: 'not_started', error }); return { name: a.name, address, ok: false, error, state: 'not_started' as TxState }; };
+      return tradeGuard<Result>(key, busy, async () => {
+        try { const { hash } = await solTradeOne(a, side, route, size, s); txEvent({ id, address, state: 'submitted', hash }); return { ret: { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }, landed: follow(hash, address) }; }
+        catch (e) {
+          const error = shortError(e); const unknown = e instanceof SolSendUnknown && e.hash ? e.hash : '';
+          const state: TxState = unknown ? 'unknown' : 'not_started';
+          txEvent({ id, address, state, error, ...(unknown ? { hash: unknown } : {}) });
+          return { ret: { name: a.name, address, ok: false, error, state, ...(unknown ? { hash: unknown } : {}) }, landed: unknown ? follow(unknown, address) : null };
+        }
+      });
     });
     scheduleWatch(1500);
     const sent = results.filter((x) => x.ok).length;
@@ -2337,15 +2518,20 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
     if (!targets.length) throw new Error('No wallet selected');
     const s = loadSettings(); const t0 = performance.now();
     const route = await nearRoute(token, hint);
+    const nearFollow = (hash: string) => (async () => { for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 1500)); const r = await nearReceipt(hash).catch(() => null); if (r && !r.pending) return; } })();
     const results: Result[] = await pooled(targets, poolSize('near'), async (a) => {
       const address = nearAccountId(a) || a.address;
-      // one trade per wallet+token+side in flight, as on the EVM lanes (a double press used to send twice here)
+      // one trade per wallet+token+side in flight, held across tabs and until the receipt lands (as on the EVM lanes)
       const key = `near:${side}:${lc(token)}:${address}`;
-      if (inFlight.has(key)) return { name: a.name, address, ok: false, error: `A ${side} of this token from this wallet is still being sent`, state: 'not_started' as TxState };
-      inFlight.add(key);
-      try { const { hash } = await nearTradeOne(a, side, route, size, s.slippage); return { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }; }
-      catch (e) { return { name: a.name, address, ok: false, error: shortError(e), state: 'not_started' as TxState }; }
-      finally { inFlight.delete(key); }
+      const busy = (): Result => ({ name: a.name, address, ok: false, error: `A ${side} of this token from this wallet is still being sent`, state: 'not_started' as TxState });
+      return tradeGuard<Result>(key, busy, async () => {
+        try { const { hash } = await nearTradeOne(a, side, route, size, s.slippage); return { ret: { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }, landed: nearFollow(hash) }; }
+        catch (e) {
+          const unknown = e instanceof NearSendUnknown && e.hash ? e.hash : '';
+          const state: TxState = unknown ? 'unknown' : 'not_started';
+          return { ret: { name: a.name, address, ok: false, error: shortError(e), state, ...(unknown ? { hash: unknown } : {}) }, landed: unknown ? nearFollow(unknown) : null };
+        }
+      });
     });
     scheduleWatch(1200);
     return { ok: true, ms: Math.round(performance.now() - t0), results, route: 'near-dcl', timing: null };
@@ -2371,25 +2557,27 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
   if (targets.length > pool) nonceSheet(targets.slice(pool).map((a) => a.address)).catch(() => {});
   const results: Result[] = await pooled(targets, pool, async (a, idx) => {
     const key = `${side}:${addr}:${lc(a.address)}`;
-    if (inFlight.has(key)) { const error = `A ${side} of this token from this wallet is still being sent`; txEvent({ id, address: a.address, state: 'not_started', error }); return { name: a.name, address: a.address, ok: false, error, state: 'not_started' as TxState }; }
-    inFlight.add(key);
     const log = () => shared.w[lc(a.address)];
-    try {
-      const hash = await tradeOne(a, side, addr, size, route, s, shared);
-      const landedP = watchReceipt(hash, id, a.address);
-      // the buy is on its way; arm the sell path behind it so selling is one tx
-      // polled every block (not viem's 4 s): the wallet is armed ~0.3 s after its buy lands instead of 5-30 s, so a quick sell finds nothing to approve
-      // (the same receipt poll that feeds the page's states — one poll per hash, not two)
-      if (side === 'buy') landedP.then((r) => { if (r?.status === 'success') armSellPath(a, addr, route, 0, idx); }).catch(() => {});
-      return { name: a.name, address: a.address, ok: true, hash, state: 'submitted' as TxState, txs: log()?.txs || [], stages: log()?.stages || {} };
-    } catch (e) {
-      const err = e as SendError; const error = shortError(e);
-      // a failure before any signature is not_started; a refused signature stays signed; unknown keeps its hash so the page can follow it
-      const state: TxState = err.txState || 'not_started';
-      if (state === 'unknown' && err.hash) watchReceipt(err.hash, id, a.address);
-      if (!err.txState) txEvent({ id, address: a.address, state, error });
-      return { name: a.name, address: a.address, ok: false, error, state, ...(state === 'unknown' && err.hash ? { hash: err.hash } : {}), txs: log()?.txs || [], stages: log()?.stages || {} };
-    } finally { inFlight.delete(key); }
+    const busy = (): Result => { const error = `A ${side} of this token from this wallet is still being sent`; txEvent({ id, address: a.address, state: 'not_started', error }); return { name: a.name, address: a.address, ok: false, error, state: 'not_started' as TxState }; };
+    return tradeGuard<Result>(key, busy, async () => {
+      try {
+        const hash = await tradeOne(a, side, addr, size, route, s, shared);
+        const landedP = watchReceipt(hash, id, a.address);
+        // the buy is on its way; arm the sell path behind it so selling is one tx
+        // polled every block (not viem's 4 s): the wallet is armed ~0.3 s after its buy lands instead of 5-30 s, so a quick sell finds nothing to approve
+        // (the same receipt poll that feeds the page's states — one poll per hash, not two)
+        if (side === 'buy') landedP.then((r) => { if (r?.status === 'success') armSellPath(a, addr, route, 0, idx); }).catch(() => {});
+        return { ret: { name: a.name, address: a.address, ok: true, hash, state: 'submitted' as TxState, txs: log()?.txs || [], stages: log()?.stages || {} }, landed: landedP };
+      } catch (e) {
+        const err = e as SendError; const error = shortError(e);
+        // a failure before any signature is not_started; a refused signature stays signed; unknown keeps its hash so the page can follow it
+        const state: TxState = err.txState || 'not_started';
+        // keep the guard until the unknown tx's receipt (it may be on chain); a clean pre-sign failure frees it at once
+        const landed = state === 'unknown' && err.hash ? watchReceipt(err.hash, id, a.address) : null;
+        if (!err.txState) txEvent({ id, address: a.address, state, error });
+        return { ret: { name: a.name, address: a.address, ok: false, error, state, ...(state === 'unknown' && err.hash ? { hash: err.hash } : {}), txs: log()?.txs || [], stages: log()?.stages || {} }, landed };
+      }
+    });
   });
   // Stage clock of the click, in ms, slowest wallet per stage: route (hint -> verified route object),
   // balances (fee + balance + reserves, one batch), verify (route check, 0 after a prewarm), quote
@@ -2519,8 +2707,10 @@ async function tokenDecimals(token: `0x${string}`) {
 // that has never touched the source. Hop wallets stay in the vault (archived
 // once empty) so nothing can strand: `sweepHops` returns any dust.
 type Asset = { kind: 'eth' } | { kind: 'erc20'; address: `0x${string}`; symbol: string; decimals: number };
-type LegStatus = 'queued' | 'waiting' | 'sent' | 'confirmed' | 'failed' | 'skipped';
-type Leg = { id: string; from: `0x${string}`; to: `0x${string}`; amount: string | 'max'; asset: Asset; status: LegStatus; hash?: `0x${string}`; error?: string; after?: string; notBefore?: number; hop?: boolean; sentAt?: number; doneAt?: number; human?: number; nonce?: number };
+// 'signed' = write-ahead: locally signed and persisted (raw + hash + nonce) but not yet known-broadcast; 'unknown' =
+// broadcast attempted, outcome not known (settles by hash, never re-signed). Neither is terminal — both recover.
+type LegStatus = 'queued' | 'waiting' | 'signed' | 'sent' | 'unknown' | 'confirmed' | 'failed' | 'skipped';
+type Leg = { id: string; from: `0x${string}`; to: `0x${string}`; amount: string | 'max'; asset: Asset; status: LegStatus; hash?: `0x${string}`; raw?: `0x${string}`; rev?: number; error?: string; after?: string; notBefore?: number; hop?: boolean; sentAt?: number; doneAt?: number; human?: number; nonce?: number };
 type Job = { id: string; label: string; createdAt: number; status: 'running' | 'done' | 'failed' | 'cancelled'; hops: number; delay: [number, number]; legs: Leg[]; hopIds: string[]; asset: Asset; chain?: string };
 type MoveSpec = { fromIds: string[]; toIds?: string[]; toAddresses?: string[]; asset: Asset; amount: { mode: 'fixed' | 'pct'; value: number; per: 'source' | 'dest' }; hops?: number; delay?: [number, number]; label?: string; chain?: string };
 // One job store, one runner and one channel PER LANE (2026-10-19). The old shared 'trenches.jobs' + one runner lock let
@@ -2551,10 +2741,37 @@ async function syncEthGas(from: `0x${string}`, to?: `0x${string}`) {
 const readJobs = (): Job[] => { try { const all = JSON.parse(localStorage.getItem(JOBS_KEY) || '[]'); return Array.isArray(all) ? all.filter((j: Job) => j && j.chain === MOVE_LANE) : []; } catch { return []; } };
 const jobs: Job[] = readJobs();
 let isRunner = false;
+// F-35 (V12): a runner is fenced by an epoch. Whoever becomes the runner bumps this counter in storage and keeps the
+// value it saw; a new runner (a tab that STOLE the lock from a frozen holder) bumps it again, so the old holder's
+// captured epoch no longer matches and it must not sign another leg even if its lock callback has not yet rejected.
+const EPOCH_KEY = 'trenches.jobs.epoch.v2.' + MOVE_LANE;
+let myEpoch = -1;
+const bumpEpoch = () => { try { myEpoch = (Number(localStorage.getItem(EPOCH_KEY)) || 0) + 1; localStorage.setItem(EPOCH_KEY, String(myEpoch)); } catch { myEpoch = Date.now(); } };
+const epochOk = () => { try { return (Number(localStorage.getItem(EPOCH_KEY)) || 0) === myEpoch; } catch { return true; } };
+// only the current runner, at the current epoch, may write or sign
+const mayDrive = () => isRunner && epochOk();
+const bumpRev = (l: Leg) => { l.rev = (l.rev || 0) + 1; };
 const bus = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('trenches-jobs.v2.' + MOVE_LANE) : null;
 const running = new Set<string>();           // leg ids in flight
 const emitJobs = () => document.dispatchEvent(new CustomEvent('trench:jobs', { detail: jobs.map((j) => ({ ...j, legs: j.legs.map((l) => ({ ...l })) })) }));
-const saveJobs = () => { try { localStorage.setItem(JOBS_KEY, JSON.stringify(jobs.slice(-60))); } catch {} emitJobs(); };
+// F-63 (V12): a non-runner NEVER writes the store (it only mirrors + emits); the runner MERGES by per-leg `rev`
+// before writing, so a write never clobbers a leg another writer advanced further, and jobs a sibling tab created
+// (not yet adopted here) are preserved. Previously saveJobs wrote the whole in-memory array over the disk.
+const saveJobs = () => {
+  emitJobs();
+  if (!mayDrive()) return;                     // non-runners (and a fenced ex-runner) never write
+  try {
+    const disk = readJobs();
+    const byId = new Map(disk.map((j) => [j.id, j]));
+    for (const j of jobs) {                     // pull in any higher-rev leg a concurrent write left on disk (belt-and-braces)
+      const d = byId.get(j.id); if (!d) continue;
+      for (const leg of j.legs) { const dl = d.legs.find((x) => x.id === leg.id); if (dl && (dl.rev || 0) > (leg.rev || 0)) Object.assign(leg, dl); }
+    }
+    const seen = new Set(jobs.map((j) => j.id));
+    const merged = [...jobs, ...disk.filter((d) => !seen.has(d.id))];   // keep sibling-created jobs we have not adopted
+    localStorage.setItem(JOBS_KEY, JSON.stringify(merged.slice(-60)));
+  } catch {}
+};
 // a tab that is not the runner mirrors the runner's state from storage
 window.addEventListener('storage', (e) => {
   if (e.key !== JOBS_KEY) return;
@@ -2584,7 +2801,7 @@ async function ensureRunner(): Promise<boolean> {
   // nobody answered: whoever holds the lock is frozen, discarded or gone without releasing — take it
   if (typeof navigator !== 'undefined' && navigator.locks && !takingOver) {
     takingOver = true;
-    navigator.locks.request(RUNNER_LOCK, { steal: true }, async () => { await becomeRunner(); await new Promise(() => {}); }).catch(() => { takingOver = false; });
+    navigator.locks.request(RUNNER_LOCK, { steal: true }, async () => { await becomeRunner(); await new Promise(() => {}); }).catch(() => { takingOver = false; isRunner = false; });
     for (let i = 0; i < 20 && !isRunner; i += 1) await new Promise((r) => setTimeout(r, 100));
   } else if (!navigator?.locks) await becomeRunner();
   return isRunner;
@@ -2691,6 +2908,9 @@ async function startMove(plan: Plan, fromBus = false): Promise<{ ok: boolean; id
   requireUnlocked();
   if (!isRunner && !fromBus) { await ensureRunner().catch(() => {}); }
   if (!isRunner && !fromBus) { const r = await askRunner({ cmd: 'start', plan }).catch(() => null); if (r) return { ok: true, id: r.id }; }
+  // F-63 (V12): never create and persist a job as a non-runner (that write would be ignored by saveJobs and the job
+  // orphaned). Either this tab is the runner now, or the runner started it above — otherwise ask the user to retry.
+  if (!isRunner && !fromBus) throw new Error('Another tab is handling transfers right now — try again in a moment');
   // hop wallets: one chain per source→destination pair, wired into the legs now
   const hopIds: string[] = [];
   if (plan.hops) {
@@ -2718,28 +2938,37 @@ async function startMove(plan: Plan, fromBus = false): Promise<{ ok: boolean; id
   if (isRunner) tickJob(job);            // otherwise the runner adopts it from the storage event
   return { ok: true, id: job.id };
 }
-// failed and skipped legs go back to the queue; a leg that was broadcast is never sent twice
+// F-32 / design(d): a leg goes back to the queue (where it will be SIGNED again) only when that is safe — it failed
+// before any signature (no `raw`), or two default nodes proved it dropped. A signed/sent/unknown leg is never
+// re-queued (recovery re-broadcasts its SAME bytes). A cancelled job, and any leg cancelled by hand, never resume.
 function retryJob(id: string): any {
   const job = jobs.find((j) => j.id === id); if (!job) throw new Error('Unknown job');
+  if (job.status === 'cancelled') throw new Error('This move was cancelled — plan it again to send');   // F-32
   if (!isRunner) return ensureRunner().then((mine) => (mine ? retryJob(id) : askRunner({ cmd: 'retry', id })));
-  for (const l of job.legs) if ((l.status === 'failed' && !(l.hash && l.error !== 'dropped before mining')) || l.status === 'skipped') { l.status = 'queued'; delete l.error; delete l.hash; delete l.notBefore; }
+  for (const l of job.legs) {
+    if (l.error === 'cancelled') continue;                                      // F-32: a hand-cancelled leg never re-queues
+    const dropped = l.status === 'failed' && l.error === 'dropped before mining';
+    const retryable = (l.status === 'failed' && !l.raw) || dropped || l.status === 'skipped';
+    if (retryable) { l.status = 'queued'; delete l.error; delete l.hash; delete l.raw; delete l.notBefore; delete l.nonce; bumpRev(l); }
+  }
   job.status = 'running';
   saveJobs();
   tickJob(job);
   return { ok: true };
 }
 const terminal = (s: LegStatus) => s === 'confirmed' || s === 'failed' || s === 'skipped';
+const recovering = (s: LegStatus) => s === 'signed' || s === 'sent' || s === 'unknown';   // persisted, settles by hash, never re-signed
 function tickJob(job: Job) {
   if (job.chain !== MOVE_LANE || !MOVE_EVM) return;                 // another lane's job is never driven with this frame's client
   if (job.status === 'done' || job.status === 'failed') return;
   const byId = new Map(job.legs.map((l) => [l.id, l]));
   for (const leg of job.legs) {
-    if (leg.status === 'failed' || leg.status === 'skipped') { for (const d of job.legs) if (d.after === leg.id && !terminal(d.status)) { d.status = 'skipped'; d.error = 'previous hop did not land'; } }
+    if (leg.status === 'failed' || leg.status === 'skipped') { for (const d of job.legs) if (d.after === leg.id && !terminal(d.status) && !recovering(d.status)) { d.status = 'skipped'; d.error = 'previous hop did not land'; } }
   }
   const inFlightFrom = new Set(job.legs.filter((l) => running.has(l.id)).map((l) => l.from.toLowerCase()));
   for (const leg of job.legs) {
     if (terminal(leg.status) || running.has(leg.id)) continue;
-    if (leg.status === 'sent' && leg.hash) { running.add(leg.id); settleLeg(job, leg); continue; }
+    if (recovering(leg.status) && leg.hash) { running.add(leg.id); recoverLeg(job, leg); continue; }   // re-broadcast same bytes / settle by hash
     if (job.status === 'cancelled') continue;                         // let in-flight legs settle, start nothing new
     if (leg.after && byId.get(leg.after)?.status !== 'confirmed') continue;
     if (inFlightFrom.has(leg.from.toLowerCase())) continue;        // one nonce at a time per wallet
@@ -2753,47 +2982,93 @@ function tickJob(job: Job) {
     parkHops(job).catch(() => {});
   }
 }
+// F-58/F-69/F-22/F-35 (V12): write-ahead signing under the cross-tab lane lock. Sign + PERSIST {signed, raw, hash,
+// nonce} BEFORE broadcasting; any error after that is 'unknown' (settles by hash), never a re-signable 'failed'.
 async function sendLeg(job: Job, leg: Leg) {
-  try {
-    // hop legs and the final delivery pause a random while, so the chain does not read as one burst
-    if (leg.after) {
-      if (!leg.notBefore) { const [a, b] = job.delay; leg.notBefore = Date.now() + Math.round((a + Math.random() * Math.max(0, b - a)) * 1000); }
-      if (Date.now() < leg.notBefore) { leg.status = 'waiting'; saveJobs(); await new Promise((r) => setTimeout(r, leg.notBefore! - Date.now())); }
-      if (leg.status !== 'waiting' && leg.status !== 'queued') { running.delete(leg.id); tickJob(job); return; }   // cancelled while pausing
+  await laneLock(leg.from, async () => {
+    try {
+      // hop legs and the final delivery pause a random while, so the chain does not read as one burst
+      if (leg.after) {
+        if (!leg.notBefore) { const [a, b] = job.delay; leg.notBefore = Date.now() + Math.round((a + Math.random() * Math.max(0, b - a)) * 1000); bumpRev(leg); }
+        if (Date.now() < leg.notBefore) { leg.status = 'waiting'; bumpRev(leg); saveJobs(); await new Promise((r) => setTimeout(r, leg.notBefore! - Date.now())); }
+      }
+      // re-read INSIDE the lock: only a still-queued/waiting leg is signed (a cancel, or another driver, may have moved it)
+      if (leg.status !== 'queued' && leg.status !== 'waiting') { running.delete(leg.id); tickJob(job); return; }
+      if (!mayDrive()) { running.delete(leg.id); return; }            // F-35: a fenced ex-runner signs nothing
+      const acct = unlocked?.find((a) => a.address.toLowerCase() === leg.from.toLowerCase());
+      if (!acct) throw new Error('source wallet is not in this vault');
+      if (!HOST && !leg.hop && !confirmedJobs.has(job.id) && !isOwn(leg.to)) throw new Error('an outside leg of a job this tab did not confirm — start the move again');
+      const account = accountOf(acct);
+      const gasPrice = await feeFor(1);
+      const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' });
+      let raw: `0x${string}`;
+      if (leg.asset.kind === 'eth') {
+        await syncEthGas(account.address, leg.to as `0x${string}`);
+        const bal = await publicClient.getBalance({ address: account.address });
+        const value = leg.amount === 'max' ? bal - gasPrice * ETH_GAS : BigInt(leg.amount);
+        if (value <= 0n) throw new Error('nothing left after gas');
+        if (bal < value + gasPrice * ETH_GAS) throw new Error(`insufficient ETH: has ${Number(formatEther(bal)).toFixed(5)}, needs ${Number(formatEther(value + gasPrice * ETH_GAS)).toFixed(5)}`);
+        leg.human = Number(formatEther(value));
+        raw = await account.signTransaction({ to: leg.to, value, gas: ETH_GAS, gasPrice, nonce, account, chainId: chain.id, type: 'legacy' } as any);
+      } else {
+        const bal = await publicClient.readContract({ address: leg.asset.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+        const value = leg.amount === 'max' ? bal : BigInt(leg.amount);
+        if (value <= 0n || bal < value) throw new Error(`insufficient ${leg.asset.symbol}`);
+        leg.human = humanOf(value, leg.asset);
+        const sim = await publicClient.simulateContract({ account, address: leg.asset.address, abi: ERC20_ABI, functionName: 'transfer', args: [leg.to, value], gasPrice });
+        const { account: _a, chain: _c, ...body } = sim.request as Record<string, unknown>;
+        raw = await account.signTransaction({ ...body, account, nonce, chainId: chain.id, type: 'legacy' } as any);
+      }
+      // WRITE-AHEAD: persist the signed bytes + their own hash + the nonce BEFORE broadcasting. If this tab dies now,
+      // recovery re-broadcasts this exact `raw` and settles by this hash — it never re-signs, so nothing goes out twice.
+      leg.raw = raw; leg.nonce = nonce; leg.hash = keccak256(raw); leg.status = 'signed'; leg.sentAt = Date.now(); bumpRev(leg); saveJobs();
+      noteNonceUsed(account.address, nonce);   // the trade lanes' counter steps past this nonce
+      try {
+        await broadcast(raw);                  // returns the local hash; a node hash != local is an error
+        leg.status = 'sent'; bumpRev(leg); saveJobs();
+      } catch (e) {
+        leg.status = 'unknown'; leg.error = shortError(e); bumpRev(leg); saveJobs();   // F-58/F-69: after persist → unknown, never failed
+      }
+      await settleLeg(job, leg);
+    } catch (e) {
+      // reached only BEFORE the bytes were persisted (no `raw`): nothing is on chain — a clean, retryable failure
+      if (!leg.raw) { leg.status = 'failed'; leg.error = shortError(e); leg.doneAt = Date.now(); running.delete(leg.id); bumpRev(leg); saveJobs(); scheduleWatch(50); tickJob(job); }
+      else { leg.status = 'unknown'; leg.error = shortError(e); bumpRev(leg); saveJobs(); await settleLeg(job, leg); }
     }
-    const acct = unlocked?.find((a) => a.address.toLowerCase() === leg.from.toLowerCase());
-    if (!acct) throw new Error('source wallet is not in this vault');
-    if (!HOST && !leg.hop && !confirmedJobs.has(job.id) && !isOwn(leg.to)) throw new Error('an outside leg of a job this tab did not confirm — start the move again');
-    const account = accountOf(acct);
-    const client = createWalletClient({ account, chain, transport });
-    const gasPrice = await feeFor(1);
-    const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' });
-    leg.nonce = nonce;
-    let hash: `0x${string}`;
-    if (leg.asset.kind === 'eth') {
-      await syncEthGas(account.address, leg.to as `0x${string}`);
-      const bal = await publicClient.getBalance({ address: account.address });
-      const value = leg.amount === 'max' ? bal - gasPrice * ETH_GAS : BigInt(leg.amount);
-      if (value <= 0n) throw new Error('nothing left after gas');
-      if (bal < value + gasPrice * ETH_GAS) throw new Error(`insufficient ETH: has ${Number(formatEther(bal)).toFixed(5)}, needs ${Number(formatEther(value + gasPrice * ETH_GAS)).toFixed(5)}`);
-      leg.human = Number(formatEther(value));
-      hash = await client.sendTransaction({ to: leg.to, value, gas: ETH_GAS, gasPrice, nonce });
-    } else {
-      const bal = await publicClient.readContract({ address: leg.asset.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-      const value = leg.amount === 'max' ? bal : BigInt(leg.amount);
-      if (value <= 0n || bal < value) throw new Error(`insufficient ${leg.asset.symbol}`);
-      leg.human = humanOf(value, leg.asset);
-      const sim = await publicClient.simulateContract({ account, address: leg.asset.address, abi: ERC20_ABI, functionName: 'transfer', args: [leg.to, value], gasPrice });
-      hash = await client.writeContract({ ...sim.request, nonce });
-    }
-    noteNonceUsed(account.address, nonce);   // a move signs with the node's nonce: the trade lanes' counter steps past it, or the next trade from this wallet re-signs after "nonce too low"
-    leg.hash = hash; leg.status = 'sent'; leg.sentAt = Date.now(); saveJobs();
-    await settleLeg(job, leg);
-  } catch (e) {
-    leg.status = 'failed'; leg.error = shortError(e); leg.doneAt = Date.now(); running.delete(leg.id); saveJobs();
-    scheduleWatch(50);
-    tickJob(job);
+  });
+}
+// recovery of a persisted leg: re-broadcast the SAME bytes once (idempotent — "already known" is success), settle by hash
+async function recoverLeg(job: Job, leg: Leg) {
+  if (!mayDrive()) { running.delete(leg.id); return; }
+  if (leg.raw && (leg.status === 'signed' || leg.status === 'unknown')) {
+    await laneLock(leg.from, async () => { try { await broadcast(leg.raw!); } catch {} });
+    if (leg.status === 'signed' || leg.status === 'unknown') { leg.status = 'sent'; bumpRev(leg); saveJobs(); }
   }
+  await settleLeg(job, leg);
+}
+// one default node's verdict on a leg: has the wallet's latest nonce passed this leg's, and is the tx definitely gone?
+async function nodeSays(url: string, address: `0x${string}`, hash: `0x${string}`, nonce: number): Promise<{ higher: boolean | null; notFound: boolean | null }> {
+  try {
+    const body = [
+      { jsonrpc: '2.0', id: 1, method: 'eth_getTransactionCount', params: [address, 'latest'] },
+      { jsonrpc: '2.0', id: 2, method: 'eth_getTransactionByHash', params: [hash] },
+    ];
+    const j = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) }).then((r) => r.json());
+    if (!Array.isArray(j)) return { higher: null, notFound: null };
+    const cnt = j.find((x: any) => x?.id === 1); const tx = j.find((x: any) => x?.id === 2);
+    if (!cnt || cnt.error || cnt.result == null) return { higher: null, notFound: null };
+    const higher = Number(BigInt(cnt.result)) > nonce;
+    if (!tx || tx.error) return { higher, notFound: null };   // count known, tx lookup failed: NOT a proof of absence
+    return { higher, notFound: tx.result === null };
+  } catch { return { higher: null, notFound: null }; }
+}
+// F-69 / design(c): dropped only when TWO default nodes BOTH show the nonce has passed AND BOTH report not-found.
+// A lookup error on either side is not a proof — the leg keeps polling, so a live tx is never declared gone and re-sent.
+async function provenDropped(leg: Leg): Promise<boolean> {
+  if (leg.nonce == null || !leg.hash) return false;
+  const urls = DEFAULT_RPCS.filter(isRpcUrl);
+  const votes = await Promise.all(urls.map((u) => nodeSays(u, leg.from, leg.hash!, leg.nonce!)));
+  return votes.filter((v) => v.higher === true && v.notFound === true).length >= 2;
 }
 async function settleLeg(job: Job, leg: Leg) {
   try {
@@ -2801,16 +3076,12 @@ async function settleLeg(job: Job, leg: Leg) {
     leg.status = r.status === 'success' ? 'confirmed' : 'failed';
     if (r.status !== 'success') leg.error = 'reverted on chain';
   } catch (e) {
-    // no receipt. If the wallet's nonce moved past this transaction it will never mine
-    // (dropped / replaced): the funds never left, so the leg fails and can be retried.
-    const mined = await publicClient.getTransactionCount({ address: leg.from, blockTag: 'latest' }).catch(() => -1);
-    const gone = leg.nonce != null && mined > leg.nonce && !(await publicClient.getTransactionReceipt({ hash: leg.hash! }).catch(() => null));
-    if (gone) { leg.status = 'failed'; leg.error = 'dropped before mining'; leg.doneAt = Date.now(); running.delete(leg.id); saveJobs(); tickJob(job); return; }
-    running.delete(leg.id); saveJobs();
+    if (await provenDropped(leg)) { leg.status = 'failed'; leg.error = 'dropped before mining'; leg.doneAt = Date.now(); running.delete(leg.id); bumpRev(leg); saveJobs(); tickJob(job); return; }
+    running.delete(leg.id); bumpRev(leg); saveJobs();
     setTimeout(() => tickJob(job), 5000);
     return;
   }
-  leg.doneAt = Date.now(); running.delete(leg.id); saveJobs();
+  leg.doneAt = Date.now(); running.delete(leg.id); bumpRev(leg); saveJobs();
   scheduleWatch(50);
   tickJob(job);
 }
@@ -2843,8 +3114,9 @@ async function sweepHops(toId: string, auth?: Auth) {
 function cancelJob(id: string): any {
   const job = jobs.find((j) => j.id === id); if (!job) throw new Error('Unknown job');
   if (!isRunner) return ensureRunner().then((mine) => (mine ? cancelJob(id) : askRunner({ cmd: 'cancel', id })));
-  for (const l of job.legs) if (l.status === 'queued' || l.status === 'waiting') { l.status = 'skipped'; l.error = 'cancelled'; }
+  for (const l of job.legs) if (l.status === 'queued' || l.status === 'waiting') { l.status = 'skipped'; l.error = 'cancelled'; bumpRev(l); }
   job.status = 'cancelled';
+  confirmedJobs.delete(id);        // F-32: a cancelled job's outside legs must not resume on a bus 'start'/retry replay without a fresh confirmOutside
   saveJobs();
   tickJob(job);
   return { ok: true };
@@ -2854,6 +3126,7 @@ function cancelJob(id: string): any {
 // storage — money in flight is never orphaned by a closed tab.
 async function becomeRunner() {
   isRunner = true;
+  bumpEpoch();                                   // F-35: claim a fresh epoch; a later runner that steals the lock bumps past us
   jobs.splice(0, jobs.length, ...readJobs());
   await mergeFromDisk().catch(() => {});
   for (const j of jobs) if (j.status === 'running' || j.status === 'cancelled') tickJob(j);
@@ -2861,7 +3134,7 @@ async function becomeRunner() {
 }
 ready.then(() => {
   emitJobs();
-  if (typeof navigator !== 'undefined' && navigator.locks) navigator.locks.request(RUNNER_LOCK, async () => { await becomeRunner(); await new Promise(() => {}); });
+  if (typeof navigator !== 'undefined' && navigator.locks) navigator.locks.request(RUNNER_LOCK, async () => { await becomeRunner(); await new Promise(() => {}); }).catch(() => { isRunner = false; });   // F-35: lock lost/stolen → stop driving
   else becomeRunner();
 });
 
@@ -3012,6 +3285,9 @@ async function adoptAccounts(src: { accounts: Account[]; meta?: VaultMeta; setti
   requireUnlocked(); const list = allAccounts();
   let added = 0;
   for (const [m, sd] of Object.entries(src.seeds || {})) if (/^0x[0-9a-f]{40}$/.test(m) && /^0x[0-9a-f]{64}$/.test(String(sd)) && !seeds[m]) seeds[m] = String(sd);
+  // V12 F-28: carry the stored main-wallet signatures (ms:<main>) too, so phone access can be re-sealed after a file
+  // restore without a second signature. Harmless if stale: mainSigFor re-verifies each against the local seed before use.
+  for (const [k, v] of Object.entries(src.seeds || {})) if (/^ms:0x[0-9a-f]{40}$/.test(k) && /^0x[0-9a-fA-F]{130}$/.test(String(v)) && !hasOwn(seeds, k)) seeds[k] = String(v);
   // the salts of the device that wrote the backup: its v2 profile blobs open here too (ours stays ours)
   adoptSalts(Object.entries(src.seeds || {}).filter(([k]) => k === SALT || k.startsWith(SALT + ':')).map(([, sd]) => String(sd)));
   for (const a of src.accounts || []) {
@@ -3397,8 +3673,36 @@ async function gate(action: GateAction, auth?: Auth): Promise<void> {
 // An outside destination is one whose key this vault does not hold. A Privy wallet is an address the PAGE
 // attached (linkExternal): the frame cannot tell the user's main from an address a script named, so funds to
 // it take the outside path (the 'withdraw' gate and a trusted click on the address), like any other address.
-const ownAccounts = () => requireUnlocked().filter((a) => !a.ext && /^0x[0-9a-fA-F]{64}$/.test(a.key));
+// V12 F-34: a wallet the page imported (via:'page') is NOT counted among the vault's own for transfers — sending to it
+// takes the outside / withdrawal path, so a page cannot plant its own key and then sweep to it as if it were ours.
+const ownAccounts = () => requireUnlocked().filter((a) => !a.ext && a.via !== 'page' && /^0x[0-9a-fA-F]{64}$/.test(a.key));
 const isOwn = (to: string) => ownAccounts().some((a) => (SOL_MODE ? solAddressOf(a) === to : same(NEAR_MODE ? nearAccountId(a) : a.address, to)));
+// V12 F-56: a main address comes from the page — validate it to the EVM shape before it is used as a key into `seeds`
+// (so 'constructor' and the like can never be a lookup), and read seeds only through own properties.
+const mainAddr = (a: unknown): string => { const m = lc(a as string); if (!/^0x[0-9a-f]{40}$/.test(m)) throw new Error('Bad main address'); return m; };
+// own-property lookup (Object.hasOwn semantics; written this way so the current tsconfig lib accepts it): a main address
+// taken from the page can never reach an inherited property like 'constructor' on the seeds map.
+const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
+const seedOf = (m: string): string | undefined => (hasOwn(seeds, m) ? seeds[m] : undefined);
+// V12 F-28: the slot in `seeds` holding a main's own MAIN_MSG signature, stored at mainAttach so a later recovery seal
+// can bind to it; and a verified lookup of it.
+const MS = (m: string): string => 'ms:' + lc(m);
+const mainSigStored = (m: string): string => (hasOwn(seeds, MS(m)) ? seeds[MS(m)] : '');
+// V12 F-28: the main's own MAIN_MSG signature to bind a recovery copy to — the one stored when this main was attached
+// here, or (for a main attached before this build) one the caller hands in. Verified both ways before use: it must be
+// the main's signature over its text AND derive exactly this main's seed, so a recovery copy is only ever bound to the
+// real main. Remembered once seen, so turning phone access on later needs no second signature.
+async function mainSigFor(m: string, provided?: string): Promise<{ sig: `0x${string}`; mv: MainMsgVersion }> {
+  const seed = seedOf(m); if (!seed) throw new Error('Main wallet not attached on this device');
+  const mv = mvOf(m);
+  const sig = /^0x[0-9a-fA-F]{130}$/.test(String(provided || '')) ? String(provided) : mainSigStored(m);
+  if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) throw new Error('Re-sign with your main wallet to turn phone access on for this device');
+  const signer = await recoverMessageAddress({ message: MAIN_MSG(m, mv), signature: sig as `0x${string}` }).catch(() => '');
+  if (!same(signer, m)) throw new Error('That is not this main wallet\'s signature');
+  if (await seedOfSignature(sig) !== seed) throw new Error('That main-wallet signature does not match this account');
+  if (!hasOwn(seeds, MS(m))) seeds[MS(m)] = sig;
+  return { sig: sig as `0x${string}`, mv };
+}
 // the outside path for a destination named by wallet id (distribute / consolidate / sweep): gate, then the address in a dialog
 async function outsideOk(to: Account, what: string, auth?: Auth) {
   await gate('withdraw', auth);
@@ -3443,29 +3747,46 @@ async function once<T extends Record<string, unknown>>(opts: TransferOpts, what:
   const k = String(raw);
   if (!/^[A-Za-z0-9_.:-]{8,100}$/.test(k)) throw new Error('Bad idempotency key (8–100 of A–Z a–z 0–9 _ . : -)');
   const f = JSON.stringify(what);
-  const live = idemLive.get(k);
-  if (live) { if (live.f !== f) throw new Error('This idempotency key belongs to another transfer'); return live.p.then((r) => ({ ...r, idempotent: true })); }
-  const rec = idemRead()[k];
-  if (rec && Date.now() - rec.at < IDEM_MS) {
-    if (rec.f !== f) throw new Error('This idempotency key belongs to another transfer');
-    if (rec.s === 'sent') return { ...(rec.r || {}), ok: true, idempotent: true } as unknown as T;
-    if (rec.s === 'sending') throw Object.assign(new Error('Status unknown — this transfer was started before and its outcome was not recorded; check wallet activity before sending again'), { name: 'TransferUnknown', unknown: true, idempotent: true });
-    throw Object.assign(new Error(rec.e || 'This transfer failed'), { name: rec.n || 'Error', idempotent: true });
-  }
-  let began = false;
-  const p = (async () => {
-    try {
-      const r = await run(() => { began = true; idemWrite(k, { f, s: 'sending', at: Date.now() }); });
-      if (began) idemWrite(k, { f, s: 'sent', at: Date.now(), r: JSON.parse(JSON.stringify(r)) });
-      return r;
-    } catch (e) {
-      // before the send: nothing happened, the key stays free; after: the outcome is this error, kept for the window
-      if (began) idemWrite(k, { f, s: 'failed', at: Date.now(), e: String((e as Error)?.message || e).slice(0, 500), n: String((e as Error)?.name || 'Error') });
-      throw e;
+  // F-61 (V12): the record is read and written under a cross-tab Web Lock keyed by the idempotency key, so the
+  // check ("already sent? already sending?") and the first write ('sending') are one atomic step — two tabs (or two
+  // presses) sharing a key can never both pass the check and both send. The record is re-read INSIDE the lock.
+  const body = async (): Promise<T> => {
+    const live = idemLive.get(k);
+    if (live) { if (live.f !== f) throw new Error('This idempotency key belongs to another transfer'); return live.p.then((r) => ({ ...r, idempotent: true })); }
+    const rec = idemRead()[k];
+    if (rec && Date.now() - rec.at < IDEM_MS) {
+      if (rec.f !== f) throw new Error('This idempotency key belongs to another transfer');
+      if (rec.s === 'sent') return { ...(rec.r || {}), ok: true, idempotent: true } as unknown as T;
+      if (rec.s === 'sending') throw Object.assign(new Error('Status unknown — this transfer was started before and its outcome was not recorded; check wallet activity before sending again'), { name: 'TransferUnknown', unknown: true, idempotent: true });
+      throw Object.assign(new Error(rec.e || 'This transfer failed'), { name: rec.n || 'Error', idempotent: true });
     }
-  })();
-  idemLive.set(k, { f, p });
-  try { return await p; } finally { idemLive.delete(k); }
+    let began = false;
+    const p = (async () => {
+      try {
+        const r = await run(() => { began = true; idemWrite(k, { f, s: 'sending', at: Date.now() }); });
+        if (began) idemWrite(k, { f, s: 'sent', at: Date.now(), r: JSON.parse(JSON.stringify(r)) });
+        return r;
+      } catch (e) {
+        const err = e as { preSend?: boolean; unknown?: boolean; txState?: string } & Error;
+        if (began) {
+          // F-42 (V12): a pre-send failure (nothing was executed, flagged {preSend:true} by the caller — e.g. perps'
+          // sufficiency check) DELETES the record so the caller may retry the same key. Never a terminal 'failed'.
+          if (err?.preSend === true) idemWrite(k, null);
+          // A send whose OUTCOME IS UNKNOWN (Sol/NearSendUnknown from the sol/near engines, or an EVM broadcast that
+          // came back 'unknown') keeps the record 'sending' — NOT 'failed'. 'failed' would let a retry re-send a
+          // transfer that may already be on chain; 'sending' makes the retry report "status unknown, check first".
+          else if (err instanceof SolSendUnknown || err instanceof NearSendUnknown || err?.unknown === true || err?.txState === 'unknown') idemWrite(k, { f, s: 'sending', at: Date.now() });
+          // a real pre-chain failure: the outcome is this error, kept for the window
+          else idemWrite(k, { f, s: 'failed', at: Date.now(), e: String((e as Error)?.message || e).slice(0, 500), n: String((e as Error)?.name || 'Error') });
+        }
+        throw e;
+      }
+    })();
+    idemLive.set(k, { f, p });
+    try { return await p; } finally { idemLive.delete(k); }
+  };
+  const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  return lk?.request ? (lk.request('trench-idem-' + k, body) as Promise<T>) : body();
 }
 // a page script may only ever report; the gate decides from the server copy
 async function twofaPolicy(src: { accessToken?: unknown; enabled?: unknown; gates?: unknown } | null | undefined) {
@@ -3693,9 +4014,9 @@ const engine = {
     if (nearLine && nearLine !== nearAccountId(a)) throw new Error('Refused: the NEAR line names another wallet');
     return { ok: true, address: a.address, signature: await privateKeyToAccount(a.key).signMessage({ message: msg }), ...(solLine ? { sol: solLine, solSignature: solSignText(a.key, msg) } : {}), ...(nearLine ? { near: nearLine, nearSignature: nearSignText(a.key, msg) } : {}) };
   },
-  create: async (name?: string, opts?: { recovery?: string; signature?: string }) => {
+  create: async (name?: string, opts?: { recovery?: string; signature?: string; mainSignature?: string }) => {
     await ready; requireUnlocked();
-    const main = meta.main && seeds[lc(meta.main)] ? lc(meta.main) : '';
+    const main = meta.main && hasOwn(seeds, lc(meta.main)) ? lc(meta.main) : '';   // V12 F-56: own-property lookup
     // Owner decision 2026-10-19: a NEW account whose main is an external wallet (Rabby / MetaMask) gets phone access in the
     // same trusted click that creates its first wallet — one line in this dialog, no second window. The page hands over
     // the account's Privy wallet and its signature over RECOVERY_MSG; nothing is sealed unless the user clicks here.
@@ -3709,14 +4030,20 @@ const engine = {
       if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
       const label = String(name || '').trim() || `Wallet ${subsOf(main).length + 1}`;
       const first = !subsOf(main).length;
-      if (!(await ask({ title: first ? 'Create your first wallet' : 'Create a wallet', ok: 'Create wallet', cancelLabel: 'Not now', html: `${sub(`Create ${escHtml(label)}, back it up to your account and restore it on any device you log into.`)}${signedIn(main)}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
+      // V12 F-20: show the full recovery (login) wallet address so the user can check what they are sealing to.
+      if (!(await ask({ title: first ? 'Create your first wallet' : 'Create a wallet', ok: 'Create wallet', cancelLabel: 'Not now', html: `${sub(`Create ${escHtml(label)}, back it up to your account and restore it on any device you log into.`)}${signedIn(main)}${addrRows([{ name: 'Recovery wallet', address: r }])}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
       rq = { r, sig: String(opts.signature) };
     }
     if (rq && main) {
-      const rk = await sealRecovery(main, rq.r, rq.sig, seeds[main]);
+      // V12 F-28: bind the recovery copy to the main's own signature (stored at attach, or handed in for an older main)
+      const { sig, mv } = await mainSigFor(main, opts?.mainSignature);
+      const rk = await sealRecovery(main, rq.r, rq.sig, seeds[main], sig, mv);
       recoveryChange.set(main, { rk, at: Date.now() });
     }
-    if (main) {
+    // V12 F-28: on an 'rk1' main (seed from an unbound legacy recovery copy) a new wallet is a standalone generated key —
+    // NOT derived from that seed and NOT sealed into the account backup. A seed we cannot vouch for must not mint
+    // spendable wallets or draw more keys under it; back these up with a file. A real mainAttach flips it back to derived.
+    if (main && meta.seedSrc?.[main] !== 'rk1') {
       const subs = subsOf(main);
       if (subs.length >= SUB_CAP) throw new Error(`Up to ${SUB_CAP} trading wallets per main wallet`);
       let index = subs.reduce((m, a) => Math.max(m, a.index ?? -1), -1) + 1;
@@ -3733,16 +4060,16 @@ const engine = {
     return { ok: true, id, ...summary() };
   },
   // ── main wallet: attach (one signature), sync with the account profile, publish the profile, detach ──
-  mainStatus: async (address: string) => { await ready; const m = lc(address); return { ok: true, attached: !!seeds[m], current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: seeds[m] ? await fingerprint(seeds[m]) : '', mv: mvOf(m), keyMissing: !!keyMissing, ...storageFlags() }; },
+  mainStatus: async (address: string) => { await ready; const m = mainAddr(address); const sd = seedOf(m); return { ok: true, attached: !!sd, current: meta.main === m, subs: subsOf(m).length, cap: SUB_CAP, fp: sd ? await fingerprint(sd) : '', mv: mvOf(m), keyMissing: !!keyMissing, ...storageFlags() }; },
   // the main is a Privy embedded wallet or the external wallet the user logged in with (MetaMask & co. sign the same text)
   // mv: which fixed text was signed — 1 (copytrade.gg, every older account) or 2 (motion.gift, accounts created since)
   mainAttach: async (src: { address: string; signature: string; expectFp?: string; mv?: number }) => {
     await ready; if (!HOST) throw new Error('main wallets attach in the vault frame only');
     requireUnlocked();
-    const m = lc(src?.address); if (!/^0x[0-9a-f]{40}$/.test(m)) throw new Error('Bad main address');
+    const m = mainAddr(src?.address);   // V12 F-56
     const mv: MainMsgVersion = src?.mv === 2 ? 2 : 1;
     // a main already attached here keeps the text it was attached with: the other one would derive other wallets
-    if (seeds[m] && mvOf(m) !== mv) throw new Error(`This main wallet is attached here with the v${mvOf(m)} text — sign that one`);
+    if (seedOf(m) && mvOf(m) !== mv) throw new Error(`This main wallet is attached here with the v${mvOf(m)} text — sign that one`);
     // the signature must be the main's own, over the fixed text — not any 65 bytes a page hands over
     const signer = await recoverMessageAddress({ message: MAIN_MSG(m, mv), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
     if (!same(signer, m)) throw new Error('That signature is not from this main wallet');
@@ -3753,13 +4080,18 @@ const engine = {
     // (buildProfile under its own seed: the entry opens, profile.fp matches) and would attach that main with no click —
     // and mainProfile(main) then seals every key of this vault under that seed. Same for expectFp and the profile: page
     // data. An empty frame has no anchor of its own to tell the account's main from a foreign one; only this click does.
-    if (!seeds[m] && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
+    if (!seedOf(m) && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
     const seed = await seedOfSignature(String(src?.signature || ''));
     const fp = await fingerprint(seed);
     // the account's profile names the fingerprint of the seed it was built with: a different signature is refused before anything is kept
     if (src.expectFp && src.expectFp !== fp) throw new Error('fingerprint mismatch: this signature does not match the one that created the account\'s trading wallets');
-    if (seeds[m] && seeds[m] !== seed) throw new Error('This main wallet signed differently than before — the signature is not deterministic, trading wallets cannot be re-derived from it');
+    if (seedOf(m) && seedOf(m) !== seed) throw new Error('This main wallet signed differently than before — the signature is not deterministic, trading wallets cannot be re-derived from it');
     seeds[m] = seed; meta.main = m;
+    // V12 F-28: this is the main's OWN verified signature (checked just above). Remember it to bind future recovery seals,
+    // and mark the seed source 'main' — if it was 'rk1' (restored from an unbound legacy copy), this upgrades it and the
+    // full account backup resumes.
+    seeds[MS(m)] = String(src.signature);
+    meta.seedSrc = { ...(meta.seedSrc || {}), [m]: 'main' };
     if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
     await persist();
     return { ok: true, fp, mv, ...storageFlags(), ...summary() };
@@ -3767,16 +4099,20 @@ const engine = {
   // ── account recovery v1 (opt-in): seal this main's seed to the account's Privy embedded wallet ──
   // Only on a device where the main is attached (the seed is here), only after a trusted click in this frame: a page that
   // could turn it on silently would widen who can open the account's wallets (see vaultRecovery.ts RECOVERY_MSG).
-  mainRecoverySeal: async (src: { address: string; recovery: string; signature: string }) => {
+  mainRecoverySeal: async (src: { address: string; recovery: string; signature: string; mainSignature?: string }) => {
     await ready; if (!HOST) throw new Error('vault frame only');
     requireUnlocked();
-    const m = lc(src?.address), r = lc(src?.recovery);
-    if (!seeds[m]) throw new Error('Main wallet not attached on this device');
+    const m = mainAddr(src?.address), r = lc(src?.recovery);   // V12 F-56
+    if (!seedOf(m)) throw new Error('Main wallet not attached on this device');
     if (!/^0x[0-9a-f]{40}$/.test(r) || r === m) throw new Error('Bad recovery wallet');
     const signer = await recoverMessageAddress({ message: RECOVERY_MSG(m, r), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
     if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
-    if (!(await ask({ title: 'Turn on phone access', ok: 'Turn on', cancelLabel: 'Not now', html: `${sub('Sign in on your phone or any browser and your wallets appear there. No file, no login wallet.')}${signedIn(m)}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
-    const rk = await sealRecovery(m, r, String(src.signature), seeds[m]);
+    // V12 F-28: resolve + verify the main's own signature BEFORE the dialog, so a main attached before this build that
+    // can no longer be bound fails loudly here (asking the user to re-sign) rather than sealing an unbound copy.
+    const { sig, mv } = await mainSigFor(m, src.mainSignature);
+    // V12 F-20: show the full recovery (login) wallet address the seed is being sealed to.
+    if (!(await ask({ title: 'Turn on phone access', ok: 'Turn on', cancelLabel: 'Not now', html: `${sub('Sign in on your phone or any browser and your wallets appear there. No file, no login wallet.')}${signedIn(m)}${addrRows([{ name: 'Recovery wallet', address: r }])}${muted(RECOVERY_TRADEOFF)}` }))) throw new Error('Cancelled');
+    const rk = await sealRecovery(m, r, String(src.signature), seeds[m], sig, mv);
     recoveryChange.set(m, { rk, at: Date.now() }); meta.changedAt = Date.now();
     await persist(); pushBackupState();
     return { ok: true, recovery: r };
@@ -3784,7 +4120,7 @@ const engine = {
   mainRecoveryOff: async (src: { address: string }) => {
     await ready; if (!HOST) throw new Error('vault frame only');
     requireUnlocked();
-    const m = lc(src?.address); if (!seeds[m]) throw new Error('Main wallet not attached on this device');
+    const m = mainAddr(src?.address); if (!seedOf(m)) throw new Error('Main wallet not attached on this device');   // V12 F-56
     if (!(await ask({ title: 'Turn off phone access', ok: 'Turn off', cancelLabel: 'Keep it on', html: `${sub('New devices will need your login wallet or a backup file to restore your wallets.')}${signedIn(m)}${muted('A device that already restored keeps its wallets, and a copy made while this was on still opens with your sign-in. To fully undo it, move your funds to new wallets.')}` }))) throw new Error('Cancelled');
     recoveryChange.set(m, { rk: null, at: Date.now() }); meta.changedAt = Date.now();
     await persist(); pushBackupState();
@@ -3796,14 +4132,27 @@ const engine = {
   mainAttachRecovery: async (src: { address: string; recovery: string; signature: string; profile: Profile; mv?: number; keepInBackup?: boolean }) => {
     await ready; if (!HOST) throw new Error('main wallets attach in the vault frame only');
     requireUnlocked();
-    const m = lc(src?.address), r = lc(src?.recovery), p = src?.profile;
-    if (seeds[m]) return { ok: true, already: true, ...summary() };
+    const m = mainAddr(src?.address), r = lc(src?.recovery), p = src?.profile;   // V12 F-56
+    if (seedOf(m)) return { ok: true, already: true, ...summary() };
     if (!p || lc(p.main) !== m || !validRecovery(p.rk) || lc(p.rk.addr) !== r) throw new Error('This account has no recovery copy for that wallet');
     const signer = await recoverMessageAddress({ message: RECOVERY_MSG(m, r), signature: String(src?.signature || '') as `0x${string}` }).catch(() => '');
     if (!same(signer, r)) throw new Error('That signature is not from the recovery wallet');
-    const seed = await openRecovery(p.rk, m, String(src.signature));
-    if (!seed) throw new Error('The recovery copy does not open with this account');
+    const opened = await openRecovery(p.rk, m, String(src.signature));
+    if (!opened) throw new Error('The recovery copy does not open with this account');
+    const seed = opened.seed;
     if (!p.fp || (await fingerprint(seed)) !== p.fp) throw new Error('fingerprint mismatch: the recovery copy does not match this account');
+    // V12 F-28: a v2 recovery copy carries the main's own signature (ms). Verify it is the main's signature over its
+    // text AND that it derives exactly this seed — then the seed is as trustworthy as a real mainAttach. A legacy v1
+    // copy has no ms: it still opens (existing recovery users keep access), but the seed is marked 'rk1' below and the
+    // vault publishes only what this account restored and generates new wallets off it, never sealing other keys here.
+    let verified = false;
+    if (opened.ms) {
+      const mvMs: MainMsgVersion = opened.mv === 2 ? 2 : 1;
+      const msSigner = await recoverMessageAddress({ message: MAIN_MSG(m, mvMs), signature: opened.ms as `0x${string}` }).catch(() => '');
+      if (!same(msSigner, m)) throw new Error('The recovery copy is not bound to this main wallet');
+      if (await seedOfSignature(opened.ms) !== seed) throw new Error('The recovery copy does not match this main wallet');
+      verified = true;
+    }
     const o = await openProfile(p, seed, saltsOf());
     const have = new Set(allAccounts().map((a) => lc(a.address)));
     const v1: { name: string; address: string }[] = [];
@@ -3815,9 +4164,20 @@ const engine = {
     if (src?.keepInBackup) {
       if (!(await ask({ title: 'Use your account here', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub(`${list.length ? `Your ${plural(list.length, 'wallet')} stay in your encrypted backup.` : 'Your encrypted backup stays as it is.'} New wallets you create here are added to it.`)}${signedIn(m)}${muted('Restore the others any time from Wallets.')}` }))) throw new Error('Cancelled');
     } else if (!(await ask({ title: 'Restore your wallets', ok: list.length ? `Restore ${plural(list.length, 'wallet')}` : 'Restore', cancelLabel: 'Not now', keep: true, html: `${sub(list.length ? `${plural(list.length, 'wallet')} available in your encrypted backup.` : 'Your encrypted backup is ready.')}${signedIn(m)}${list.length ? addrRows(list) : ''}${muted(`Check that you recognize ${recognizeAll(list.length)} before restoring.`)}` }))) throw new Error('Cancelled');
-    const mv = src?.mv === 2 ? 2 : 1;
+    const mv: MainMsgVersion = verified ? (opened.mv === 2 ? 2 : 1) : (src?.mv === 2 ? 2 : 1);
     seeds[m] = seed; meta.main = m;
     if (mv === 2) meta.mainMv = { ...(meta.mainMv || {}), [m]: 2 }; else if (meta.mainMv?.[m]) { const { [m]: _, ...rest } = meta.mainMv; meta.mainMv = rest; }
+    // V12 F-28: record where this seed came from. A verified (v2-bound) copy is 'main' — the main's own signature is kept
+    // so recovery can be re-sealed, and the full backup behaves normally. An unbound legacy copy is 'rk1': remember the
+    // exact addresses restored from this account's profile plus its salts, so mainProfile seals only those (never this
+    // device's other wallets) and create() generates standalone keys instead of deriving off a seed it cannot vouch for.
+    if (verified) {
+      seeds[MS(m)] = String(opened.ms);
+      meta.seedSrc = { ...(meta.seedSrc || {}), [m]: 'main' };
+    } else {
+      meta.seedSrc = { ...(meta.seedSrc || {}), [m]: 'rk1' };
+      meta.rk1 = { ...(meta.rk1 || {}), [m]: { addrs: [...o.wallets.map((w) => lc(w.address)), ...v1.map((x) => lc(x.address))], salts: o.salts } };
+    }
     // the recovery copy stays the server's: this vault carries whatever the server holds on its next publish (no own copy)
     if (!src?.keepInBackup) preApproved = { main: m, addrs: new Set(o.wallets.map((w) => lc(w.address))), at: Date.now() };
     await persist();
@@ -3842,7 +4202,7 @@ const engine = {
   mainSync: async (src: { address: string; profile: Profile | null; add?: boolean }) => {
     await ready; if (!HOST) throw new Error('vault frame only');
     requireUnlocked();
-    const m = lc(src?.address); const seed = seeds[m]; if (!seed) throw new Error('Main wallet not attached');
+    const m = mainAddr(src?.address); const seed = seedOf(m); if (!seed) throw new Error('Main wallet not attached');   // V12 F-56
     meta.main = m;
     const p = src?.profile && typeof src.profile === 'object' ? src.profile : null;
     let derived = 0, unwrapped = 0, mismatch = false, sealed = 0, declined = 0, salts = 0;
@@ -3870,7 +4230,7 @@ const engine = {
           preApproved = null;
           for (const w of incoming) {
             const slotTaken = w.main && w.index != null && subsOf(w.main).some((a) => a.index === w.index);
-            await addAccount(w.name || nextName(w.kind === 'imported' ? 'Imported' : 'Created'), w.key, { ...(w.kind === 'hop' ? { hop: true } : {}), ...(w.main && w.index != null && !slotTaken ? { main: w.main, index: w.index } : {}), ...(w.gen === 2 ? { gen: 2 as const } : {}), ...(w.kind === 'created' || w.kind === 'imported' ? { kind: w.kind } : {}), ...(w.archived ? { archived: true } : {}), ...(w.createdAt ? { createdAt: w.createdAt } : {}) });
+            await addAccount(w.name || nextName(w.kind === 'imported' ? 'Imported' : 'Created'), w.key, { ...(w.kind === 'hop' ? { hop: true } : {}), ...(w.main && w.index != null && !slotTaken ? { main: w.main, index: w.index } : {}), ...(w.gen === 2 ? { gen: 2 as const } : {}), ...(w.kind === 'created' || w.kind === 'imported' ? { kind: w.kind } : {}), ...(w.via === 'page' ? { via: 'page' as const } : {}), ...(w.archived ? { archived: true } : {}), ...(w.createdAt ? { createdAt: w.createdAt } : {}) });
             unwrapped += 1;
           }
         } else if (incoming.length) {
@@ -3878,7 +4238,7 @@ const engine = {
           if (ok) {
             for (const w of incoming) {
               const slotTaken = w.main && w.index != null && subsOf(w.main).some((a) => a.index === w.index);
-              await addAccount(w.name || nextName(w.kind === 'imported' ? 'Imported' : 'Created'), w.key, { ...(w.kind === 'hop' ? { hop: true } : {}), ...(w.main && w.index != null && !slotTaken ? { main: w.main, index: w.index } : {}), ...(w.gen === 2 ? { gen: 2 as const } : {}), ...(w.kind === 'created' || w.kind === 'imported' ? { kind: w.kind } : {}), ...(w.archived ? { archived: true } : {}), ...(w.createdAt ? { createdAt: w.createdAt } : {}) });
+              await addAccount(w.name || nextName(w.kind === 'imported' ? 'Imported' : 'Created'), w.key, { ...(w.kind === 'hop' ? { hop: true } : {}), ...(w.main && w.index != null && !slotTaken ? { main: w.main, index: w.index } : {}), ...(w.gen === 2 ? { gen: 2 as const } : {}), ...(w.kind === 'created' || w.kind === 'imported' ? { kind: w.kind } : {}), ...(w.via === 'page' ? { via: 'page' as const } : {}), ...(w.archived ? { archived: true } : {}), ...(w.createdAt ? { createdAt: w.createdAt } : {}) });
               unwrapped += 1;
             }
           } else declined = incoming.length;
@@ -3896,7 +4256,7 @@ const engine = {
   mainProfile: async (address: string, remote?: Profile | null) => {
     await ready; if (!HOST) throw new Error('vault frame only');
     requireUnlocked();
-    const m = lc(address); const seed = seeds[m]; if (!seed) throw new Error('Main wallet not attached');
+    const m = mainAddr(address); const seed = seedOf(m); if (!seed) throw new Error('Main wallet not attached');   // V12 F-56
     const subs = subsV1Of(m);
     let count = subs.reduce((n, a) => Math.max(n, (a.index ?? -1) + 1), 0);
     const names: Record<string, string> = {}; for (const a of subs) names[String(a.index)] = a.name;
@@ -3914,7 +4274,15 @@ const engine = {
         const nm = remote.names?.[String(i)]; if (nm && !names[String(i)]) names[String(i)] = String(nm).slice(0, 40);
       }
     }
-    const r = await buildProfile({ main: m, seed, count, names, wallets: backupWalletsOf(m), salts: saltsOf(), carry: [...fromServer, ...(remoteCarry.get(m) || [])] as ProfileEntry[], forget: meta.removedAddrs || [], mv: mvOf(m) });
+    // V12 F-28: an 'rk1' main's seed came from an unbound legacy recovery copy — not proven to be the real main's. Seal
+    // ONLY what was actually restored from that account's profile (those addresses + its own salts), never this device's
+    // independently created / imported wallets, so we don't widen who can open the backup under a seed we cannot vouch
+    // for. A later mainAttach with the main's real signature flips seedSrc to 'main' and the full backup resumes.
+    const rk1 = meta.seedSrc?.[m] === 'rk1';
+    const rk1Covered = rk1 ? new Set((meta.rk1?.[m]?.addrs || []).map(lc)) : null;
+    const walletsToSeal = rk1 ? backupWalletsOf(m).filter((w) => rk1Covered!.has(lc(w.address))) : backupWalletsOf(m);
+    const saltsToSeal = rk1 ? (meta.rk1?.[m]?.salts || []) : saltsOf();
+    const r = await buildProfile({ main: m, seed, count, names, wallets: walletsToSeal, salts: saltsToSeal, carry: [...fromServer, ...(remoteCarry.get(m) || [])] as ProfileEntry[], forget: meta.removedAddrs || [], mv: mvOf(m) });
     // account recovery (rk): a change made in this frame by a trusted click (sealed here, or null = turned off here) until
     // the server confirms it; otherwise exactly the server copy's, carried — never a copy this vault kept from before
     const change = recoveryChange.get(m);
@@ -3935,13 +4303,25 @@ const engine = {
     return { ok: true };
   },
   import: async (items: { name?: string; privateKey: string }[]) => {
-    const results: { ok: boolean; name?: string; error?: string }[] = [];
     await ready;
-    // keys from the page: a wallet in here is "ours" for every transfer, so a script must not be able to plant one
-    // (its own key, then a sweep to it). The addresses are shown in the frame and join on a trusted click.
-    const shown = (Array.isArray(items) ? items : []).slice(0, 200).map((it) => { try { return { name: String(it.name || '').trim(), address: privateKeyToAccount(String(it.privateKey).trim() as `0x${string}`).address }; } catch { return null; } }).filter(Boolean) as { name: string; address: string }[];
-    if (shown.length && !(await ask({ title: shown.length === 1 ? 'Import a wallet' : 'Import wallets', ok: `Import ${plural(shown.length, 'wallet')}`, html: `${sub(`${shown.length === 1 ? 'It joins' : 'They join'} your vault and count${shown.length === 1 ? 's' : ''} as yours for transfers.`)}${addrRows(shown.map((x, i) => ({ name: x.name || `Imported ${i + 1}`, address: x.address })), 200)}${muted('Import only keys you pasted yourself.')}` }))) throw new Error('Cancelled');
-    for (const it of items) { const name = String(it.name || '').trim() || nextName('Imported'); try { await addAccount(name, String(it.privateKey).trim() as `0x${string}`, { kind: 'imported' }); results.push({ ok: true, name }); } catch (e) { results.push({ ok: false, name, error: shortError(e) }); } }
+    // V12 F-23: keys from the page. The old path drew the confirm dialog from only the VALID keys among the first 200
+    // items, then imported EVERY item — so 200 unreadable lines plus one attacker key joined with no click shown (an
+    // empty dialog list skipped the ask entirely) and counted as the user's. Now the batch is parsed ONCE and is
+    // all-or-nothing: more than 200 items, or any entry that is not a readable key, fails before anything is shown or
+    // added — a batch with one bad line fails as a whole. Every parsed entry is shown (chain-only keys under their
+    // native address), and the import loops over the parsed entries only.
+    const list = Array.isArray(items) ? items : [];
+    if (list.length > 200) throw new Error('Import up to 200 wallets at once');
+    const parsed = list.map(readKeyOrNull);
+    const bad = parsed.findIndex((e) => !e);
+    if (bad >= 0) throw new Error(`Item ${bad + 1} is not a private key`);
+    const entries = parsed as NonNullable<(typeof parsed)[number]>[];
+    // V12 F-34: a page-supplied key must NOT silently become a trusted internal transfer destination (its own key, then
+    // a sweep to it). It joins with via:'page' and is treated as an outside address for transfers until the user moves
+    // funds into it themselves.
+    const results: { ok: boolean; name?: string; error?: string }[] = [];
+    if (entries.length && !(await ask({ title: entries.length === 1 ? 'Import a wallet' : 'Import wallets', ok: `Import ${plural(entries.length, 'wallet')}`, html: `${sub(`${entries.length === 1 ? 'It joins' : 'They join'} your vault. ${entries.length === 1 ? 'It counts' : 'They count'} as ${entries.length === 1 ? 'an outside address' : 'outside addresses'} for transfers until you move funds in yourself.`)}${addrRows(entries.map((e, i) => ({ name: e.name || `Imported ${i + 1}`, address: e.address })), 200)}${muted('Import only keys you pasted yourself.')}` }))) throw new Error('Cancelled');
+    for (const e of entries) { const name = e.name || nextName('Imported'); try { await addAccount(name, e.key as `0x${string}`, { kind: 'imported', via: 'page' }); results.push({ ok: true, name }); } catch (err) { results.push({ ok: false, name, error: shortError(err) }); } }
     return { ok: true, results, ...summary() };
   },
   // the same, but the key is typed into the engine's own dialog: nothing secret comes in from, or goes back to, the caller
@@ -3949,7 +4329,16 @@ const engine = {
   rename: async (id: string, name: string) => { const a = requireUnlocked().find((x) => x.id === id); if (!a) throw new Error('Unknown wallet'); a.name = name.trim() || a.name; await persist(); return { ok: true, ...summary() }; },
   remove: async (id: string, auth?: Auth) => { const list = requireUnlocked(); const i = list.findIndex((x) => x.id === id); if (i < 0) throw new Error('Unknown wallet'); if (list[i].ext) throw new Error('Privy wallets belong to your Privy account — log out to detach them');
     // a wallet that still holds anything (native, or a token this frame has seen) is a funds loss when its key goes: the 'remove' gate applies; an empty one only needs the click
-    { const addr = lc(list[i].address); const held = (ethCache[addr] || 0) > 0 || Object.values(tokenCache).some((m) => (m[addr] || 0) > 0) || (!SOL_MODE && !NEAR_MODE && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n); if (held) await gate('remove', auth); }
+    // F-52 (V12): a funded wallet's remove gate must not be skipped by a failed RPC read. A failed balance read
+    // (catch → null) counts as held, as does a wallet whose nonce is > 0 (it has transacted, so it has/had funds) —
+    // only a wallet proven empty AND never-used skips the gate.
+    { const addr = lc(list[i].address); let held = (ethCache[addr] || 0) > 0 || Object.values(tokenCache).some((m) => (m[addr] || 0) > 0);
+      if (!held && !SOL_MODE && !NEAR_MODE) {
+        const bal = await publicClient.getBalance({ address: list[i].address }).catch(() => null);
+        const nonce = await publicClient.getTransactionCount({ address: list[i].address, blockTag: 'latest' }).catch(() => null);
+        if (bal === null || bal > 0n || nonce === null || nonce > 0) held = true;
+      }
+      if (held) await gate('remove', auth); }
     if (!(await ask({ title: `Remove ${list[i].name}?`, danger: true, ok: 'Remove wallet', cancelLabel: 'Keep it', html: `${sub('Its key is erased from this browser, and it leaves your encrypted backup.')}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted('Export or back it up first if it holds funds. This can\'t be undone.')}` }))) throw new Error('Cancelled'); if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); perps.forget(list[i].lt?.a).catch(() => {}); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
   setActive: async (id: string) => { requireUnlocked(); meta.activeAccountId = id; await persist(); return { ok: true, ...summary() }; },
   setSelected: async (ids: string[]) => { const list = requireUnlocked(); meta.selectedAccountIds = [...ids.filter((id) => list.some((a) => a.id === id)), ...meta.selectedAccountIds.filter((id) => parked.some((a) => a.id === id))]; await persist(); return { ok: true, ...summary() }; },
@@ -3993,6 +4382,43 @@ const engine = {
     if (s && typeof s === 'object' && 'buyCap' in s) {
       const want = Math.max(0, Number(s.buyCap) || 0);
       if (want > 0 && want !== buyCap() && (want < buyCap() || await ask({ title: 'Raise the buy cap', danger: true, ok: `Raise to ${want} ${laneUnit()}`, html: sub(`Buys up to ${escHtml(want)} ${laneUnit()} per wallet will go out without asking (now ${escHtml(buyCap())}).`) }))) { const l = loadLimits(); saveLimits({ ...l, cap: { ...(l.cap || {}), [laneKey()]: want } }); }
+    }
+    // F-37 + F-6 + F-8 (V12): the RPC endpoints, a raised gas boost and a raised
+    // Solana tip/priority all decide where money is signed and how much it pays —
+    // a page may not change them silently. Each needs a trusted click, exactly
+    // like the buy cap; a declined change is dropped so the stored value stands.
+    if (s && typeof s === 'object') {
+      const stored = loadSettings();
+      if ('rpcs' in s) {
+        const norm = (r: unknown): Record<string, RpcPick> => {
+          const out: Record<string, RpcPick> = {};
+          if (r && typeof r === 'object') for (const k of Object.keys(r as Record<string, RpcPick>)) {
+            const v = (r as Record<string, RpcPick>)[k] || {};
+            const e: RpcPick = { ...(isRpcUrl(v.primary) ? { primary: v.primary } : {}), ...(isRpcUrl(v.secondary) ? { secondary: v.secondary } : {}), ...(Array.isArray(v.send) && v.send.filter(isRpcUrl).length ? { send: [...new Set(v.send.filter(isRpcUrl))].slice(0, 3) } : {}) };
+            if (Object.keys(e).length) out[k] = e;
+          }
+          return out;
+        };
+        const want = norm(s.rpcs), have = norm(stored.rpcs);
+        if (JSON.stringify(want) !== JSON.stringify(have)) {
+          const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
+          const listed = Object.keys(want).flatMap((k) => [want[k].primary, want[k].secondary, ...(want[k].send || [])].filter(isRpcUrl).map(hostOf));
+          const ok = await ask({ title: 'Change network nodes', danger: true, ok: 'Use these nodes', html: `${sub('Trades will be read and broadcast through custom nodes instead of the built-in ones. A malicious node can misreport balances and front-run a trade — change them only to nodes you trust.')}${listed.length ? muted('Nodes: ' + escHtml(listed.join(', '))) : muted('All custom nodes will be cleared.')}` });
+          if (!ok) delete s.rpcs;
+        }
+      }
+      if ('gasBoost' in s) {
+        const want = Math.min(5, Math.max(1, Number(s.gasBoost) || 1)), now = Math.min(5, Math.max(1, Number(stored.gasBoost) || 1));
+        if (want > now && !(await ask({ title: 'Raise the gas boost', danger: true, ok: `Boost to ${want}x`, html: `${sub(`Every trade will pay ${escHtml(want)}x the going gas price (now ${escHtml(now)}x).`)}${muted('A higher boost spends more on fees to land faster.')}` }))) delete s.gasBoost;
+      }
+      if ('solTip' in s) {
+        const want = Math.min(0.1, Math.max(0, Number(s.solTip) || 0)), now = Math.min(0.1, Math.max(0, Number(stored.solTip) || 0));
+        if (want > now && !(await ask({ title: 'Raise the Solana tip', danger: true, ok: `Tip ${want} SOL`, html: `${sub(`Every Solana trade will tip up to ${escHtml(want)} SOL to land faster (now ${escHtml(now)} SOL).`)}${muted('A higher tip spends more per trade.')}` }))) delete s.solTip;
+      }
+      if ('solPriority' in s) {
+        const want = Math.min(10_000_000, Math.max(0, Math.floor(Number(s.solPriority) || 0))), now = Math.min(10_000_000, Math.max(0, Math.floor(Number(stored.solPriority) || 0)));
+        if (want > now && !(await ask({ title: 'Raise the Solana priority fee', danger: true, ok: `Set ${want}`, html: `${sub(`Every Solana trade will add a priority fee of up to ${escHtml(want)} micro-lamports per compute unit (now ${escHtml(now)}).`)}${muted('A higher priority fee spends more per trade.')}` }))) delete s.solPriority;
+      }
     }
     if (s && typeof s === 'object') { delete s.buyCap; delete s.slipOk; }
     const settings = saveSettings(s); if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } const rebuilt = rebuildClients(); if (rebuilt) { routeCache.clear(); verifyCache.clear(); } return { ok: true, settings, rpcs: rpcUrls, send: broadcastUrls() }; },
@@ -4064,7 +4490,18 @@ const engine = {
     start: async (plan: Plan, auth?: Auth) => { const own = planOf(plan); await confirmOutside(own, auth); plans.delete(String((plan as { planId?: unknown })?.planId || '')); const r = await startMove(own); confirmedJobs.add(r.id); return r; },
     jobs: () => jobs.map((j) => ({ ...j, legs: j.legs.map((l) => ({ ...l })) })),
     cancel: (id: string) => cancelJob(id),
-    retry: (id: string) => retryJob(id),
+    // F-32 (V12): a retry that would re-queue any leg leaving the vault re-runs the outside confirmation (gate + the
+    // real-address dialog) FIRST — a cancelled/stalled move can never quietly resume an outside transfer. A cancelled
+    // job is refused by retryJob; legs cancelled by hand (error 'cancelled') are never re-queued.
+    retry: async (id: string, auth?: Auth) => {
+      const job = jobs.find((j) => j.id === id); if (!job) throw new Error('Unknown job');
+      if (job.status === 'cancelled') throw new Error('This move was cancelled — plan it again to send');
+      const requeue = job.legs.filter((l) => l.error !== 'cancelled' && ((l.status === 'failed' && !l.raw) || (l.status === 'failed' && l.error === 'dropped before mining') || l.status === 'skipped'));
+      const outside = requeue.filter((l) => /^0x[0-9a-fA-F]{40}$/.test(String(l.to)) && !l.hop && !isOwn(l.to));
+      if (outside.length) await confirmOutside({ legs: requeue, asset: job.asset, hops: job.hops } as unknown as Plan, auth);
+      confirmedJobs.add(id);
+      return retryJob(id);
+    },
     isRunner: () => isRunner,
     runner: async () => (isRunner ? 'this tab' : (await askRunner({ cmd: 'ping' }).then(() => 'another tab').catch(() => 'nobody'))),
     takeOver: () => ensureRunner(),
@@ -4093,39 +4530,38 @@ const engine = {
     const rcpt = String(quote?.recipient || '');
     const dest = BRIDGE_CHAINS[Number(quote?.destinationChainId)]?.name || (Number(quote?.destinationChainId) === RELAY_SOL_CHAIN ? 'Solana' : `chain ${quote?.destinationChainId}`);
     const ownTo = ownAccounts().find((x) => same(x.address, rcpt) || solAddressOf(x) === rcpt);
+    // F-12 (V12): the vault quotes the route against Relay ITSELF — through the terminal's own server, for the
+    // recipient named in `quote.recipient` — BEFORE the confirmation dialog, so the dialog can show how much leaves
+    // (bound.amount) and about how much arrives (bound.outFormatted). A signature-moving step is never confirmed
+    // blind. Where Relay pays out is fixed by the request id in THIS bound deposit, not by the page's `quote`.
+    const bound = await ownBridgeQuote(a, quote);
+    const minOut = /^\d{1,60}$/.test(String(quote?.minOut || '')) ? BigInt(String(quote.minOut)) : 0n;
+    const moved = minOut > 0n && !(bound.out && BigInt(bound.out) >= minOut);
+    // the route already pays under the floor the page showed: bail before asking the user to confirm a stale amount
+    if (moved && quote?.phase === 'bind') return { ok: false, moved: true, out: bound.out, outFormatted: bound.outFormatted };
+    if (moved) throw new Error(`The quote moved: ${bound.outFormatted || 'less'} would arrive — press Bridge again`);
+    const origin = Number(quote?.originChainId), solOrigin = origin === RELAY_SOL_CHAIN;
+    const fromName = BRIDGE_CHAINS[origin]?.name || (solOrigin ? 'Solana' : `chain ${origin}`);
+    const sym = BRIDGE_CHAINS[origin]?.symbol || (solOrigin ? 'SOL' : '');
+    const amt = /^\d{1,40}$/.test(String(bound.amount || '')) ? formatUnits(BigInt(String(bound.amount)), solOrigin ? 9 : 18) : '?';
+    const arriving = bound.outFormatted ? ` and about ${escHtml(bound.outFormatted)} arriving on ${escHtml(dest)}` : '';
     if (!ownTo) {
       await gate('withdraw', auth);
       // the login wallet (Privy) is the user's own, but its key is not in this vault: say so instead of "not one of your wallets"
       const login = list.find((x) => x.ext && same(x.address, rcpt));
-      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside your vault', danger: !login, ok: 'Bridge', html: `${sub(`From ${escHtml(a.name)} to ${escHtml(dest)}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted('Check every character. A bridge can\'t be undone.')}` });
+      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside your vault', danger: !login, ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(fromName)} to ${escHtml(dest)}${arriving}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted('Check every character. A bridge can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else {
       // between the vault's own wallets: the 'transfer' gate, then a trusted click on the engine's dialog (the page's click cannot count here)
       await gate('transfer', auth);
-      const origin = Number(quote?.originChainId), solOrigin = origin === RELAY_SOL_CHAIN;
-      const from = BRIDGE_CHAINS[origin]?.name || (solOrigin ? 'Solana' : `chain ${origin}`);
-      const sym = BRIDGE_CHAINS[origin]?.symbol || (solOrigin ? 'SOL' : '');
-      const amt = /^\d{1,40}$/.test(String(quote?.amount || '')) ? formatUnits(BigInt(String(quote.amount)), solOrigin ? 9 : 18) : '?';
-      const ok = await ask({ title: 'Bridge between your wallets', ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(from)} to ${escHtml(ownTo.name)} on ${escHtml(dest)}.`)}<div class="dk-list">${addrRow(ownTo.name, rcpt)}</div>${muted('A bridge can\'t be undone.')}` });
+      const ok = await ask({ title: 'Bridge between your wallets', ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(fromName)} to ${escHtml(ownTo.name)} on ${escHtml(dest)}${arriving}.`)}<div class="dk-list">${addrRow(ownTo.name, rcpt)}</div>${muted('A bridge can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     }
-    // Where Relay pays out is fixed by the request id inside the deposit, and the id by the recipient it was quoted
-    // for — not by `quote.recipient`. A page could hand over a step whose id was quoted for another address while
-    // `recipient` names one of ours: every check below passes (Relay's contract, this depositor, the exact value),
-    // the gate above asks for 'transfer' only, and Relay pays the other address. So the vault quotes the route
-    // itself, for the recipient it just gated, through the terminal's own server (which adds the app fee), and signs
-    // that step — never the page's. The page tracks the request id that comes back.
-    const bound = await ownBridgeQuote(a, quote);
-    // the page showed an amount: a route that now pays less than the floor it sends is not signed
-    const minOut = /^\d{1,60}$/.test(String(quote?.minOut || '')) ? BigInt(String(quote.minOut)) : 0n;
-    const moved = minOut > 0n && !(bound.out && BigInt(bound.out) >= minOut);
     if (quote?.phase === 'bind') {
-      if (moved) return { ok: false, moved: true, out: bound.out, outFormatted: bound.outFormatted };
       const ticket = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
       bridgeTickets.set(ticket, { id, bound, at: Date.now() });
       return { ok: true, ticket, requestId: bound.requestId, out: bound.out, outFormatted: bound.outFormatted };
     }
-    if (moved) throw new Error(`The quote moved: ${bound.outFormatted || 'less'} would arrive — press Bridge again`);
     return signBound(bound);
   },
   bridgeSend: async (id: string, chainId: number, to: string, amount: number | 'max', auth?: Auth) => {

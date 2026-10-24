@@ -41,7 +41,7 @@ import { nativeChainOf, nativeSeed } from './nativeKeys.ts';
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
 export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number };
-export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute };
+export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute; dlmmAlts?: { pool: string; dlmm: DlmmRoute }[] };
 // a Meteora DLMM pool as the vault verified it: which side is SOL, its reserves and oracle (fixed for the pool's life),
 // the bin array the active bin sat in when the route was read (which arrays a quote prefetches)
 export type DlmmRoute = { solIsX: boolean; reserveX: string; reserveY: string; oracle: string; activeIdx: number; binStep: number };
@@ -169,15 +169,22 @@ export function setSolRpcs(reads: unknown[] = [], sends: unknown[] = []) {
   userDown.clear();
   return { rpcs: [...USER_READS, PUBLIC_RPC, RPC_URL()], send: [...USER_SENDS, ...USER_READS, PUBLIC_RPC, RPC_URL()] };
 }
+// F-38 V12: every read method here returns the JSON-RPC { context, value } envelope (value may legitimately be
+// null/[] for an absent account). A node that answers with anything else — a bare string/number, or no value at
+// all — is returning garbage, not a verdict on the call: treat it as that node being down and fall through to the
+// next road, instead of handing the malformed result to the trade logic.
+const validRead = (method: string, r: any): boolean => !READS.has(method) || (r != null && typeof r === 'object' && 'value' in r);
 export async function solRpc<T = any>(method: string, params: unknown[] = []): Promise<T> {
   if (READS.has(method)) for (const u of USER_READS) {
     if (Date.now() < (userDown.get(u) || 0)) continue;
-    try { return await rpcAt<T>(u, method, params, 6000); } catch { userDown.set(u, Date.now() + 30_000); }
+    try { const r = await rpcAt<T>(u, method, params, 6000); if (!validRead(method, r)) throw new RpcError('malformed RPC response', 0); return r; } catch { userDown.set(u, Date.now() + 30_000); }
   }
   if (READS.has(method) && Date.now() > publicDownUntil) {
-    try { return await rpcAt<T>(PUBLIC_RPC, method, params); } catch { publicDownUntil = Date.now() + 30_000; }   // any trouble there: the indexer's node answers
+    try { const r = await rpcAt<T>(PUBLIC_RPC, method, params); if (!validRead(method, r)) throw new RpcError('malformed RPC response', 0); return r; } catch { publicDownUntil = Date.now() + 30_000; }   // any trouble there: the indexer's node answers
   }
-  return rpcAt<T>(RPC_URL(), method, params);
+  const r = await rpcAt<T>(RPC_URL(), method, params);
+  if (!validRead(method, r)) throw new RpcError('malformed RPC response', 0);   // last road: a bad shape is a failed read, not a usable result
+  return r;
 }
 async function account(addr: string): Promise<{ owner: string; data: Uint8Array; lamports: number } | null> {
   const r = await solRpc<any>('getAccountInfo', [addr, { encoding: 'base64', commitment: 'processed' }]);
@@ -337,7 +344,7 @@ async function loadRoute(mint: string, hint?: any): Promise<SolRoute> {
   const tokenProgram = mintAcc.owner; if (tokenProgram !== P.token && tokenProgram !== P.token22) throw new Error('Not an SPL token');
   const decimals = mintAcc.data[44];
   let venue: SolRoute['venue'] = 'pumpswap'; let isCashback = false, isMayhem = false; let pool = '';
-  let baseVault: string | undefined, quoteVault: string | undefined, dlmm: DlmmRoute | undefined;
+  let baseVault: string | undefined, quoteVault: string | undefined, dlmm: DlmmRoute | undefined, dlmmAlts: { pool: string; dlmm: DlmmRoute }[] | undefined;
   // why pump.fun has no SOL market for this coin (then its Meteora DLMM pool against SOL is the venue, if it has one)
   let noPumpSol = '';
   if (curveAcc && curveAcc.owner === P.pump) {
@@ -357,20 +364,27 @@ async function loadRoute(mint: string, hint?: any): Promise<SolRoute> {
     }
   }
   if (noPumpSol) {
-    // the indexer names candidate DLMM pools (it found them by program-account search); nothing in that list is
-    // trusted: every candidate is read here and must be an enabled LB pair of this mint against SOL
-    let h = await hP;
-    if (!Array.isArray(h?.dlmm)) h = await fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null);   // a page hint names no pools: the indexer's route does
-    const named: string[] = Array.isArray(h?.dlmm) ? h.dlmm.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 8) : [];
+    // F-54 V12: DLMM candidates come ONLY from the indexer's program-account search, never from the page hint —
+    // a compromised page must not be able to name the pool a trade routes through. The page hint is read only for
+    // the display symbol (below); here the indexer's route is fetched fresh when the hint is a page hint, and each
+    // candidate it names is still verified on chain in dlmmPoolsOf (enabled LB pair of exactly this mint vs SOL).
+    const idxRoute = hint && hint.chain === 'sol' && hint.mint === mint
+      ? await fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null)
+      : await hP;
+    const named: string[] = Array.isArray(idxRoute?.dlmm) ? idxRoute.dlmm.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 8) : [];
     const found = named.length ? await dlmmPoolsOf(mint, named) : [];
     if (!found.length) throw new Error(noPumpSol + (named.length ? ' — its Meteora DLMM pools could not be verified' : /not open yet/.test(noPumpSol) ? '' : ' — and no Meteora DLMM pool against SOL was found'));
     const ext = mintExtensions(mintAcc.data);
     if (ext.has(1)) throw new Error('This coin charges a transfer fee (Token-2022) — not supported here');
     if (ext.has(14)) throw new Error('This coin carries a transfer hook (Token-2022) — not supported here');
-    const best = found[0]; venue = 'dlmm'; pool = best.pool; isCashback = false; dlmm = best.route;
+    // F-54 V12: keep up to 3 verified candidates. Reserve-balance ranking is donatable, so the trade does NOT trust
+    // the order here — it quotes each candidate at the real amount and uses the best `out` (see solTradeIxs).
+    venue = 'dlmm'; isCashback = false;
+    dlmmAlts = found.slice(0, 3).map((f) => ({ pool: f.pool, dlmm: f.route }));
+    pool = dlmmAlts[0].pool; dlmm = dlmmAlts[0].dlmm;
   }
   const h = await Promise.race([hP, Promise.resolve(null)]);   // a symbol not here yet is not worth waiting for
-  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault, dlmm };
+  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault, dlmm, dlmmAlts };
   routeCache.set(mint, { at: Date.now(), r }); return r;
 }
 // the TLV extensions of a Token-2022 mint (type → present); a classic mint has none
@@ -683,20 +697,35 @@ export async function sendPlan(s: SolSettings) {
   const tipSol = pinnedTip ? pinnedTip : mode === 'turbo' ? Math.min(0.003, Math.max(0.0002, t.p95 || 0.0015)) : mode === 'fast' ? Math.min(0.001, Math.max(0.00005, t.p75 || 0.00002)) : 0;
   let micro = pinnedMicro || Number(mode === 'turbo' ? lv.veryHigh : mode === 'fast' ? lv.high : lv.medium) || (mode === 'eco' ? 1000 : 50000);
   micro = Math.ceil(Math.max(0, Math.min(Number(micro) || 0, mode === 'turbo' ? 5_000_000 : 2_000_000)));
-  return { mode, tipLamports: BigInt(Math.round(tipSol * 1e9)), micro };
+  // F-8 V12: defense in depth. A settings page can pin solTip≤0.1 SOL and solPriority≤5M µlamports with no click,
+  // which at 400k CU would cost ~2 SOL/tx in priority fee + tip. Clamp the APPLIED tip + priority so one
+  // transaction's extra cost can't exceed ~0.005 SOL at the worst-case compute limit, whatever the settings say.
+  // (Default eco/fast/turbo plans already sit at or under this, so legitimate trading is unchanged.)
+  const FEE_CEIL = 5_000_000n;   // ~0.005 SOL total extra cost per transaction
+  const CU_CEIL = 400_000n;      // the most compute units a trade is ever signed with (see maxUnits in tradeOne)
+  let tipLamports = BigInt(Math.round(tipSol * 1e9));
+  if (tipLamports > FEE_CEIL) tipLamports = FEE_CEIL;
+  const prioCeilMicro = ((FEE_CEIL - tipLamports) * 1_000_000n) / CU_CEIL;   // µlamports/CU that keeps tip + priority ≤ the ceiling
+  if (BigInt(micro) > prioCeilMicro) micro = Number(prioCeilMicro);
+  return { mode, tipLamports, micro };
 }
 // A blockhash stays valid for ~150 slots (≈60 s); one fetched up to maxAgeMs ago is reused, so all the
 // wallets of a click (and a click right after a hover) sign over the same one without waiting for it.
-let bhCache: { v: string; at: number } | null = null, bhLoad: Promise<string> | null = null;
-function blockhash(maxAgeMs = 0): Promise<string> {
-  if (bhCache && Date.now() - bhCache.at < maxAgeMs) return Promise.resolve(bhCache.v);
+// F-1/F-5 V12: the cache now also carries lastValidBlockHeight (lvh) — the last block height this blockhash can
+// land at — and the time it was read. A signed send whose status is unknown is held until lvh passes, and the
+// trade path refetches a blockhash older than 20 s before signing so the hold window stays tight.
+type BlockhashInfo = { v: string; lvh: number; at: number };
+let bhCache: BlockhashInfo | null = null, bhLoad: Promise<BlockhashInfo> | null = null;
+function blockhash(maxAgeMs = 0): Promise<BlockhashInfo> {
+  if (bhCache && Date.now() - bhCache.at < maxAgeMs) return Promise.resolve(bhCache);
   return (bhLoad ||= solRpc<any>('getLatestBlockhash', [{ commitment: 'confirmed' }])
-    .then((r) => { const v = r.value.blockhash as string; bhCache = { v, at: Date.now() }; return v; })
+    .then((r) => { const c: BlockhashInfo = { v: r.value.blockhash as string, lvh: Number(r.value.lastValidBlockHeight), at: Date.now() }; bhCache = c; return c; })
     .finally(() => { bhLoad = null; }));
 }
-async function newerBlockhash(than: string) {
-  for (let i = 0; i < 4; i++) { const v = await blockhash(0); if (v !== than) return v; await new Promise((ok) => setTimeout(ok, 200)); }
-  return than;
+async function newerBlockhash(than: string): Promise<BlockhashInfo> {
+  let b = await blockhash(0);
+  for (let i = 0; i < 4 && b.v === than; i++) { await new Promise((ok) => setTimeout(ok, 200)); b = await blockhash(0); }
+  return b;
 }
 // hover / route check: the plan inputs and a blockhash are loaded before the click
 let warmAt = 0;
@@ -808,10 +837,18 @@ export async function solTradeIxs(user: string, r: SolRoute, side: 'buy' | 'sell
     return { ixs: pumpIxs(user, r, side, amount, minOut), expected: q.out, minOut };
   }
   if (r.venue === 'dlmm') {
-    const q = await quoteDlmm(r, side, amount, pre);
-    if (q.out <= 0n) throw new Error(side === 'buy' ? 'Amount too small to buy anything' : 'Amount too small for this pool');
-    let minOut = slipMin(q.out, slippage); if (minOut <= 0n) minOut = 1n;
-    return { ixs: dlmmIxs(user, r, side, amount, minOut, q.binArrays), expected: q.out, minOut };
+    // F-54 V12: quote every verified candidate at the real amount and take the pool with the best `out`. The
+    // deepest-reserve order from loadRoute is donatable, so the pool is chosen by what it actually fills here.
+    const cands = r.dlmmAlts?.length ? r.dlmmAlts : (r.dlmm ? [{ pool: r.pool, dlmm: r.dlmm }] : []);
+    let best: { q: DlmmQuote; rr: SolRoute } | null = null; let lastErr: unknown;
+    for (const c of cands) {
+      const rr: SolRoute = c.pool === r.pool && c.dlmm === r.dlmm ? r : { ...r, pool: c.pool, dlmm: c.dlmm };
+      try { const q = await quoteDlmm(rr, side, amount, rr === r ? pre : undefined); if (q.out > 0n && (!best || q.out > best.q.out)) best = { q, rr }; }
+      catch (e) { lastErr = e; }
+    }
+    if (!best) { if (lastErr) throw lastErr; throw new Error(side === 'buy' ? 'Amount too small to buy anything' : 'Amount too small for this pool'); }
+    let minOut = slipMin(best.q.out, slippage); if (minOut <= 0n) minOut = 1n;
+    return { ixs: dlmmIxs(user, best.rr, side, amount, minOut, best.q.binArrays), expected: best.q.out, minOut };
   }
   const q = await quoteAmm(r, side, amount, pre);
   let minOut = slipMin(q.out, slippage); if (minOut <= 0n) minOut = 1n;
@@ -833,11 +870,42 @@ const RENT_ATA = 2_039_280n, RENT_ATA22 = 2_100_000n, RENT_WALLET = 890_880n, SI
 const RENT_UVA = 1_700_000n;   // a user_volume_accumulator (pump 106 B / PumpSwap 90 B) and its margin
 const solTxt = (l: bigint) => (Number(l) / 1e9).toFixed(4);
 const sentSigs = new Map<string, number>();
-// A send whose status is unknown can still land for ~60–90 s (its blockhash): a second press for the same wallet,
-// coin and side meanwhile could land too and buy twice (Solana has no nonce to make them collide). Until that
-// signature shows a status or the window passes, the pair is refused and the reason said.
-const UNKNOWN_HOLD_MS = 90_000;
-const unknownSends = new Map<string, { sig: string; at: number }>();
+// F-1/F-55 V12: a send whose status is unknown can still land until its blockhash's lastValidBlockHeight passes, and
+// Solana has no nonce to make a second send collide — so ANY further outflow from that wallet (a trade, a transfer,
+// an unwrap, a bridge) could land too and move the funds twice. The wallet is held by sender: every outflow refuses
+// until the held signature is seen confirmed/finalized (it landed) or its blockhash expires (it never will). No
+// wall-clock release — a silent node can sit on the bytes past any fixed timeout and still land them.
+const unknownSends = new Map<string, { sig: string; lvh: number }>();
+// release the hold only on a verdict from the relay or publicnode (never a user-set node): the signature is
+// confirmed/finalized with a real slot (it landed), or the chain's confirmed height has passed the blockhash's
+// lastValidBlockHeight (the signed bytes can no longer land). Anything else keeps the wallet held.
+async function releaseIfSettled(held: { sig: string; lvh: number }): Promise<boolean> {
+  const [st] = await solSigStatusesBoth([held.sig]).catch(() => [undefined]);
+  if (st && typeof st.slot === 'number' && (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')) return true;
+  try { const h = await solRpc<number>('getBlockHeight', [{ commitment: 'confirmed' }]); if (typeof h === 'number' && h > held.lvh) return true; } catch {}
+  return false;
+}
+async function solHoldGate(sender: string): Promise<void> {
+  const held = unknownSends.get(sender);
+  if (!held) return;
+  if (await releaseIfSettled(held)) { unknownSends.delete(sender); return; }
+  throw new Error(`Your previous send from this wallet (${held.sig.slice(0, 8)}…) has an unknown status and may still land — wait until it shows up or its blockhash expires before sending again`);
+}
+// every Solana outflow signs its bytes, then hands them here: the wallet is refused while a prior send is unknown
+// (solHoldGate), the same bytes go out on every road (broadcast), and if every road went silent the send is NOT a
+// failure — the bytes may have reached a leader. The wallet is then held by sender and a SolSendUnknown carrying
+// the signature is thrown, so the caller (and webEngine's once()) keeps the job "sending", never retried.
+async function sendSigned(tx: Uint8Array, hash: string, lvh: number, holdKey: string, opts: { mode?: string; click?: Click; venue?: string } = {}): Promise<string> {
+  await solHoldGate(holdKey);
+  const { mode = 'eco', click, venue = '' } = opts;
+  try { await broadcast(tx, mode, click); }
+  catch (e) {
+    if (e instanceof SolSendUnknown) { e.hash = hash; trackSig(hash, venue); unknownSends.set(holdKey, { sig: hash, lvh }); }
+    throw e;
+  }
+  trackSig(hash, venue);
+  return hash;
+}
 export async function solTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings): Promise<{ hash: string }> {
   try { return await tradeOne(a, side, r, size, s); }
   catch (e) { if (e instanceof SolSendUnknown || !(e instanceof RpcError || /timeout|abort|failed to fetch|networkerror/i.test(String((e as Error)?.name) + ' ' + String((e as Error)?.message)))) throw e; throw new Error(nodeText(e)); }
@@ -846,12 +914,8 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   if (!a.key || a.ext) throw new Error('This wallet signs through Privy, which has no Solana key here');
   if (r.isCashback) throw new Error('Cashback coins are not supported yet');
   const k = solKeys(a.key); const user = k.address;
-  const holdKey = user + '|' + r.mint + '|' + side; const held = unknownSends.get(holdKey);
-  if (held) {
-    const st = statusOf.get(held.sig)?.st;
-    if (st || Date.now() - held.at > UNKNOWN_HOLD_MS) unknownSends.delete(holdKey);
-    else throw new Error(`Your previous ${side} from this wallet (${held.sig.slice(0, 8)}…) has an unknown status and may still land — wait until it shows up or ${Math.ceil((UNKNOWN_HOLD_MS - (Date.now() - held.at)) / 1000)} s pass before pressing again`);
-  }
+  // F-55 V12: refuse up front while a prior send from this wallet is unknown (also re-checked in sendSigned)
+  await solHoldGate(user);
   const click = joinClick();
   // what does not depend on this wallet starts now, once for the whole click
   const planP = sendPlan(s); const bhP = blockhash(10_000);
@@ -904,22 +968,23 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
     if (sim.err) throw new Error(errText(sim, side, r.venue));
     if (sim.unitsConsumed) units = Math.min(400_000, Math.ceil(sim.unitsConsumed * 1.25) + 5_000);
   }
-  let bh = await bhP;
+  // F-1 V12: a blockhash read before the click (hover warm, ≤10 s cache) may be stale by the time this wallet signs;
+  // refetch if it is older than 20 s so lvh — the height the hold releases at — is close to when the bytes go out.
+  let bhi = await bhP;
+  if (Date.now() - bhi.at > 20_000) bhi = await blockhash(0);
+  let bh = bhi.v, lvh = bhi.lvh;
   let built = signMessage(compileLegacy(user, [...budget(units, plan.micro), ...ixs, ...tip], bh), k.seed);
   // identical bytes carry the identical signature and land once: the same trade repeated within the
   // blockhash's reuse window is signed over a newer blockhash, so a second click is a second trade
-  for (let i = 0; i < 3 && sentSigs.has(b58e(built.sig)); i++) { bh = await newerBlockhash(bh); built = signMessage(compileLegacy(user, [...budget(units, plan.micro), ...ixs, ...tip], bh), k.seed); }
+  for (let i = 0; i < 3 && sentSigs.has(b58e(built.sig)); i++) { const nb = await newerBlockhash(bh); bh = nb.v; lvh = nb.lvh; built = signMessage(compileLegacy(user, [...budget(units, plan.micro), ...ixs, ...tip], bh), k.seed); }
   const { tx, sig } = built;
   if (tx.length > 1232) throw new Error('Transaction too large');
   const hash = b58e(sig);
   const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
   sentSigs.set(hash, now);
-  try { await broadcast(tx, plan.mode, click); } catch (e) {
-    // silence is not a refusal: the hash stays tracked (its receipt can still say "landed"), the pair is held, the caller is told
-    if (e instanceof SolSendUnknown) { e.hash = hash; trackSig(hash, r.venue); unknownSends.set(holdKey, { sig: hash, at: Date.now() }); throw e; }
-    sentSigs.delete(hash); throw e;
-  }
-  trackSig(hash, r.venue);
+  // F-1/F-55 V12: one send path for every outflow — holds the wallet and throws SolSendUnknown on a silent send
+  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: r.venue }); }
+  catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(hash); throw e; }
   return { hash };
 }
 export async function solPreviewOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings) {
@@ -985,8 +1050,10 @@ export async function solTransfer(a: SolAcct, to: string, amountSol: number | 'm
   if (amountSol !== 'max' && !(amountSol > 0 && Number.isFinite(amountSol))) throw new Error('Invalid amount');
   const [mine, theirs] = await Promise.all([solRpc<any>('getBalance', [k.address]), solRpc<any>('getBalance', [to]).catch(() => null)]);
   const lamports = solSendAmount(BigInt(mine.value), amountSol === 'max' ? 'max' : toUnits(amountSol, 9), theirs ? BigInt(theirs.value) : null);
-  const { tx, sig } = signMessage(compileLegacy(k.address, [...budget(SOL_SEND_CU, SOL_SEND_PRICE), transferIx(k.address, to, lamports)], await blockhash()), k.seed);
-  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  const bh = await blockhash();
+  const { tx, sig } = signMessage(compileLegacy(k.address, [...budget(SOL_SEND_CU, SOL_SEND_PRICE), transferIx(k.address, to, lamports)], bh.v), k.seed);
+  // F-1 V12: held-wallet gate + silent-send → SolSendUnknown (a lost response must never make a transfer re-send)
+  await sendSigned(tx, b58e(sig), bh.lvh, k.address);
   return b58e(sig);
 }
 // the instructions of a token send (pure, so scripts/sol-token-transfer.test.mjs and a mainnet simulation check the bytes):
@@ -1030,8 +1097,10 @@ export async function solTokenTransfer(a: SolAcct, mint: string, to: string, amo
   const lamports = BigInt((await solRpc<any>('getBalance', [k.address, { commitment: 'processed' }])).value || 0);
   const need = (needRent ? 2_100_000n : 0n) + 20_000n;
   if (lamports < need) throw new Error(`Needs ${(Number(need) / 1e9).toFixed(4)} SOL for the network fee${needRent ? ' and the recipient\'s token account' : ''} — this wallet has ${(Number(lamports) / 1e9).toFixed(4)} SOL`);
-  const { tx, sig } = signMessage(compileLegacy(k.address, tokenTransferIxs(k.address, mint, to, units, dec, prog), await blockhash()), k.seed);
-  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  const bh = await blockhash();
+  const { tx, sig } = signMessage(compileLegacy(k.address, tokenTransferIxs(k.address, mint, to, units, dec, prog), bh.v), k.seed);
+  // F-1 V12: held-wallet gate + silent-send → SolSendUnknown
+  await sendSigned(tx, b58e(sig), bh.lvh, k.address);
   return { hash: b58e(sig), units: units.toString(), decimals: dec };
 }
 // ── wrapped SOL back to SOL (2026-10-20: a user held 6 wSOL the site could neither unwrap nor send) ──
@@ -1065,8 +1134,10 @@ export async function solUnwrap(a: SolAcct): Promise<{ hash: string; units: stri
   const have = BigInt(wallet?.lamports || 0), fee = solUnwrapFee();
   const sol7 = (l: bigint) => (Number(l) / 1e9).toFixed(7).replace(/0+$/, '').replace(/\.$/, '');
   if (have < fee) throw new Error(`Needs ${sol7(fee)} SOL for the network fee — this wallet has ${sol7(have)} SOL`);
-  const { tx, sig } = signMessage(compileLegacy(me, wsolUnwrapIxs(me), await blockhash()), solKeys(a.key).seed);
-  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  const bh = await blockhash();
+  const { tx, sig } = signMessage(compileLegacy(me, wsolUnwrapIxs(me), bh.v), solKeys(a.key).seed);
+  // F-1 V12: held-wallet gate + silent-send → SolSendUnknown
+  await sendSigned(tx, b58e(sig), bh.lvh, me);
   return { hash: b58e(sig), units: units.toString(), lamports: lamports.toString() };
 }
 // every wallet's wSOL (the token balance of its wSOL account; 0 when it has none, left out when the read failed)
@@ -1173,8 +1244,10 @@ export async function solSendInstructions(a: SolAcct, list: { programId: string;
   const tables: { key: string; addresses: string[] }[] = [];
   for (const t of tableKeys) { const acc = await account(t); if (!acc) continue; const d = acc.data; const addrs: string[] = []; for (let o = 56; o + 32 <= d.length; o += 32) addrs.push(b58e(d.subarray(o, o + 32))); tables.push({ key: t, addresses: addrs }); }
   const plan = await sendPlan({ slippage: 1, gasBoost: 1.5, turbo: false });
-  const msg = compileV0(k.address, [...budget(300_000, plan.micro), ...ixs], await blockhash(), tables);
+  const bh = await blockhash();
+  const msg = compileV0(k.address, [...budget(300_000, plan.micro), ...ixs], bh.v, tables);
   const { tx, sig } = signMessage(msg, k.seed);
-  await solRpc('sendTransaction', [toB64(tx), { encoding: 'base64', skipPreflight: false, maxRetries: 5 }]);
+  // F-1 V12: held-wallet gate + silent-send → SolSendUnknown (a bridge deposit must never go out twice)
+  await sendSigned(tx, b58e(sig), bh.lvh, k.address);
   return b58e(sig);
 }

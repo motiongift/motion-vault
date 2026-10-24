@@ -452,7 +452,8 @@ function orderArgs(o: Obj): OrderReq & { walletId: string } {
 export const args = {
   status: (v: unknown) => ({ walletId: shape(v, ['walletId'], ['walletId']).walletId as string }),
   setup: (v: unknown) => ({ walletId: shape(v, ['walletId'], ['walletId']).walletId as string }),
-  claim: (v: unknown) => { const o = shape(v, ['walletId', 'idempotencyKey'], ['walletId']); return { walletId: o.walletId as string, ...(o.idempotencyKey !== undefined ? { idempotencyKey: idem(o.idempotencyKey) } : {}) }; },
+  // F-48 (V12): claim moves money (withdraws the pending balance) — idempotencyKey is required so a retry can't claim twice.
+  claim: (v: unknown) => { const o = shape(v, ['walletId', 'idempotencyKey'], ['walletId', 'idempotencyKey']); return { walletId: o.walletId as string, idempotencyKey: idem(o.idempotencyKey) }; },
   quote: (v: unknown) => orderArgs(shape(v, ORDER_KEYS, ['walletId', 'market', 'side', 'type', 'sizeUsdg', 'slippageBps', 'leverage', 'marginMode'])),
   open: (v: unknown) => { const o = shape(v, [...ORDER_KEYS, 'idempotencyKey'], ['walletId', 'market', 'side', 'type', 'sizeUsdg', 'slippageBps', 'leverage', 'marginMode', 'idempotencyKey']); return { ...orderArgs(o), idempotencyKey: idem(o.idempotencyKey) }; },
   close: (v: unknown) => {
@@ -460,12 +461,13 @@ export const args = {
     const f = o.fraction; if (!(typeof f === 'number' && Number.isFinite(f) && f > 0 && f <= 1)) bad('fraction');
     return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), fraction: f as number, slippageBps: int(o.slippageBps, 5, SLIP_MAX_BPS, 'slippageBps'), idempotencyKey: idem(o.idempotencyKey) };
   },
+  // F-48 (V12): cancel/cancelAll change a position's live orders — idempotencyKey is required so a retry can't re-cancel.
   cancel: (v: unknown) => {
-    const o = shape(v, ['walletId', 'market', 'orderIndex'], ['walletId', 'market', 'orderIndex']);
+    const o = shape(v, ['walletId', 'market', 'orderIndex', 'idempotencyKey'], ['walletId', 'market', 'orderIndex', 'idempotencyKey']);
     if (!(typeof o.orderIndex === 'string' && /^\d{1,20}$/.test(o.orderIndex))) bad('orderIndex');
-    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), orderIndex: o.orderIndex as string };
+    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), orderIndex: o.orderIndex as string, idempotencyKey: idem(o.idempotencyKey) };
   },
-  cancelAll: (v: unknown) => { const o = shape(v, ['walletId', 'market'], ['walletId', 'market']); return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market') }; },
+  cancelAll: (v: unknown) => { const o = shape(v, ['walletId', 'market', 'idempotencyKey'], ['walletId', 'market', 'idempotencyKey']); return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), idempotencyKey: idem(o.idempotencyKey) }; },
   deposit: (v: unknown) => {
     const o = shape(v, ['walletId', 'amountUsdg', 'pay', 'idempotencyKey'], ['walletId', 'amountUsdg', 'pay', 'idempotencyKey']);
     return { walletId: o.walletId as string, amountUsdg: amount(o.amountUsdg, 'amountUsdg'), pay: oneOf(o.pay, ['auto', 'usdg', 'eth'] as const, 'pay'), idempotencyKey: idem(o.idempotencyKey) };
@@ -480,13 +482,14 @@ export const args = {
     return { walletId: o.walletId as string, amountUsdg: o.amountUsdg === 'max' ? 'max' as const : amount(o.amountUsdg, 'amountUsdg'), speed, ...(speed === 'fast' ? { maxFeeUsdg: o.maxFeeUsdg as string } : {}), idempotencyKey: idem(o.idempotencyKey) };
   },
   history: (v: unknown) => { const o = shape(v, ['walletId', 'kind', 'limit'], ['walletId', 'kind', 'limit']); return { walletId: o.walletId as string, kind: oneOf(o.kind, ['fills', 'funding'] as const, 'kind'), limit: int(o.limit, 1, 100, 'limit') }; },
+  // F-48 (V12): leverage/margin move money (change margin at risk) — idempotencyKey is required so a retry can't run twice.
   leverage: (v: unknown) => {
-    const o = shape(v, ['walletId', 'market', 'leverage', 'marginMode', 'idempotencyKey'], ['walletId', 'market', 'leverage', 'marginMode']);
-    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), leverage: int(o.leverage, 1, 50, 'leverage'), marginMode: oneOf(o.marginMode, ['cross', 'isolated'] as const, 'marginMode'), ...(o.idempotencyKey !== undefined ? { idempotencyKey: idem(o.idempotencyKey) } : {}) };
+    const o = shape(v, ['walletId', 'market', 'leverage', 'marginMode', 'idempotencyKey'], ['walletId', 'market', 'leverage', 'marginMode', 'idempotencyKey']);
+    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), leverage: int(o.leverage, 1, 50, 'leverage'), marginMode: oneOf(o.marginMode, ['cross', 'isolated'] as const, 'marginMode'), idempotencyKey: idem(o.idempotencyKey) };
   },
   margin: (v: unknown) => {
-    const o = shape(v, ['walletId', 'market', 'direction', 'amountUsdg', 'idempotencyKey'], ['walletId', 'market', 'direction', 'amountUsdg']);
-    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), direction: oneOf(o.direction, ['add', 'remove'] as const, 'direction'), amountUsdg: amount(o.amountUsdg, 'amountUsdg'), ...(o.idempotencyKey !== undefined ? { idempotencyKey: idem(o.idempotencyKey) } : {}) };
+    const o = shape(v, ['walletId', 'market', 'direction', 'amountUsdg', 'idempotencyKey'], ['walletId', 'market', 'direction', 'amountUsdg', 'idempotencyKey']);
+    return { walletId: o.walletId as string, market: int(o.market, 0, 4095, 'market'), direction: oneOf(o.direction, ['add', 'remove'] as const, 'direction'), amountUsdg: amount(o.amountUsdg, 'amountUsdg'), idempotencyKey: idem(o.idempotencyKey) };
   },
   /** SL / TP on an open position: no side (the position's), no size in units (a share of it), no destination */
   trigger: (v: unknown) => {

@@ -350,7 +350,21 @@ export function createPerps(d: PerpsDeps) {
   // L7: the notional this wallet opened in the last hour (orders Lighter accepted), kept on this device
   const hourRead = (): Record<string, { at: number; n: number }[]> => { try { return JSON.parse(d.store.get(HOUR_KEY) || '{}') || {}; } catch { return {}; } };
   const hourOf = (addr: string) => (hourRead()[addr.toLowerCase()] || []).filter((x) => d.now() - x.at < 3_600_000).reduce((a, x) => a + (Number(x.n) || 0), 0);
-  const hourNote = (addr: string, n: number) => { const all = hourRead(); const k = addr.toLowerCase(); all[k] = [...(all[k] || []).filter((x) => d.now() - x.at < 3_600_000), { at: d.now(), n }].slice(-200); d.store.set(HOUR_KEY, JSON.stringify(all)); };
+  // F-72 (V12): evict only by age (older than 1h). Above 200 kept entries, MERGE the oldest into a single bucket
+  // (n = sum of notionals, at = newest of the merged) instead of dropping them, so a burst of 200 tiny orders can
+  // never push a large order's notional out of the rolling-hour total that hourOf() enforces.
+  const hourNote = (addr: string, n: number) => {
+    const all = hourRead(); const k = addr.toLowerCase();
+    let kept = [...(all[k] || []).filter((x) => d.now() - x.at < 3_600_000), { at: d.now(), n }];
+    if (kept.length > 200) {
+      kept.sort((a, b) => a.at - b.at);
+      const over = kept.length - 200;
+      const old = kept.slice(0, over + 1);
+      const merged = { at: Math.max(...old.map((x) => x.at)), n: old.reduce((s, x) => s + (Number(x.n) || 0), 0) };
+      kept = [merged, ...kept.slice(over + 1)];
+    }
+    all[k] = kept; d.store.set(HOUR_KEY, JSON.stringify(all));
+  };
   const delaySec = () => cached('wdelay', 10 * 60_000, async () => { const j = await get('/api/v1/withdrawalDelay'); const s = Number(j.seconds); return s > 0 && s < 7 * 86_400 ? s : 400; });
 
   /**
@@ -412,7 +426,8 @@ export function createPerps(d: PerpsDeps) {
     // market details its quote read in the last 4 s (the book is always read now)
     const acctP = accountOf(w.address);
     const keyP = acctP.then((a) => keyState(w, a ? a.index : null, forOpen ? 4000 : 15_000)).catch(() => 'none' as const);
-    const [m, book, acct, eth, usdg, gasPrice, allowance, key] = await Promise.all([marketRead(r.market, forOpen ? 4000 : 0), bookTop(r.market), acctP, ethOf(w.address), usdgOf(w.address).catch(() => 0n), d.gasPrice(),
+    // F-27 (V12): a failed USDG read is null (not 0n) — a 0 would plan a swap of ETH for USDG the wallet may already hold.
+    const [m, book, acct, eth, usdg, gasPrice, allowance, key] = await Promise.all([marketRead(r.market, forOpen ? 4000 : 0), bookTop(r.market), acctP, ethOf(w.address), usdgOf(w.address).catch(() => null), d.gasPrice(),
       (d.pc.readContract({ address: USDG, abi: ERC20, functionName: 'allowance', args: [w.address, ZK_LIGHTER] }) as Promise<bigint>).catch(() => null), keyP]);
     const built = buildOrder(r, m, book, d.now());
     const account = acct ? acct.index : null;
@@ -427,16 +442,21 @@ export function createPerps(d: PerpsDeps) {
     const errors = [...built.errors];
     const steps: string[] = [];
     if (need.deposit > 0n) {
-      const fromUnits = usdg >= need.deposit ? need.deposit : usdg;
-      const rest = need.deposit - fromUnits;
-      let swap: { fee: number; ethIn: bigint; out: bigint } | undefined;
-      if (rest > 0n) swap = await swapPlan(rest).catch((e) => { errors.push(String((e as Error).message)); return undefined; });
-      const gas = (swap ? GAS.swap : 0n) + GAS.approve + GAS.deposit;
-      const gasEth = gas * gasPrice;
-      if ((swap?.ethIn || 0n) + gasEth + GAS_RESERVE > eth) errors.push(`Not enough ETH: this needs about ${Number(formatEther((swap?.ethIn || 0n) + gasEth)).toFixed(6)} ETH, the wallet has ${Number(formatEther(eth)).toFixed(6)}`);
-      funding = { need: need.need.toFixed(2), fromUsdg: decimal(fromUnits, 6), swapEth: swap ? formatEther(swap.ethIn) : '0', swapUsdg: swap ? decimal(rest, 6) : '0', deposit: decimal(need.deposit, 6), gasEth: formatEther(gasEth), swap, depositUnits: need.deposit, fromUnits, allowance, usdg };
-      if (swap) steps.push('swap');
-      steps.push('approve', 'deposit', 'credit');
+      // F-27 (V12): with the USDG balance unknown, surface the read failure instead of planning funding as if it were 0.
+      if (usdg == null) {
+        errors.push('USDG balance read failed — could not plan funding; try again');
+      } else {
+        const fromUnits = usdg >= need.deposit ? need.deposit : usdg;
+        const rest = need.deposit - fromUnits;
+        let swap: { fee: number; ethIn: bigint; out: bigint } | undefined;
+        if (rest > 0n) swap = await swapPlan(rest).catch((e) => { errors.push(String((e as Error).message)); return undefined; });
+        const gas = (swap ? GAS.swap : 0n) + GAS.approve + GAS.deposit;
+        const gasEth = gas * gasPrice;
+        if ((swap?.ethIn || 0n) + gasEth + GAS_RESERVE > eth) errors.push(`Not enough ETH: this needs about ${Number(formatEther((swap?.ethIn || 0n) + gasEth)).toFixed(6)} ETH, the wallet has ${Number(formatEther(eth)).toFixed(6)}`);
+        funding = { need: need.need.toFixed(2), fromUsdg: decimal(fromUnits, 6), swapEth: swap ? formatEther(swap.ethIn) : '0', swapUsdg: swap ? decimal(rest, 6) : '0', deposit: decimal(need.deposit, 6), gasEth: formatEther(gasEth), swap, depositUnits: need.deposit, fromUnits, allowance, usdg };
+        if (swap) steps.push('swap');
+        steps.push('approve', 'deposit', 'credit');
+      }
     }
     if (setup) steps.push('setup');
     steps.push('leverage', 'order');
@@ -606,7 +626,10 @@ export function createPerps(d: PerpsDeps) {
       await evmSend(w, USDG, encodeFunctionData({ abi: ERC20, functionName: 'approve', args: [ZK_LIGHTER, f.depositUnits] }), 0n, GAS.approve);
     });
     const have = await haveP;
-    if (have < f.depositUnits) throw new Error(`The wallet holds ${decimal(have, 6)} USDG, the deposit needs ${decimal(f.depositUnits, 6)} — nothing was deposited`);
+    // F-42 (V12): this sufficiency check runs after sending() but before the deposit is signed, so nothing was executed.
+    // Mark it preSend so once() drops the record (caller may retry) instead of storing a terminal 'failed'. The once()
+    // deletion side is a webEngine change owned by another agent — this side only carries the flag.
+    if (have < f.depositUnits) throw Object.assign(new Error(`The wallet holds ${decimal(have, 6)} USDG, the deposit needs ${decimal(f.depositUnits, 6)} — nothing was deposited`), { preSend: true });
     const depositHash = await step(key, w.id, 'deposit', async () => { sending(); return evmSend(w, ZK_LIGHTER, encodeFunctionData({ abi: ZK, functionName: 'deposit', args: [w.address, USDG_ASSET, ROUTE_PERP, f.depositUnits] }), 0n, GAS.deposit); });
     if (!EVM_HASH.test(depositHash)) throw unknownErr('the deposit transaction hash is malformed');
     const account = await step(key, w.id, 'credit', async () => {
@@ -749,13 +772,21 @@ export function createPerps(d: PerpsDeps) {
     });
   }
 
+  // F-48 (V12): cancel/cancelAll now run under once() keyed by r.idempotencyKey (was a fresh 'cancel:'+now / 'cancelall:'+now,
+  // so every retry was a replayable op). once() + fresh() block a duplicate from re-signing; the key is also the withKey id.
   async function cancel(raw: unknown) {
     const r = args.cancel(raw); const w = wallet(r.walletId);
-    return d.lock('perps:' + w.address.toLowerCase(), () => withKey(w, 'cancel:' + d.now(), ', then cancels the order', async (s, account) => { const sent = await sendSigned(w, (n) => s.cancelOrder(account, r.market, BigInt(r.orderIndex), n)); drop('ord:'); return { ok: true, txHash: sent.hash }; }));
+    return d.once({ idempotencyKey: r.idempotencyKey }, ['perps.cancel', r.walletId, r.market, r.orderIndex], (sending) => d.lock('perps:' + w.address.toLowerCase(), async () => {
+      fresh(r.idempotencyKey);
+      return withKey(w, r.idempotencyKey, ', then cancels the order', async (s, account) => { sending(); const sent = await sendSigned(w, (n) => s.cancelOrder(account, r.market, BigInt(r.orderIndex), n)); drop('ord:'); return { ok: true, txHash: sent.hash }; }, sending);
+    }));
   }
   async function cancelAll(raw: unknown) {
     const r = args.cancelAll(raw); const w = wallet(r.walletId);
-    return d.lock('perps:' + w.address.toLowerCase(), () => withKey(w, 'cancelall:' + d.now(), ', then cancels the orders', async (s, account) => { const sent = await sendSigned(w, (n) => s.cancelAll(account, 0, 0, n, r.market)); drop('ord:'); return { ok: true, txHash: sent.hash }; }));
+    return d.once({ idempotencyKey: r.idempotencyKey }, ['perps.cancelAll', r.walletId, r.market], (sending) => d.lock('perps:' + w.address.toLowerCase(), async () => {
+      fresh(r.idempotencyKey);
+      return withKey(w, r.idempotencyKey, ', then cancels the orders', async (s, account) => { sending(); const sent = await sendSigned(w, (n) => s.cancelAll(account, 0, 0, n, r.market)); drop('ord:'); return { ok: true, txHash: sent.hash }; }, sending);
+    }));
   }
 
   async function deposit(raw: unknown) {
@@ -904,7 +935,8 @@ export function createPerps(d: PerpsDeps) {
       const m = await marketRead(r.market, 0);
       if (r.leverage > m.maxLeverage) throw new Error(`${m.symbol} allows up to ${m.maxLeverage}x`);
       if (r.leverage >= LEVERAGE_CONFIRM && !(await d.ask({ title: `${r.leverage}x on ${m.symbol}`, danger: true, ok: `Set ${r.leverage}x`, html: sub(`A ${(100 / r.leverage).toFixed(1)} % move against a position can liquidate its margin.`) }))) throw new Error('Cancelled');
-      return withKey(w, r.idempotencyKey || 'leverage:' + d.now(), `, then sets ${r.leverage}x on ${esc(m.symbol)}`, async (s, account) => {
+      // F-48 (V12): key is required now — no 'leverage:'+now fallback that would let a retry re-run under a fresh key.
+      return withKey(w, r.idempotencyKey, `, then sets ${r.leverage}x on ${esc(m.symbol)}`, async (s, account) => {
         sending();
         const sent = await sendSigned(w, (n) => s.updateLeverage(account, m.id, imfOf(r.leverage), r.marginMode === 'isolated' ? 1 : 0, n));
         drop('acct:');
@@ -917,9 +949,29 @@ export function createPerps(d: PerpsDeps) {
     return d.once({ idempotencyKey: r.idempotencyKey }, ['perps.margin', r.walletId, r.market, r.direction, r.amountUsdg], (sending) => d.lock('perps:' + w.address.toLowerCase(), async () => {
       fresh(r.idempotencyKey);
       await ownAccount(w);   // no Lighter account: refused before any dialog
-      // L7: taking margin out of an isolated position brings its liquidation closer — the vault asks
-      if (r.direction === 'remove' && !(await d.ask({ title: 'Take margin out', danger: true, ok: `Remove ${r.amountUsdg} USDG`, html: `${sub(`${esc(r.amountUsdg)} USDG out of the isolated position's margin, back to the perps balance of ${esc(w.name)}.`)}${muted('Less margin moves the liquidation price closer to the market.')}` }))) throw new Error('Cancelled');
-      return withKey(w, r.idempotencyKey || 'margin:' + d.now(), ', then moves the margin', async (s, account) => {
+      // F-15 (V12): r.market is parent-controlled, so the removal dialog reads the market and this wallet's own account,
+      // refuses unless there is an ISOLATED position in that exact market, and shows the market, side, size, current
+      // margin and the estimated liquidation price before and after — the parent can no longer hide which position shrinks.
+      if (r.direction === 'remove') {
+        const [mk, acct] = await Promise.all([marketRead(r.market, 0), accountOf(w.address)]);
+        const pos = acct?.positions.find((x) => x.market === r.market);
+        if (!pos) throw new Error(`No open position in ${mk.symbol} to take margin out of`);
+        if (pos.marginMode !== 'isolated') throw new Error(`${mk.symbol} is on cross margin — margin can only be removed from an isolated position`);
+        const sz = Number(pos.size) || 0, liqNow = Number(pos.liq) || 0, amt = Number(r.amountUsdg) || 0;
+        // est. isolated liq after removal: it moves toward the mark by amount/size (a long's rises, a short's falls); the exact figure is Lighter's
+        const newLiq = sz > 0 ? (pos.side === 'long' ? liqNow + amt / sz : Math.max(0, liqNow - amt / sz)) : liqNow;
+        const ok = await d.ask({ title: 'Take margin out', danger: true, ok: `Remove ${r.amountUsdg} USDG`, html: `${sub(`${esc(r.amountUsdg)} USDG out of the isolated ${esc(pos.side)} ${esc(mk.symbol)} position's margin, back to the perps balance of ${esc(w.name)}.`)}<div class="dk-list">${[
+          kv('Market', esc(mk.symbol)),
+          kv('Side', esc(pos.side === 'long' ? 'Long' : 'Short')),
+          kv('Size', `${esc(pos.size)} ${esc(mk.symbol)}`),
+          kv('Current margin', `${esc(usd(Number(pos.margin), 2))} USDG`),
+          kv('Est. liquidation now', `$${px(liqNow)}`),
+          kv('Est. liquidation after', `$${px(newLiq)}`),
+        ].join('')}</div>${muted('Less margin moves the liquidation price closer to the market. The exact figure is Lighter\'s once it executes.')}` });
+        if (!ok) throw new Error('Cancelled');
+      }
+      // F-48 (V12): key is required now — no 'margin:'+now fallback that would let a retry re-run under a fresh key.
+      return withKey(w, r.idempotencyKey, ', then moves the margin', async (s, account) => {
         sending();
         const sent = await sendSigned(w, (n) => s.updateMargin(account, r.market, units(r.amountUsdg, 6), r.direction === 'add' ? 1 : 0, n));
         drop('acct:');
@@ -967,16 +1019,34 @@ export function createPerps(d: PerpsDeps) {
           drop('acct:'); drop('ord:');
           const o = await outcome(sent.hash, FILL_WAIT_MS);
           if (o.state === 'failed') throw named('PerpsRefused', `Lighter did not place the ${what}: ${o.error}${r.replace ? '; the old one is still open' : ''}`);
-          let replaced: boolean | null = null, cancelTxHash = '', replaceError = '', replaceUnknown = false;
+          let replaced: boolean | null = null, cancelTxHash = '', replaceError = '', replaceUnknown = false, replacePending = false;
           if (r.replace) {
-            try { cancelTxHash = (await step(r.idempotencyKey, w.id, 'replace', () => sendSigned(w, (n) => s.cancelOrder(account, r.market, BigInt(r.replace!), n)), extra)).hash; replaced = true; }
-            catch (e) { replaced = false; replaceError = String((e as Error)?.message || e).slice(0, 200); replaceUnknown = !!(e as { unknown?: boolean })?.unknown; }
-            drop('ord:');
+            // F-4 (V12): NEVER cancel the old trigger until the new one is actually on the book. Only cancel once the
+            // create tx executed AND the new order shows up in accountActiveOrders; otherwise leave the old stop in place
+            // and report replaced:false, replacePending:true — the position is never left without a stop.
+            let live = false;
+            if (o.state === 'executed') {
+              const j = await get(`/api/v1/accountActiveOrders?account_index=${account}&market_type=perp`, tok).catch(() => null);
+              const orders = (j?.orders as Record<string, unknown>[]) || [];
+              live = orders.some((x) => (o.orderIndex && String(x.order_index) === o.orderIndex)
+                || (Number(x.market_index) === r.market && triggerKindOf(x.type) === r.kind && !!x.reduce_only && String(x.order_index) !== r.replace));
+            }
+            if (!live) { replaced = false; replacePending = true; }
+            else {
+              try {
+                cancelTxHash = (await step(r.idempotencyKey, w.id, 'replace', () => sendSigned(w, (n) => s.cancelOrder(account, r.market, BigInt(r.replace!), n)), extra)).hash;
+                // F-51 (V12): replaced:true only once the cancel's own tx executed; false if it failed; null + replacePending while unconfirmed.
+                const co = await outcome(cancelTxHash, 8000);
+                replaced = co.state === 'executed' ? true : co.state === 'failed' ? false : null;
+                if (replaced === null) replacePending = true;
+              } catch (e) { replaced = false; replaceError = String((e as Error)?.message || e).slice(0, 200); replaceUnknown = !!(e as { unknown?: boolean })?.unknown; }
+              drop('ord:');
+            }
           }
           return {
             ok: true, state: o.state === 'executed' ? 'placed' : 'accepted', txHash: sent.hash, market: m.id, symbol: m.symbol, kind: r.kind, side: pos.side,
             triggerPrice, limitPrice: decimal(t.order.price, m.priceDecimals), sizeShare: r.sizeShare, base: r.sizeShare >= 100 ? '' : decimal(t.base, m.sizeDecimals), orderIndex: o.orderIndex || '',
-            replaced, ...(cancelTxHash ? { cancelTxHash } : {}), ...(replaceError ? { replaceError } : {}), ...(replaceUnknown ? { replaceUnknown: true } : {}),
+            replaced, ...(replacePending ? { replacePending: true } : {}), ...(cancelTxHash ? { cancelTxHash } : {}), ...(replaceError ? { replaceError } : {}), ...(replaceUnknown ? { replaceUnknown: true } : {}),
           };
         }, sending);
       });
