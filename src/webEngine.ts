@@ -4187,18 +4187,21 @@ const seedOf = (m: string): string | undefined => (hasOwn(seeds, m) ? seeds[m] :
 // can bind to it; and a verified lookup of it.
 const MS = (m: string): string => 'ms:' + lc(m);
 // This account's own wallets for its USD-balance consent record (src/floatConsent.ts Own): the EVM keys this vault holds and —
-// only when a record names one it does not hold — the wallets the account backup holds under this seed (openProfile: each
-// key checked against its address) and its derived ones. A seed from an unbound legacy recovery copy ('rk1', V12 F-28)
-// never adopts a grant (a revocation still applies).
+// only when a record's signer is none of them — the wallets of the account's backup-v4 (passkey) entries opened with a K4 this
+// vault unwrapped ITSELF (its own dk for that generation; security review 2026-11-02 H1). Never a v3 / v2 / v1 entry (they
+// open under the seed alone — a phished main signature could have sealed its own key there) and never a seed-derived address
+// or the page's `count`. A vault that has no v4 key for this account proves nothing from the backup. A seed from an unbound
+// legacy recovery copy ('rk1', V12 F-28) never adopts a grant (a revocation still applies).
 function consentOwn(m: string, seed: string, p: Profile | null): Own {
   const vault = new Set(allAccounts().filter((a) => !a.ext && !a.hop && /^0x[0-9a-fA-F]{64}$/.test(a.key)).map((a) => lc(a.address)));
   return {
     vault, grants: meta.seedSrc?.[m] !== 'rk1',
-    more: async () => {
+    v4: async () => {
       const out = new Set<string>();
-      if (!p || lc(p.main) !== m || (p.fp && p.fp !== await fingerprint(seed))) return out;
-      for (const w of (await openProfile(p, seed, saltsOf())).wallets) out.add(lc(w.address));
-      for (let i = 0; i < Math.min(SUB_CAP, Math.max(0, Math.floor(Number(p.count) || 0))); i += 1) out.add(lc(privateKeyToAccount(await subKeyV1(seed, i)).address));
+      if (!p || lc(p.main) !== m || (p.fp && p.fp !== await fingerprint(seed)) || !meta.pk4?.[m]) return out;
+      const k4 = await v4KeysOf(m, normPk(p.pk)).catch(() => ({ keys: [] as CryptoKey[] }));
+      if (!k4.keys.length) return out;
+      for (const w of (await openProfile(p, seed, saltsOf(), k4.keys)).wallets) if (w.v === 4) out.add(lc(w.address));
       return out;
     },
   };

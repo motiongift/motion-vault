@@ -163,7 +163,7 @@ test('rewards-link: a note for the account the server bound this vault to signs 
 const DAY = 86_400_000, SEED = '0x' + '5e'.repeat(32);
 async function record(key, n, on, now) {
   const a = privateKeyToAccount(key);
-  const body = on ? { v: 1, n, on: true, at: now, chains: ['robinhood'], caps: { perDay6: '1000000', feesPerDay6: '1000000', perChain6: '1000000', total6: '1000000', maxSlipBps: 100 }, grantedAt: now, expiresAt: now + 30 * DAY, rules: 2, wallets: [lc(a.address)] } : { v: 1, n, on: false, at: now };
+  const body = on ? { v: 1, n, on: true, at: now, chains: ['robinhood'], caps: { perDay6: '50000000', feesPerDay6: '500000', perChain6: '10000000', total6: '10000000', maxSlipBps: 100 } /* 2026-11-02: inside CAP_BOUNDS (floatCore termsOk) */, grantedAt: now, expiresAt: now + 30 * DAY, rules: 2, wallets: [lc(a.address)] } : { v: 1, n, on: false, at: now };
   const rec = { body, signer: lc(a.address), sig: await a.signMessage({ message: C.consentMessage(body) }) };
   return C.sealConsent(MAIN, SEED, rec);
 }

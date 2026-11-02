@@ -10,9 +10,16 @@
 //      from the main wallet's own signature and never reaches the server. AAD binds the main wallet, the counter `n` and
 //      the on/off flag `o` that ride outside in the clear, so the server can neither read, nor forge, nor relabel a record.
 //   2. SIGNED: an EIP-191 signature by one of the account's own trading wallets over the record's canonical digest. A device
-//      adopts a grant only if the signer is one of the wallets the grant names AND a wallet whose key this vault holds.
-//   3. BOUND: every wallet named must be one of THIS account's own wallets (the vault's own, or one the account's sealed
-//      backup holds under this seed, key checked against address) — a grant for anyone else's wallets is refused whole.
+//      adopts a grant only if the signer is one of the wallets the grant names AND a key THIS vault holds — or (2026-11-02)
+//      one of the record's CO-SIGNERS is: the device that writes a record also signs it with up to CO_MAX of the other named
+//      wallets it holds, so a phone that holds Wallet 1 follows a record the desktop wrote while trading from Wallet 3. A
+//      signer whose key only the account's backup holds counts ONLY when it was opened from a backup-v4 (passkey) entry
+//      with a K4 this vault unwrapped itself (Own.v4); never a v3 / v2 / v1 entry and never a seed-derived address — a seed
+//      holder can seal and derive those (security review 2026-11-02 H1).
+//   3. BOUND: a device covers only the named wallets it holds; a record naming none of them is refused whole ('foreign';
+//      2026-11-02: one wallet of another account in that device's vault no longer refuses the whole record).
+//   4. TERMS (2026-11-02, review H2): a grant's caps, slippage and dates must be ones `configure` can write
+//      (floatCore termsOk: CAP_BOUNDS, at most PERMISSION_DAYS) — otherwise 'terms', never followed.
 // Ordering: `n` is a counter every device raises above everything it has seen (n = highest seen + 1). The higher `n` wins;
 // on the same `n` (two devices at the same moment) OFF wins. Every device keeps the highest record it has seen (its
 // high-water mark) and refuses anything older, so a server that replays an older grant after a revocation is refused, and
@@ -25,7 +32,7 @@
 import { recoverMessageAddress } from 'viem';
 import { sha256 } from '@noble/hashes/sha256';
 import { hmac, buf, b64, unb64 } from './vaultRecovery.ts';
-import { FLOAT_CHAIN_KEYS, rulesOf, type FloatChain } from './floatCore.ts';
+import { FLOAT_CHAIN_KEYS, rulesOf, termsOk, type FloatChain } from './floatCore.ts';
 
 export const CONSENT_INFO = 'motion/usd-consent/v1';
 /** The largest sealed record the server keeps (validProfile `uc.ct`): 200 wallets fit with room to spare. */
@@ -37,7 +44,11 @@ export type ConsentBody = {
   // on only: what the grant allows
   chains?: FloatChain[]; caps?: CapsWire; grantedAt?: number; expiresAt?: number; rules?: number; wallets?: string[];
 };
-export type ConsentRecord = { body: ConsentBody; signer: string; sig: string };
+/** `co` (2026-11-02): the same record signed by other wallets it names (at most CO_MAX), so a device holding any one of them
+ *  can vouch for it. An older engine ignores it. */
+export type CoSig = { signer: string; sig: string };
+export type ConsentRecord = { body: ConsentBody; signer: string; sig: string; co?: CoSig[] };
+export const CO_MAX = 12;
 /** What rides in the profile (`profile.uc`): the counter and the on/off flag in the clear (bound by AAD), the rest sealed. */
 export type ConsentBlob = { v: 1; n: number; o: 0 | 1; iv: string; ct: string };
 
@@ -99,9 +110,16 @@ const aadOf = (main: string, n: number, o: 0 | 1) => buf(enc.encode(`${CONSENT_I
 export async function sealConsent(main: string, seed: string, rec: ConsentRecord): Promise<ConsentBlob> {
   if (!validBody(rec.body)) throw new Error('Bad consent record');
   const o = rec.body.on ? 1 as const : 0 as const;
-  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aadOf(main, rec.body.n, o) }, await keyOf(seed), buf(enc.encode(JSON.stringify({ b: rec.body, s: lc(rec.signer), g: rec.sig })))));
-  const blob: ConsentBlob = { v: 1, n: rec.body.n, o, iv: b64(iv), ct: b64(ct) };
+  const co = (rec.co || []).filter((x) => ADDR.test(lc(x.signer)) && /^0x[0-9a-fA-F]{130}$/.test(String(x.sig))).slice(0, CO_MAX);
+  const seal = async (withCo: boolean): Promise<ConsentBlob> => {
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const pt = JSON.stringify({ b: rec.body, s: lc(rec.signer), g: rec.sig, ...(withCo && co.length ? { c: co.map((x) => [lc(x.signer), x.sig]) } : {}) });
+    const ct = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(iv), additionalData: aadOf(main, rec.body.n, o) }, await keyOf(seed), buf(enc.encode(pt))));
+    return { v: 1, n: rec.body.n, o, iv: b64(iv), ct: b64(ct) };
+  };
+  // the co-signatures are an extra: a record that would not fit with them is sealed without them (a backup never fails for them)
+  let blob = await seal(true);
+  if (blob.ct.length > CONSENT_CT_MAX && co.length) blob = await seal(false);
   if (blob.ct.length > CONSENT_CT_MAX) throw new Error('Consent record too large');
   return blob;
 }
@@ -110,11 +128,13 @@ export async function openConsent(main: string, seed: string, blob: unknown): Pr
   if (!validBlob(blob)) return null;
   let t: string;
   try { t = dec.decode(await globalThis.crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf(unb64(blob.iv)), additionalData: aadOf(main, blob.n, blob.o) }, await keyOf(seed), buf(unb64(blob.ct)))); } catch { return null; }
-  let p: { b?: unknown; s?: unknown; g?: unknown };
+  let p: { b?: unknown; s?: unknown; g?: unknown; c?: unknown };
   try { p = JSON.parse(t); } catch { return null; }
   if (!p || !validBody(p.b) || p.b.n !== blob.n || (p.b.on ? 1 : 0) !== blob.o) return null;
   if (!ADDR.test(lc(p.s)) || !/^0x[0-9a-fA-F]{130}$/.test(String(p.g || ''))) return null;
-  return { body: p.b, signer: lc(p.s), sig: String(p.g) };
+  // co-signatures: well-formed pairs only, at most CO_MAX (anything else is left out; each is verified before it counts)
+  const co = Array.isArray(p.c) ? p.c.slice(0, CO_MAX).flatMap((x) => (Array.isArray(x) && ADDR.test(lc(x[0])) && /^0x[0-9a-fA-F]{130}$/.test(String(x[1] || '')) ? [{ signer: lc(x[0]), sig: String(x[1]) }] : [])) : [];
+  return { body: p.b, signer: lc(p.s), sig: String(p.g), ...(co.length ? { co } : {}) };
 }
 /** The signature is the named signer's, over this exact record; a grant's signer must be one of its wallets. */
 export async function verifyConsent(rec: ConsentRecord): Promise<boolean> {
@@ -123,8 +143,19 @@ export async function verifyConsent(rec: ConsentRecord): Promise<boolean> {
   try { return lc(await recoverMessageAddress({ message: consentMessage(rec.body), signature: rec.sig as `0x${string}` })) === lc(rec.signer); } catch { return false; }
 }
 
+/** A co-signer of a grant that THIS vault holds and whose signature over this exact record checks (it must be a named wallet). */
+export async function heldCoSigner(rec: ConsentRecord, held: (addr: string) => boolean): Promise<boolean> {
+  if (!rec.body.on) return false;
+  const named = new Set((rec.body.wallets || []).map(lc));
+  for (const x of rec.co || []) {
+    if (!named.has(lc(x.signer)) || !held(lc(x.signer))) continue;
+    try { if (lc(await recoverMessageAddress({ message: consentMessage(rec.body), signature: x.sig as `0x${string}` })) === lc(x.signer)) return true; } catch { /* next */ }
+  }
+  return false;
+}
+
 // ── what a device does with the record it found in the profile ──
-export type ConsentWhy = 'none' | 'unopened' | 'signature' | 'same' | 'older' | 'signer' | 'foreign' | 'expired' | 'rules' | 'unverified';
+export type ConsentWhy = 'none' | 'unopened' | 'signature' | 'same' | 'older' | 'signer' | 'foreign' | 'expired' | 'rules' | 'unverified' | 'terms';
 export type ConsentVerdict = { action: 'adopt' | 'revoke' | 'keep'; why?: ConsentWhy; rec?: ConsentRecord };
 /**
  * Pure decision over an AUTHENTIC record (opened + signature checked) against this device's high-water mark:
@@ -133,7 +164,7 @@ export type ConsentVerdict = { action: 'adopt' | 'revoke' | 'keep'; why?: Consen
  *   and on rules this build accepts — otherwise keep. `grants` false (a seed this vault cannot vouch for: a legacy unbound
  *   recovery copy, webEngine seedSrc 'rk1') → a grant is never adopted; a revocation still is.
  */
-export function judgeConsent(i: { local: ConsentBody | null; remote: ConsentRecord; vault: (addr: string) => boolean; own: (addr: string) => boolean; now: number; accepted: number; grants?: boolean; floor?: number }): ConsentVerdict {
+export function judgeConsent(i: { local: ConsentBody | null; remote: ConsentRecord; vault: (addr: string) => boolean; own: (addr: string) => boolean; now: number; accepted: number; grants?: boolean; floor?: number; coHeld?: boolean }): ConsentVerdict {
   const r = i.remote.body;
   if (i.local && !newer(r, i.local)) return { action: 'keep', why: consentDigest(r) === consentDigest(i.local) ? 'same' : 'older', rec: i.remote };
   // (audit 2026-11-01, vault-security-consent-replay) the high-water mark also binds a device with no record of its own: a
@@ -142,8 +173,15 @@ export function judgeConsent(i: { local: ConsentBody | null; remote: ConsentReco
   if (r.on && Number.isSafeInteger(i.floor) && r.n < (i.floor as number)) return { action: 'keep', why: 'older', rec: i.remote };
   if (!r.on) return { action: 'revoke', rec: i.remote };
   if (i.grants === false) return { action: 'keep', why: 'unverified', rec: i.remote };
-  if (!i.vault(lc(i.remote.signer))) return { action: 'keep', why: 'signer', rec: i.remote };
-  if (!(r.wallets || []).every((w) => i.own(lc(w)))) return { action: 'keep', why: 'foreign', rec: i.remote };
+  // (2026-11-02, review H2) terms `configure` could never have written (slippage above 1 %, caps outside CAP_BOUNDS, more than
+  // 30 days, dated in the future): never followed, whoever signed it
+  if (!termsOk({ caps: r.caps, grantedAt: r.grantedAt, expiresAt: r.expiresAt }, i.now)) return { action: 'keep', why: 'terms', rec: i.remote };
+  // the signer: a key this vault holds, a co-signer this vault holds (checked by consentReceive), or a wallet `own` proves
+  // (a backup-v4 entry opened with this vault's own K4 — never a v3 entry or a seed-derived address; review H1)
+  if (!i.vault(lc(i.remote.signer)) && !i.coHeld && !i.own(lc(i.remote.signer))) return { action: 'keep', why: 'signer', rec: i.remote };
+  // a named wallet this vault does not hold is left out (a device covers only the wallets it holds: floatEngine consent.apply);
+  // a record naming NONE of this vault's wallets turns nothing on here (review M2)
+  if (!(r.wallets || []).some((w) => i.vault(lc(w)))) return { action: 'keep', why: 'foreign', rec: i.remote };
   if (!((r.expiresAt as number) > i.now)) return { action: 'keep', why: 'expired', rec: i.remote };
   if (rulesOf(r) < i.accepted) return { action: 'keep', why: 'rules', rec: i.remote };
   return { action: 'adopt', rec: i.remote };
@@ -167,19 +205,20 @@ export type ConsentHost = {
   /** (2026-11-01) an authentic grant NEWER than this device's own that it did not adopt, and why (newer rules, out of date, a
    *  signer whose key this vault does not hold, a wallet that is not the account's, an unverified seed): the switch's dialog
    *  then says why this device asks, and converts nothing by default. Optional for older hosts. */
-  kept?: (k: { n: number; why: ConsentWhy; rules: number }) => void;
+  kept?: (k: { n: number; why: ConsentWhy; rules: number; terms?: { chains: FloatChain[]; caps: CapsWire } }) => void;
 };
 /** The reasons a newer authentic grant was not adopted (what `ConsentHost.kept` hears). */
 export const KEPT_WHYS: readonly ConsentWhy[] = ['rules', 'expired', 'signer', 'foreign', 'unverified'];
-/** This account's own wallets as this device knows them: `vault` = the wallets whose keys this vault holds (lower-case
- *  addresses); `more` = on demand, the wallets the account's backup holds under this seed (opened, key checked against its
- *  address) and its derived ones; `grants` false = never adopt a grant under this seed (see judgeConsent). */
-export type Own = { vault: Set<string>; more?: () => Promise<Set<string>>; grants?: boolean };
+/** This account's own wallets as this device can PROVE them: `vault` = the wallets whose keys this vault holds (lower-case
+ *  addresses); `v4` = on demand, the wallets opened from backup-v4 (passkey) entries with a K4 this vault unwrapped itself
+ *  (webEngine consentOwn) — the only backup wallets that count as a signer (review H1: a v3 entry or a seed-derived address
+ *  is within reach of anyone with the seed); `more` (older callers: any backup wallet) is no proof and is ignored;
+ *  `grants` false = never adopt a grant under this seed (see judgeConsent). */
+export type Own = { vault: Set<string>; v4?: () => Promise<Set<string>>; more?: () => Promise<Set<string>>; grants?: boolean };
 async function ownCheck(rec: ConsentRecord, own: Own): Promise<Set<string>> {
-  const ws = (rec.body.wallets || []).map(lc);
-  if (ws.every((w) => own.vault.has(w)) || !own.more) return own.vault;
-  const more = await own.more().catch(() => new Set<string>());
-  return new Set([...own.vault, ...[...more].map(lc)]);
+  if (own.vault.has(lc(rec.signer)) || !own.v4) return own.vault;
+  const v4 = await own.v4().catch(() => new Set<string>());
+  return new Set([...own.vault, ...[...v4].map(lc)]);
 }
 /**
  * The profile's record → this device (mainSync, mainConsent, and before every publish). Returns what was done and why.
@@ -195,10 +234,14 @@ export async function consentReceive(host: ConsentHost, o: { main: string; seed:
   host.seen(rec.body.n);
   const local = host.local();
   if (local && consentDigest(local.body) === consentDigest(rec.body)) { host.synced(rec.body.n); return { action: 'keep', why: 'same', rec }; }
-  const own = rec.body.on ? await ownCheck(rec, o.own) : o.own.vault;
-  const v = judgeConsent({ local: local?.body ?? null, remote: rec, vault: (a) => o.own.vault.has(a), own: (a) => own.has(a), now: o.now, accepted: host.accepted, grants: o.own.grants, floor });
+  const held = (a: string) => o.own.vault.has(lc(a));
+  const coHeld = rec.body.on && !held(rec.signer) ? await heldCoSigner(rec, held) : false;
+  const own = rec.body.on && !coHeld ? await ownCheck(rec, o.own) : o.own.vault;
+  const v = judgeConsent({ local: local?.body ?? null, remote: rec, vault: held, own: (a) => own.has(a), now: o.now, accepted: host.accepted, grants: o.own.grants, floor, coHeld });
   if (v.action === 'adopt' || v.action === 'revoke') { host.apply({ ...v, action: v.action, rec }); host.synced(rec.body.n); }
-  else if (rec.body.on && v.why && KEPT_WHYS.includes(v.why)) host.kept?.({ n: rec.body.n, why: v.why, rules: rulesOf(rec.body) });
+  // a newer grant not followed: why, and — only when its authorship is proven (out of date / older rules) — its terms, the
+  // baseline a buy click's one-button confirm may re-grant (floatEngine configure `click`)
+  else if (rec.body.on && v.why && KEPT_WHYS.includes(v.why)) host.kept?.({ n: rec.body.n, why: v.why, rules: rulesOf(rec.body), ...((v.why === 'rules' || v.why === 'expired') && rec.body.caps && rec.body.chains ? { terms: { chains: [...rec.body.chains], caps: { ...rec.body.caps } } } : {}) });
   return v;
 }
 /**

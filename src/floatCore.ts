@@ -256,7 +256,26 @@ export function permissionDigest(p: Omit<Permission, 'digest'>): string {
   const canon = JSON.stringify({ v: p.v, wallet: p.wallet.toLowerCase(), reserve: p.reserve.toLowerCase(), chains: [...p.chains].sort(), caps: { perDay6: String(p.caps.perDay6), feesPerDay6: String(p.caps.feesPerDay6), perChain6: String(p.caps.perChain6), total6: String(p.caps.total6), maxSlipBps: p.caps.maxSlipBps }, grantedAt: p.grantedAt, expiresAt: p.expiresAt, ...rulesCanon(p) });
   return hex(sha256(new TextEncoder().encode(canon)));
 }
-export const permissionLive = (p: Permission | null | undefined, now: number, accepted: number = FLOAT_RULES.accepted): p is Permission => !!p && p.v === 1 && p.expiresAt > now && rulesOf(p) >= accepted && permissionDigest(p) === p.digest;
+export const permissionLive = (p: Permission | null | undefined, now: number, accepted: number = FLOAT_RULES.accepted): p is Permission => !!p && p.v === 1 && p.expiresAt > now && rulesOf(p) >= accepted && termsOk(p) && permissionDigest(p) === p.digest;
+/**
+ * (2026-11-02, review H2) The terms a grant may carry are the ones `configure` can write: every cap inside CAP_BOUNDS (slippage
+ * 0.10–1.00 %), per chain at most the total, and at most PERMISSION_DAYS between grantedAt and expiresAt; with `now`, a grant
+ * dated more than TERMS_SKEW_MS in the future is refused too. An adopted account record (floatConsent judgeConsent → 'terms',
+ * floatEngine consent.apply) and every stored grant / permission (accountLive, permissionLive) are held to it, so a record
+ * signed with slippage 100 % or a ten-year expiry is never followed, and one already stored is not live.
+ */
+export const TERMS_SKEW_MS = 10 * 60_000;
+export function termsOk(t: { caps?: { perDay6?: unknown; feesPerDay6?: unknown; perChain6?: unknown; total6?: unknown; maxSlipBps?: unknown } | null; grantedAt?: unknown; expiresAt?: unknown } | null | undefined, now?: number): boolean {
+  const c = t?.caps; if (!t || !c) return false;
+  const n = (v: unknown): bigint | null => { try { const s = String(v); return /^\d{1,30}$/.test(s) ? BigInt(s) : null; } catch { return null; } };
+  const inB = (v: unknown, b: readonly [bigint, bigint]) => { const x = n(v); return x != null && x >= b[0] && x <= b[1]; };
+  if (!inB(c.perDay6, CAP_BOUNDS.perDay6) || !inB(c.feesPerDay6, CAP_BOUNDS.feesPerDay6) || !inB(c.perChain6, CAP_BOUNDS.perChain6) || !inB(c.total6, CAP_BOUNDS.total6)) return false;
+  if ((n(c.perChain6) as bigint) > (n(c.total6) as bigint)) return false;
+  const slip = Number(c.maxSlipBps); if (!Number.isInteger(slip) || slip < CAP_BOUNDS.maxSlipBps[0] || slip > CAP_BOUNDS.maxSlipBps[1]) return false;
+  const g = Number(t.grantedAt), e = Number(t.expiresAt);
+  if (!Number.isSafeInteger(g) || !Number.isSafeInteger(e) || g < 1 || e <= g || e - g > PERMISSION_DAYS * 86_400_000) return false;
+  return now == null || g <= now + TERMS_SKEW_MS;
+}
 
 // ── what a grant agreed to: its RULES version, never its wording (2026-10-27; a user: "i turned on usd balance yday and
 // its asking me to do it again today") ──
@@ -704,7 +723,7 @@ export function accountDigest(a: Omit<AccountGrant, 'digest'>): string {
   const canon = JSON.stringify({ v: a.v, scope: 'account', chains: [...a.chains].sort(), caps: { perDay6: String(a.caps.perDay6), feesPerDay6: String(a.caps.feesPerDay6), perChain6: String(a.caps.perChain6), total6: String(a.caps.total6), maxSlipBps: a.caps.maxSlipBps }, grantedAt: a.grantedAt, expiresAt: a.expiresAt, wallets: a.wallets.map((x) => x.toLowerCase()).sort(), ...rulesCanon(a) });
   return hex(sha256(new TextEncoder().encode(canon)));
 }
-export const accountLive = (a: AccountGrant | null | undefined, now: number, accepted: number = FLOAT_RULES.accepted): a is AccountGrant => !!a && a.v === 1 && a.expiresAt > now && rulesOf(a) >= accepted && accountDigest(a) === a.digest;
+export const accountLive = (a: AccountGrant | null | undefined, now: number, accepted: number = FLOAT_RULES.accepted): a is AccountGrant => !!a && a.v === 1 && a.expiresAt > now && rulesOf(a) >= accepted && termsOk(a) && accountDigest(a) === a.digest;
 /** A grant that is whole and in date but agreed to rules older than `accepted`: the switch asks only for the delta. */
 export const accountOutdated = (a: AccountGrant | null | undefined, now: number, accepted: number = FLOAT_RULES.accepted): boolean => accountLive(a, now, 0) && rulesOf(a) < accepted;
 // a wallet the vault cannot run a USD balance for: a Privy wallet (it does not sign here) or a chain-only key
@@ -884,6 +903,8 @@ type ResumeWords = {
   device: (cash: string) => string; deviceOn: string; expired: (day: string) => string; rules: string;
   keep: (natives: string) => string; offer: (v: string, natives: string) => string;
   chain1: (names: string) => string; chainN: (names: string) => string; caps: string;
+  /** (2026-11-02) a buy click's confirm (configure `click`): its one button, and the line that says the buy goes on */
+  okBuy: string; buyNext: string;
 };
 export const RESUME: Record<FloatLang, ResumeWords> = {
   en: {
@@ -897,6 +918,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `${n} is not on yet for this account: this turns it on there too. Nothing is converted.`,
     chainN: (n) => `${n} are not on yet for this account: this turns them on too. Nothing is converted.`,
     caps: 'Your limits change to the ones below. Nothing is converted.',
+    okBuy: 'Confirm and buy', buyNext: 'Your buy goes on right after this tap.',
   },
   ru: {
     title: 'Баланс в USD на этом устройстве', ok: 'Подтвердить', okConvert: (v) => `Подтвердить и конвертировать ${v}`, firstConvert: (v) => `Включить и конвертировать ${v}`, firstKeep: 'Включить без конвертации',
@@ -909,6 +931,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `Сеть ${n} ещё не включена для этого аккаунта: это включит её. Ничего не конвертируется.`,
     chainN: (n) => `Сети ${n} ещё не включены для этого аккаунта: это включит их. Ничего не конвертируется.`,
     caps: 'Ваши лимиты меняются на указанные ниже. Ничего не конвертируется.',
+    okBuy: 'Подтвердить и купить', buyNext: 'Покупка продолжится сразу после этого нажатия.',
   },
   zh: {
     title: '在此设备上使用 USD 余额', ok: '确认', okConvert: (v) => `确认并转换 ${v}`, firstConvert: (v) => `开启并转换 ${v}`, firstKeep: '开启但不转换',
@@ -921,6 +944,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `此账户尚未在 ${n} 上开启：这将一并开启。不会转换任何资产。`,
     chainN: (n) => `此账户尚未在 ${n} 上开启：这将一并开启。不会转换任何资产。`,
     caps: '你的限额将改为下方所示。不会转换任何资产。',
+    okBuy: '确认并买入', buyNext: '点一下之后，你的买入会立即继续。',
   },
   id: {
     title: 'Saldo USD di perangkat ini', ok: 'Konfirmasi', okConvert: (v) => `Konfirmasi dan konversi ${v}`, firstConvert: (v) => `Aktifkan dan konversi ${v}`, firstKeep: 'Aktifkan tanpa konversi',
@@ -933,6 +957,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `${n} belum aktif untuk akun ini: ini juga mengaktifkannya. Tidak ada yang dikonversi.`,
     chainN: (n) => `${n} belum aktif untuk akun ini: ini juga mengaktifkannya. Tidak ada yang dikonversi.`,
     caps: 'Batas Anda berubah menjadi yang di bawah. Tidak ada yang dikonversi.',
+    okBuy: 'Konfirmasi dan beli', buyNext: 'Pembelian Anda langsung berlanjut setelah ketukan ini.',
   },
   es: {
     title: 'Saldo en USD en este dispositivo', ok: 'Confirmar', okConvert: (v) => `Confirmar y convertir ${v}`, firstConvert: (v) => `Activar y convertir ${v}`, firstKeep: 'Activar sin convertir',
@@ -945,6 +970,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `${n} aún no está activado en esta cuenta: esto lo activa también. No se convierte nada.`,
     chainN: (n) => `${n} aún no están activados en esta cuenta: esto los activa también. No se convierte nada.`,
     caps: 'Tus límites pasan a ser los de abajo. No se convierte nada.',
+    okBuy: 'Confirmar y comprar', buyNext: 'Tu compra sigue justo después de este toque.',
   },
   fr: {
     title: 'Solde en USD sur cet appareil', ok: 'Confirmer', okConvert: (v) => `Confirmer et convertir ${v}`, firstConvert: (v) => `Activer et convertir ${v}`, firstKeep: 'Activer sans convertir',
@@ -957,6 +983,7 @@ export const RESUME: Record<FloatLang, ResumeWords> = {
     chain1: (n) => `${n} n’est pas encore activé pour ce compte : ceci l’active aussi. Rien n’est converti.`,
     chainN: (n) => `${n} ne sont pas encore activés pour ce compte : ceci les active aussi. Rien n’est converti.`,
     caps: 'Vos limites deviennent celles ci-dessous. Rien n’est converti.',
+    okBuy: 'Confirmer et acheter', buyNext: 'Votre achat continue juste après ce geste.',
   },
 };
 const DAY_LOCALE: Record<FloatLang, string> = { en: 'en-US', ru: 'ru-RU', zh: 'zh-CN', id: 'id-ID', es: 'es-ES', fr: 'fr-FR' };
@@ -1167,7 +1194,8 @@ export const ENSURE_REASONS = ['lane', 'page', 'preset', 'fill', 'visible', 'tic
 // `fresh: true` = the app's read right before it opens a dialog: this frame's chain is read now (no bucket) and awaited
 const SHAPES: Record<FloatMethod, string[]> = {
   status: ['walletId', 'scope', 'fresh'],
-  configure: ['walletId', 'chains', 'caps', 'lang'],
+  // click (2026-11-02): the confirm a buy click asks for (one button, nothing converted; the buy goes on after it)
+  configure: ['walletId', 'chains', 'caps', 'lang', 'click'],
   ensure: ['walletId', 'chain', 'usd', 'reason', 'presets'],
   sweep: ['walletId', 'chain'],
   off: ['walletId', 'lang'],
@@ -1193,6 +1221,7 @@ export function floatArgs(method: string, o: unknown): Record<string, unknown> {
   if ('reason' in rec && !(ENSURE_REASONS as readonly string[]).includes(String(rec.reason))) throw new Error('Bad arguments: reason');
   if ('scope' in rec && rec.scope != null && rec.scope !== 'wallet' && rec.scope !== 'account') throw new Error('Bad arguments: scope');
   if ('fresh' in rec && rec.fresh != null && typeof rec.fresh !== 'boolean') throw new Error('Bad arguments: fresh');
+  if ('click' in rec && rec.click != null && typeof rec.click !== 'boolean') throw new Error('Bad arguments: click');
   if ('lang' in rec && rec.lang != null && !(FLOAT_LANGS as readonly unknown[]).includes(rec.lang)) throw new Error('Bad arguments: lang');
   if ('presets' in rec && rec.presets != null) { const ps = rec.presets; if (!Array.isArray(ps) || ps.length > 8 || ps.some((x) => typeof x !== 'number' || !Number.isFinite(x) || x <= 0 || x > 10_000)) throw new Error('Bad arguments: presets'); }
   return rec;

@@ -337,7 +337,7 @@ test('another device switched on under the older rules: this device cannot adopt
   const B = device({ wallets: keys.map((k, i) => mk(i + 1, k)), clock });                                           // the desktop on rules 2
   const v = await B.sync(srv);
   assert.equal(v.action, 'keep'); assert.equal(v.why, 'rules');
-  assert.deepEqual(JSON.parse(B.store.get('trenches.float.v1.consent')).kept, { n: 1, why: 'rules', rules: 1 }, 'the device remembers why');
+  { const { terms, ...k } = JSON.parse(B.store.get('trenches.float.v1.consent')).kept; assert.deepEqual(k, { n: 1, why: 'rules', rules: 1 }, 'the device remembers why'); assert.deepEqual(terms.chains, ['bsc', 'robinhood', 'sol'], '…and the terms it proved (2026-11-02: a click re-grants no more than them)'); }
   assert.equal((await B.f.status({ walletId: 'w1', scope: 'account' })).enabled, false);
   const r = await B.f.configure({ walletId: 'w1', chains: ['robinhood', 'bsc', 'sol'] });
   assert.equal(B.asks.length, 1); const d = B.asks[0];
@@ -359,7 +359,7 @@ test('floatConsent: a newer authentic grant that is not adopted reaches host.kep
   const blob = await CS.sealConsent(MAIN, SEED, await rec(grant));
   const own = { vault: new Set([lc(acct.address)]) };
   const h1 = host(2); const v1 = await CS.consentReceive(h1, { main: MAIN, seed: SEED, blob, own, now: T + 1 });
-  assert.equal(v1.why, 'rules'); assert.deepEqual(h1.kepts, [{ n: 3, why: 'rules', rules: 1 }]);
+  assert.equal(v1.why, 'rules'); assert.deepEqual(h1.kepts, [{ n: 3, why: 'rules', rules: 1, terms: { chains: ['robinhood'], caps } }]);
   const h2 = host(1); await CS.consentReceive(h2, { main: MAIN, seed: SEED, blob, own, now: T + 1 });
   assert.equal(h2.applied, 1); assert.deepEqual(h2.kepts, [], 'adopted');
   const h3 = host(1); await CS.consentReceive(h3, { main: MAIN, seed: SEED, blob, own: { vault: new Set() }, now: T + 1 });

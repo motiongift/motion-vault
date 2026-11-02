@@ -145,9 +145,9 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   1185460
-sha384  sha384-VbQBxTa3INneiNvc99ccWyXYzNZCSQzBtxId/Dxt+j2zx79n57x3ZWepQuZTr6sa
-sha256  7152f6e4926d7a24e899dc973c06a27f5d02a7f7e78ffa09214a3345fbfbb0bf
+bytes   1189510
+sha384  sha384-glncySWJiRqNmpokwZcgWzDC8X1PnEyDrzBCGAUID8mrw7A960ZvBqXRklke+QQr
+sha256  5da0a63f13ff8087e75c0706ff2f78b366a28239cd5bc42811b992d5b1f8fe33
 ```
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.

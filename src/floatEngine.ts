@@ -15,7 +15,7 @@ import { erc20TransferData, type BridgeChain } from './motionBridgeCore.ts';
 import {
   FLOAT_CFG, FLOAT_CHAIN_KEYS, cfgOf, type FloatChain, type EvmFloatCfg, type Caps, type Permission, type FloatJob, type Move, type MoveKind, type ChainState,
   type FeeInputs, type BridgeId, type BridgeQuote, type BridgeOutcome, type RouteKey,
-  capsFrom, capsRaise, permissionDigest, plannedCaps, UNCAPPED, permissionLive, PERMISSION_DAYS, floatArgs, planMoves, withinCaps, minOutFloor, quoteOk, verifyBridgeTxs,
+  capsFrom, capsRaise, termsOk, permissionDigest, plannedCaps, UNCAPPED, permissionLive, PERMISSION_DAYS, floatArgs, planMoves, withinCaps, minOutFloor, quoteOk, verifyBridgeTxs,
   oraclePrice6, stableToUsd6, usd6ToStable, nativeToUsd6, nativeToUsd6Up, usd6ToNative, tradingUsd6, targetOf, sizeOf, priceState, fmtUsd6, usd6, USD,
   jobIdOf, freeJobId, BRIDGE_SETTLE_MS, canRun, isOpen, ledgerOf, inClickWindow, moveFee6, bridgeHealth, bridgeOrder, verifyBridgeQuote, BRIDGE_ETA_MS, QUOTE_TIMEOUT_MS, RULES,
   quietFor, planConvert, planConvertBack, fmtNative, keepOf, DEFAULT_CAPS, CONVERT_ORDER_MS, CONVERT_TRIES, CONVERT_BACK_MIN6, SOL_FWD, solForwardPlan, solBridgeFeeOk, SOL_GAS, solFwdFee, SOL_BRIDGE,
@@ -24,7 +24,7 @@ import {
 // the rules version a grant agreed to (floatCore FLOAT_RULES): liveness is judged against this build's accepted rules
 import { accountLive as liveAccount, permissionLive as livePermission, accountOutdated, rulesOf, rulesField, rulesDeltaLines, FLOAT_RULES, RULES_DELTA, RULES_DIALOG, type RulesCfg } from './floatCore.ts';
 // the consent that follows the account to its other devices (sealed + signed in the account's backup profile)
-import { consentMessage, sameTerms, type CapsWire, type ConsentBody, type ConsentHost, type ConsentRecord, type ConsentWhy } from './floatConsent.ts';
+import { consentMessage, sameTerms, CO_MAX, type CapsWire, type ConsentBody, type ConsentHost, type ConsentRecord, type ConsentWhy } from './floatConsent.ts';
 // a switch-on for an account that already holds dollars: a confirm that converts nothing by default (2026-11-01)
 import { RESUME, accountResumeHtml, convertTotalText, widenLine, type OnWhy } from './floatCore.ts';
 // the ready float after a trade (owner 2026-10-29): the refill tick, the buys it is sized from, the sweep hold in a burst
@@ -173,7 +173,10 @@ type StoredAccount = AccountGrant & { joined?: Record<string, number>; src?: 'ac
 // record came from another device
 const CONSENT = 'trenches.float.v1.consent';
 // kept: the newest authentic grant this device could NOT adopt and why (floatConsent ConsentHost.kept), for the switch's dialog
-type ConsentState = { rec: ConsentRecord | null; seen: number; synced: number; adopted?: boolean; kept?: { n: number; why: ConsentWhy; rules: number } };
+// kept.terms (2026-11-02): the chains + caps of a newer grant whose authorship this device proved but could not follow (out of
+// date / older rules) — the baseline a buy click's one-button confirm may re-grant, never more (configure `click`, review F4)
+type KeptTerms = { chains: FloatChain[]; caps: CapsWire };
+type ConsentState = { rec: ConsentRecord | null; seen: number; synced: number; adopted?: boolean; kept?: { n: number; why: ConsentWhy; rules: number; terms?: KeptTerms } };
 // W's native the user chose to keep as native when the switch went on without converting (floatCore ChainState.keep): the raw
 // amount per chain and wallet, never swept by the routine plan; it only shrinks (to what W still holds above what stays)
 const KEEP = 'trenches.float.v1.keep.';
@@ -325,7 +328,7 @@ export function createFloat(deps: FloatDeps) {
   // profile (webEngine mainProfile seals it under the account's seed). A record found in the profile is applied through
   // `consent.apply` only after floatConsent opened it, checked its signature and found it newer than this device's own.
   const consentState = (): ConsentState => {
-    try { const x = JSON.parse(deps.store.get(CONSENT) || 'null'); if (x && typeof x === 'object') return { rec: x.rec && x.rec.body && typeof x.rec.sig === 'string' ? x.rec : null, seen: Number(x.seen) || 0, synced: Number(x.synced) || 0, ...(x.adopted ? { adopted: true } : {}), ...(x.kept && Number.isSafeInteger(x.kept.n) && typeof x.kept.why === 'string' ? { kept: { n: x.kept.n, why: x.kept.why, rules: Number(x.kept.rules) || 1 } } : {}) }; } catch {}
+    try { const x = JSON.parse(deps.store.get(CONSENT) || 'null'); if (x && typeof x === 'object') return { rec: x.rec && x.rec.body && typeof x.rec.sig === 'string' ? x.rec : null, seen: Number(x.seen) || 0, synced: Number(x.synced) || 0, ...(x.adopted ? { adopted: true } : {}), ...(x.kept && Number.isSafeInteger(x.kept.n) && typeof x.kept.why === 'string' ? { kept: { n: x.kept.n, why: x.kept.why, rules: Number(x.kept.rules) || 1, ...(x.kept.terms && Array.isArray(x.kept.terms.chains) && x.kept.terms.caps ? { terms: x.kept.terms } : {}) } } : {}) }; } catch {}
     return { rec: null, seen: 0, synced: 0 };
   };
   const saveConsent = (x: ConsentState) => deps.store.set(CONSENT, JSON.stringify(x));
@@ -345,7 +348,19 @@ export function createFloat(deps: FloatDeps) {
     let sig = '';
     try { sig = String(await deps.consent.sign(signer, consentMessage(full))); } catch { return false; }
     if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) return false;
-    saveConsent({ rec: { body: full, signer: lc(signer), sig }, seen: n, synced: st.synced });
+    // (2026-11-02) a grant is also signed by up to CO_MAX of the other wallets it names, in this vault's order (the oldest, most
+    // often on every device, first): another device that holds any of them can vouch for the record (floatConsent co)
+    const co: { signer: string; sig: string }[] = [];
+    if (full.on) {
+      let list: FloatWallet[] = []; try { list = listWallets().list; } catch { list = []; }
+      const named = new Set((full.wallets || []).map(lc));
+      for (const w of list) {
+        if (co.length >= CO_MAX) break;
+        const a = lc(w.w.evm); if (a === lc(signer) || !named.has(a) || co.some((x) => x.signer === a)) continue;
+        try { const g = String(await deps.consent.sign(a, consentMessage(full))); if (/^0x[0-9a-fA-F]{130}$/.test(g)) co.push({ signer: a, sig: g }); } catch { /* that one does not co-sign */ }
+      }
+    }
+    saveConsent({ rec: { body: full, signer: lc(signer), sig, ...(co.length ? { co } : {}) }, seen: n, synced: st.synced });
     return true;
   }
   /** Where a grant is on: 'all' = the account's record states it and the server holds it (or it came from there), 'this' =
@@ -381,6 +396,9 @@ export function createFloat(deps: FloatDeps) {
       // name joins by the grant's own rule, join()); no conversion (the device that switched on converts), no dialog
       const ws = new Set((b.wallets || []).map(lc));
       const mine = list.filter((w) => ws.has(lc(w.w.evm)));
+      // (2026-11-02, review H2 / M2) never stored: terms configure could not have written, or a grant for none of this vault's
+      // wallets (it would turn every wallet here on through join())
+      if (!mine.length || !termsOk({ caps: b.caps, grantedAt: b.grantedAt, expiresAt: b.expiresAt }, deps.now())) return;
       const caps = capsOfWire(b.caps!); const rules = rulesField(rulesOf(b));
       const ab = { v: 1 as const, chains: FLOAT_CHAIN_KEYS.filter((k) => b.chains!.includes(k)), caps, grantedAt: b.grantedAt!, expiresAt: b.expiresAt!, wallets: mine.map((w) => lc(w.w.evm)), ...rules };
       saveAccount({ ...ab, digest: accountDigest(ab), joined: {}, src: 'account' });
@@ -523,6 +541,9 @@ export function createFloat(deps: FloatDeps) {
       cash6 += res6; ready6 += float6; transit6 += big(s.inFlightReserve6);
       chains[c] = {
         stable: { symbol: cfg.stable.symbol, raw: s.reserve, usd: Number(res6) / 1e6 }, native: { symbol: cfg.native, raw: s.float, usd: Number(float6) / 1e6 },
+        // (2026-11-02, a tester sent USDG to his trading wallet and could not find it) the stablecoin sitting in W itself, not yet
+        // forwarded into R: shown by the app as "moving to USD balance"; it is NOT in usd.cash / usd.total
+        ...(s.wStable != null ? { wallet: { symbol: cfg.stable.symbol, raw: s.wStable, usd: Number(stableToUsd6(big(s.wStable), cfg.stable.decimals)) / 1e6 } } : {}),
         price: Number(price6) / 1e6, priceState: st, target: Number(tgt.trading6) / 1e6, low: Number(tgt.low6) / 1e6, high: Number(tgt.high6) / 1e6,
         ready: Number(tradingUsd6(c, big(s.float), price6)) / 1e6, inFlight: Number(big(s.inFlight6)) / 1e6, reserveGas: s.reserveNative, at: s.at, fee: s.fee || null,
       };
@@ -1722,7 +1743,17 @@ export function createFloat(deps: FloatDeps) {
       const sweeps = allJobs(w).filter((j) => j.kind === 'sweep' && !j.confirmed && j.at >= at);
       return [{ walletId: w.id, name: w.name, at, converted: Number(sweeps.filter((j) => j.state === 'sent' || j.state === 'arrived').reduce((t, j) => t + big(j.usd6), 0n)) / 1e6, converting: sweeps.some(isOpen) }];
     }) : [];
-    return { ok: true, scope: 'account', enabled: on, devices: devicesOf(a), permission: publicAccount(a), lane: here(), wallets, skipped: l.skipped.map((s) => ({ walletId: s.id, name: s.name, why: s.why })),
+    // (2026-11-02, the owner: "it's either on or off") while this device is not on: why it does not follow the account
+    // (`follow.why`: 'rules' | 'expired' — the account's newer grant, or this device's own one, is on older rules / out of date —
+    // or 'signer' | 'foreign' | 'unverified' — a record this device cannot vouch for), and the account's switch as this device
+    // last saw it in an authentic record (`record`: 'on' | 'off'; none = it has seen no record). The app shows "On for your
+    // account" only on 'on', and its telemetry counts the reasons.
+    const cs = consentState();
+    const keptNewer = !!cs.kept && (!cs.rec || cs.kept.n > cs.rec.body.n);
+    const own = a as StoredAccount | null;
+    const followWhy = on ? null : keptNewer ? cs.kept!.why : own && own.v === 1 && accountDigest(own) === own.digest ? (own.expiresAt <= deps.now() ? 'expired' : accountOutdated(own, deps.now(), RU.accepted) ? 'rules' : null) : null;
+    const record = keptNewer ? 'on' : cs.rec ? (cs.rec.body.on ? 'on' : 'off') : null;
+    return { ok: true, scope: 'account', enabled: on, devices: devicesOf(a), ...(followWhy ? { follow: { why: followWhy, rules: keptNewer ? cs.kept!.rules : rulesOf(own) } } : {}), ...(record ? { record } : {}), permission: publicAccount(a), lane: here(), wallets, skipped: l.skipped.map((s) => ({ walletId: s.id, name: s.name, why: s.why })),
       usd: { cash: sum('cash'), ready: sum('ready'), transit: sum('transit'), total: sum('total'), upkeepWeek: sum('upkeepWeek'), readyFeesWeek: sum('readyFeesWeek'), readyMovedWeek: sum('readyMovedWeek') }, joined };
   }
 
@@ -1872,9 +1903,23 @@ export function createFloat(deps: FloatDeps) {
       const l = listWallets(String(a.walletId)); checkCaller(String(a.walletId), l);
       const { list, skipped } = l;
       if (!list.length) throw new FloatRefused('None of your wallets can hold a USD balance');
-      const chains = (a.chains as FloatChain[]).filter((x) => FLOAT_CHAIN_KEYS.includes(x));
-      const caps: Caps = capsFrom(a.caps as never);
+      let chains = (a.chains as FloatChain[]).filter((x) => FLOAT_CHAIN_KEYS.includes(x));
+      let caps: Caps = capsFrom(a.caps as never);
       const prev = account(); const now = deps.now();
+      // (2026-11-02, review F4) a buy click's one-button "Confirm and buy" (`click`) re-grants the terms the ACCOUNT already
+      // agreed to and nothing more: the baseline is this device's own whole grant (ran out / older rules) or the account's newer
+      // record whose authorship this device proved (kept 'rules' / 'expired'). Without caps from the page the click takes the
+      // baseline's chains and caps; caps or chains above the baseline — or no baseline at all (the account's first grant) — and
+      // `click` is ignored: the usual dialogs, laid out as before.
+      const keptT = consentState().kept?.terms;
+      const baseline: { chains: FloatChain[]; caps: Caps } | null = prev && prev.v === 1 && accountDigest(prev) === prev.digest && termsOk(prev) ? { chains: [...prev.chains], caps: prev.caps }
+        : keptT && termsOk({ caps: keptT.caps, grantedAt: 1, expiresAt: 2 }) ? { chains: FLOAT_CHAIN_KEYS.filter((k) => keptT.chains.includes(k)), caps: capsOfWire(keptT.caps) } : null;
+      if (a.click === true && baseline && a.caps == null) { chains = [...baseline.chains]; caps = baseline.caps; }
+      const clickProven = a.click === true && !!baseline && !capsRaise(baseline.caps, caps) && chains.every((x) => baseline.chains.includes(x));
+      // no terms this device can prove (the account holds dollars, but its record's signer is none of this vault's keys, or no
+      // record reached it): the click may grant the DEFAULT terms only (what the app's own switch grants), and its dialog then
+      // lays the whole consent open — anything above the defaults and `click` is ignored
+      const clickDefault = a.click === true && !baseline && !capsRaise(DEFAULT_CAPS, caps);
       // a grant of this device that is whole but ran out (its 30 days): said in the dialog, nothing converts by default
       const ranOut = !!prev && prev.v === 1 && prev.expiresAt <= now && accountDigest(prev) === prev.digest;
       // a grant on older rules (FLOAT_RULES) is not a switch-on: the dialog asks only for what is new, nothing converts and
@@ -1931,7 +1976,22 @@ export function createFloat(deps: FloatDeps) {
         const wc = convs ? convs.map((x) => ({ name: x.w.name, plan: x.plan })) : [];
         const sk = skipped.map((x) => ({ name: x.name, why: x.why }));
         const folded = consentHtml(text, deps.html.esc, ACCOUNT_MORE[lang]);
-        if (convs && why && why.kind !== 'first') {
+        // (2026-11-02, the owner on his iPhone: a buy with the account's $87 USD balance opened "Read / Confirm / Convert" instead of
+        // buying) a BUY CLICK's confirm (`click`): ONE button, "Confirm and buy", nothing converted (no conversion offered at all:
+        // the native stays KEPT), and the line that the buy goes on after it. The consent itself is the same as below — folded
+        // for a device catching up, laid open for the account's first-ever grant — and the same trusted click / 2FA gate grant it.
+        // never on the account's first grant (its own dialog) and never on a caps raise / new chain of a live grant (review F4)
+        const click = clickProven || (clickDefault && !!convs && !!why && why.kind !== 'first');
+        const buyLine = click ? `<p class="ub-note">${deps.html.esc(W.buyNext)}</p>` : '';
+        if (click && convs && why && why.kind !== 'first') {
+          const rulesLines = why.kind === 'rules' ? rulesDeltaLines(why.from, RU.current, lang, deps.rules?.delta) : [];
+          // the consent is laid open whenever these caps are above the defaults or this device cannot prove the account's terms
+          // (review F4); folded only when it re-grants terms the account already agreed to, at or under the defaults
+          const consent = !clickProven || capsRaise(DEFAULT_CAPS, caps) ? consentHtml(text, deps.html.esc) : folded;
+          const html = accountResumeHtml({ why, delta: rulesLines, convs: wc, skipped: sk, enabled: chains, offer: false, lang, esc: deps.html.esc }) + buyLine + consent + everywhere;
+          if (!(await deps.ask({ title: W.title, ok: W.okBuy, html }))) throw cancelled();
+          convertNow = false;
+        } else if (convs && why && why.kind !== 'first') {
           // catching up: confirm = nothing converts; the conversion only as the second button, its rows stated above it
           const canChoose = !!deps.choose && offer;
           const rulesLines = why.kind === 'rules' ? rulesDeltaLines(why.from, RU.current, lang, deps.rules?.delta) : [];
@@ -1957,7 +2017,7 @@ export function createFloat(deps: FloatDeps) {
           const added = chains.filter((x) => !prev!.chains.includes(x));
           const html = delta ? `${delta.map((l) => `<p class="ub-lead">${deps.html.esc(l)}</p>`).join('')}${folded}`
             : `<p class="ub-lead">${deps.html.esc(widenLine(added, lang))}</p>${consentHtml(text, deps.html.esc)}`;
-          const ok = await deps.ask(delta ? { title: RULES_DIALOG[lang].title, ok: RULES_DIALOG[lang].ok, html: html + everywhere } : { title: ACCOUNT_DIALOG[lang].onTitle, ok: ACCOUNT_DIALOG[lang].onOk, html: html + everywhere });
+          const ok = await deps.ask(delta ? { title: RULES_DIALOG[lang].title, ok: click ? W.okBuy : RULES_DIALOG[lang].ok, html: html + buyLine + everywhere } : { title: ACCOUNT_DIALOG[lang].onTitle, ok: click ? W.okBuy : ACCOUNT_DIALOG[lang].onOk, html: html + buyLine + everywhere });
           if (!ok) throw cancelled();
         }
       }

@@ -154,19 +154,31 @@ test('rollback refused: a server that replays the older grant after a revocation
   assert.equal((await fresh.status()).enabled, false);
 });
 
-test('a grant for wallets that are not this account\'s is refused whole (foreign signer, a foreign wallet in the list, another account\'s seed)', async () => {
+test('a grant signed by a key this vault cannot vouch for is refused; a foreign wallet in the list is left out; a record naming none of this vault\'s wallets turns nothing on; another seed does not open', async () => {
   const { ws, clock, B } = account(); const srv = server();
   const stranger = mk(9);
   const body = { v: 1, n: 5, on: true, at: clock.now, chains: ['robinhood'], caps: { perDay6: '1000000000', feesPerDay6: '2000000', perChain6: '250000000', total6: '500000000', maxSlipBps: 50 }, grantedAt: clock.now, expiresAt: clock.now + 30 * DAY, ...F.rulesField(F.FLOAT_RULES.current) };
   const signed = async (b, x) => ({ body: b, signer: lc(x.W), sig: await privateKeyToAccount(x.key).signMessage({ message: C.consentMessage(b) }) });
-  // 1. signed by a wallet this vault does not hold (even sealed under the right seed)
+  // 1. signed by a wallet that is neither in this vault nor in the account's backup (even sealed under the right seed)
   srv.uc = await C.sealConsent(MAIN, SEED, await signed({ ...body, wallets: [lc(stranger.W), lc(ws[0].W)].sort() }, stranger));
   assert.equal((await B.sync(srv)).why, 'signer');
-  // 2. signed by one of ours but naming a wallet that is not the account's
+  assert.equal((await B.sync(srv, { own: { more: async () => new Set() } })).why, 'signer', 'nor in the backup');
+  // 2. signed by one of ours but naming a wallet that is not the account's: adopted for the account's own wallets only
+  //    (2026-11-02; before, refused whole: a record naming another account's wallet in that device's vault was never followed)
   srv.uc = await C.sealConsent(MAIN, SEED, await signed({ ...body, n: 6, wallets: [lc(stranger.W), lc(ws[0].W)].sort() }, ws[0]));
-  assert.equal((await B.sync(srv)).why, 'foreign');
-  // …unless the account's own backup holds that wallet (opened under this seed): then it is the account's
-  assert.equal((await B.sync(srv, { own: { more: async () => new Set([lc(stranger.W)]) } })).action, 'adopt');
+  assert.equal((await B.sync(srv)).action, 'adopt');
+  assert.equal((await B.status()).enabled, true);
+  assert.ok(!String(B.store.get('trenches.float.v1.account')).includes(lc(stranger.W).slice(2)), 'the foreign wallet is not covered here');
+  // (2026-11-02, review H1 / M2) signed by a wallet only the account's backup holds, naming none of the wallets this device
+  // holds: a v3 backup entry proves nothing ('signer'); even a backup-v4 proof of the signer turns NOTHING on here ('foreign')
+  const stranger2 = mk(8);
+  const B3 = device({ wallets: ws.map((w) => ({ ...w })), clock });
+  const s3 = server(); s3.uc = await C.sealConsent(MAIN, SEED, await signed({ ...body, n: 7, wallets: [lc(stranger.W), lc(stranger2.W)].sort() }, stranger));
+  assert.equal((await B3.sync(s3)).why, 'signer');
+  assert.equal((await B3.sync(s3, { own: { more: async () => new Set([lc(stranger.W)]) } })).why, 'signer', 'a v3 backup entry is no proof');
+  assert.equal((await B3.sync(s3, { own: { v4: async () => new Set([lc(stranger.W)]) } })).why, 'foreign');
+  const st3 = await B3.status();
+  assert.equal(st3.enabled, false); assert.deepEqual(st3.wallets.map((w) => w.enabled), [false, false]);
   // 3. another account's record (its own seed): does not even open here
   const { A: other } = account(); const osrv = server();
   await other.f.configure(ON); await other.publish(osrv, { seed: '0x' + '77'.repeat(32) });
