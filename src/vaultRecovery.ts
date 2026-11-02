@@ -175,12 +175,14 @@ export async function resetVault(d: BootDeps): Promise<Extract<Boot, { state: 'o
 
 // ── the account profile (server/.accounts.json, shape fixed by the server's validProfile) ──
 export type ProfileEntry = { address: string; name: string; iv: string; ct: string };
-export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2; rk?: RecoveryBlob | null };
+// uc: the account's USD-balance consent record (src/floatConsent.ts ConsentBlob), sealed under the seed; absent = none
+// pk: backup v4 (src/passkeyBackup.ts) — the passkey envelope; present = the entries are sealed under K4 (seed + a passkey)
+export type Profile = { v: 1; main: string; fp: string; count: number; names: Record<string, string>; attached: ProfileEntry[]; updatedAt?: number; mv?: 2; rk?: RecoveryBlob | null; uc?: { v: 1; n: number; o: 0 | 1; iv: string; ct: string }; pk?: unknown };
 // key: an EVM key, or a chain-only key string (nativeKeys.ts 'sol:…' / 'near:…') whose address is its placeholder slot
 // V12 F-34: `via:'page'` marks a wallet whose key was handed in by the page (legacy engine.import), never typed in this
 // frame. It rides in the sealed v3 body as `p:1` so it stays untrusted as a transfer destination on every device.
 export type BackupWallet = { address: string; name: string; key: `0x${string}`; kind: 'created' | 'imported' | 'derived' | 'hop'; main?: string; index?: number; gen?: 2; archived?: boolean; createdAt?: number; via?: 'page' };
-export type OpenedWallet = BackupWallet & { v: 1 | 2 | 3 };
+export type OpenedWallet = BackupWallet & { v: 1 | 2 | 3 | 4 };
 export const PROFILE_CAP = 200;   // the server refuses a profile with more attached entries
 // The server keeps only {address, name, iv, ct} per entry, so a salt rides in an entry of its own under a reserved
 // pseudo-address ("5a17" ~ salt) that no key can have. Old engines see an entry they cannot open and count it as sealed.
@@ -191,6 +193,10 @@ export const SALT_SLOT = (i: number) => '0x5a17' + i.toString(16).padStart(36, '
 export const isSaltSlot = (a: string) => /^0x5a170{32}[0-9a-f]{4}$/i.test(String(a || ''));
 const AAD_W = (address: string) => buf(enc.encode('motion/backup/v3/wallet/' + lc(address)));
 const AAD_S = buf(enc.encode('motion/backup/v3/salt'));
+// backup v4 (src/passkeyBackup.ts): the same bodies under K4 with their own AAD, so a v4 entry can never be mistaken for a
+// v3 one (or opened by a v3 key) and the reader knows which factor opened it
+const AAD_W4 = (address: string) => buf(enc.encode('motion/backup/v4/wallet/' + lc(address)));
+const AAD_S4 = buf(enc.encode('motion/backup/v4/salt'));
 const KIND_CODE: Record<BackupWallet['kind'], string> = { created: 'c', imported: 'i', derived: 'd', hop: 'h' };
 const CODE_KIND: Record<string, BackupWallet['kind']> = { c: 'created', i: 'imported', d: 'derived', h: 'hop' };
 async function seal(key: CryptoKey, aad: ArrayBuffer, body: unknown): Promise<{ iv: string; ct: string }> {
@@ -206,23 +212,25 @@ const validEntry = (e: unknown): e is ProfileEntry => !!e && typeof e === 'objec
 // What the server stores for the account. Order under the 200-entry cap: salts, then the vault's wallets in the
 // order given (the engine puts funded/visible ones first), then entries carried over verbatim from the server copy
 // (wallets other devices published, blobs this browser cannot open) — a publish never drops what it did not write.
-export async function buildProfile(src: { main: string; seed: string; count: number; names: Record<string, string>; wallets: BackupWallet[]; salts: string[]; carry?: ProfileEntry[]; forget?: string[]; mv?: MainMsgVersion }) {
-  const kb = await backupKeyV3(src.seed);
+// v4: { key } = K4 (passkeyBackup.ts backupKeyV4): every entry this build writes is sealed under it instead of the seed key.
+export async function buildProfile(src: { main: string; seed: string; count: number; names: Record<string, string>; wallets: BackupWallet[]; salts: string[]; carry?: ProfileEntry[]; forget?: string[]; mv?: MainMsgVersion; v4?: { key: CryptoKey } }) {
+  const kb = src.v4 ? src.v4.key : await backupKeyV3(src.seed);
+  const aadW = src.v4 ? AAD_W4 : AAD_W, aadS = src.v4 ? AAD_S4 : AAD_S, bv = src.v4 ? 4 : 3;
   const attached: ProfileEntry[] = [];
   const salts = [...new Set(src.salts.filter((s) => /^0x[0-9a-f]{64}$/.test(s)))];
-  for (let i = 0; i < salts.length && attached.length < PROFILE_CAP; i += 1) attached.push({ address: SALT_SLOT(i), name: 'motion vault salt', ...(await seal(kb, AAD_S, { v: 3, s: salts[i] })) });
+  for (let i = 0; i < salts.length && attached.length < PROFILE_CAP; i += 1) attached.push({ address: SALT_SLOT(i), name: 'motion vault salt', ...(await seal(kb, aadS, { v: bv, s: salts[i] })) });
   const covered: string[] = []; const mine = new Set<string>();
   for (const w of src.wallets) {
     if (!storableKey(w.key) || mine.has(lc(w.address))) continue;
     mine.add(lc(w.address));
     if (attached.length >= PROFILE_CAP) continue;
-    const body: Record<string, unknown> = { v: 3, k: w.key, t: KIND_CODE[w.kind] || 'i' };
+    const body: Record<string, unknown> = { v: bv, k: w.key, t: KIND_CODE[w.kind] || 'i' };
     if (w.main && w.index != null) { body.m = lc(w.main); body.x = w.index; }
     if (w.gen === 2) body.g = 2;
     if (w.archived) body.a = 1;
     if (w.via === 'page') body.p = 1;   // V12 F-34: page-supplied import stays an outside destination everywhere
     if (w.createdAt) body.c = Math.floor(w.createdAt);
-    attached.push({ address: w.address, name: String(w.name || '').slice(0, 40), ...(await seal(kb, AAD_W(w.address), body)) });
+    attached.push({ address: w.address, name: String(w.name || '').slice(0, 40), ...(await seal(kb, aadW(w.address), body)) });
     covered.push(lc(w.address));
   }
   const forget = new Set((src.forget || []).map(lc));
@@ -246,18 +254,24 @@ const same = (a: ProfileEntry, b: ProfileEntry) => lc(a.address) === lc(b.addres
 // Everything a profile holds that this seed can open: the salts, then every wallet — v3 entries (any kind), and
 // the older v2 (salted) and v1 (bare seed) wrapped keys. What does not open is returned as-is, to be carried over.
 // A key is accepted only if it IS the entry's address.
-export async function openProfile(profile: Profile | null | undefined, seed: string, localSalts: string[] = []) {
+// v4Keys: K4 of every backup-v4 generation this vault can open (passkeyBackup.ts); tried first, with the v4 AAD. Without
+// them a v4 entry simply does not open and is carried verbatim, like any entry this seed cannot open.
+export async function openProfile(profile: Profile | null | undefined, seed: string, localSalts: string[] = [], v4Keys: CryptoKey[] = []) {
   const entries = (Array.isArray(profile?.attached) ? profile!.attached : []).slice(0, PROFILE_CAP).filter(validEntry);
   const kb = await backupKeyV3(seed);
+  const saltV4 = new Set<string>();
   const salts: string[] = []; const wallets: OpenedWallet[] = []; const unopened: ProfileEntry[] = [];
   // V12 F-18: a salt-slot entry that opens as a salt is consumed here; one that does not falls through to the wallet
   // pass (an exact-address collision is astronomically unlikely, but then the key is opened rather than hidden).
   const saltOpened = new Set<ProfileEntry>();
   for (const e of entries) {
     if (!isSaltSlot(e.address)) continue;
-    const t = await unseal(kb, AAD_S, e); let s = '';
+    let t: string | null = null, four = false;
+    for (const k4 of v4Keys) { t = await unseal(k4, AAD_S4, e); if (t) { four = true; break; } }
+    if (!t) t = await unseal(kb, AAD_S, e);
+    let s = '';
     try { s = String(JSON.parse(t || 'null')?.s || ''); } catch {}
-    if (/^0x[0-9a-f]{64}$/.test(s)) { saltOpened.add(e); if (!salts.includes(s)) salts.push(s); }
+    if (/^0x[0-9a-f]{64}$/.test(s)) { saltOpened.add(e); if (!salts.includes(s)) salts.push(s); if (four) saltV4.add(s); }
   }
   const allSalts = [...new Set([...localSalts, ...salts])];
   const k2s = await Promise.all(allSalts.map((s) => wrapKeyV2(seed, s)));
@@ -266,13 +280,15 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
   for (const e of entries) {
     if (saltOpened.has(e)) continue;   // V12 F-18: only entries actually consumed as salts are skipped here
     let w: OpenedWallet | null = null;
-    const t3 = await unseal(kb, AAD_W(e.address), e);
+    let t3: string | null = null, bv: 3 | 4 = 3;
+    for (const k4 of v4Keys) { t3 = await unseal(k4, AAD_W4(e.address), e); if (t3) { bv = 4; break; } }
+    if (!t3) t3 = await unseal(kb, AAD_W(e.address), e);
     if (t3) {
       try {
         const p = JSON.parse(t3);
         // an older engine opens only EVM keys here and carries a chain-only entry verbatim (it never drops it)
-        if (p && p.v === 3 && storableKey(p.k)) {
-          w = { v: 3, key: p.k, address: e.address, name: String(e.name || ''), kind: CODE_KIND[p.t] || 'imported', ...(p.m && Number.isInteger(p.x) && p.x >= 0 ? { main: lc(p.m), index: Number(p.x) } : {}), ...(p.g === 2 ? { gen: 2 as const } : {}), ...(p.a ? { archived: true } : {}), ...(p.p === 1 ? { via: 'page' as const } : {}), ...(Number(p.c) > 0 ? { createdAt: Number(p.c) } : {}) };
+        if (p && p.v === bv && storableKey(p.k)) {
+          w = { v: bv, key: p.k, address: e.address, name: String(e.name || ''), kind: CODE_KIND[p.t] || 'imported', ...(p.m && Number.isInteger(p.x) && p.x >= 0 ? { main: lc(p.m), index: Number(p.x) } : {}), ...(p.g === 2 ? { gen: 2 as const } : {}), ...(p.a ? { archived: true } : {}), ...(p.p === 1 ? { via: 'page' as const } : {}), ...(Number(p.c) > 0 ? { createdAt: Number(p.c) } : {}) };
         }
       } catch {}
     }
@@ -284,7 +300,8 @@ export async function openProfile(profile: Profile | null | undefined, seed: str
     if (seen.has(lc(real))) continue;
     seen.add(lc(real)); w.address = real as `0x${string}`; wallets.push(w);
   }
-  return { salts, wallets, unopened };
+  // saltsV4: the salts that came out of v4 entries (the upgrade check: after it, nothing may still open under the seed alone)
+  return { salts, wallets, unopened, saltsV4: [...saltV4] };
 }
 
 // ── account recovery v1 (2026-10-19, opt-in, owner decision): the seed, sealed to the account's Privy wallet ──

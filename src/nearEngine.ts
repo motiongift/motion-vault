@@ -383,13 +383,13 @@ const routeCache = new Map<string, { r: NearRoute; at: number }>();
 // the NEAR → quote pool that actually fills: four fee tiers may exist with
 // nothing in them (RHEA's DCL pools are empty; its market is a classic pool), so
 // the pick is by what 0.1 NEAR buys, not by existence
+// (fix1 trade-speed-08, 2026-11-01) the four tiers are quoted at once: one view round trip instead of four in a row on a cold
+// route of a NEARLY / RHEA / QTC-quoted coin (18 of 57 on the board). Same pick: the most out; a tie keeps the lower fee tier.
 async function findBridgePool(quote: string) {
   const [x, y] = [quote, NEAR.wnear].sort(); let best: { id: string; out: bigint } | null = null;
-  for (const fee of [100, 400, 2000, 10000]) {
-    const id = `${x}|${y}|${fee}`;
-    const out = await dclQuote([id], NEAR.wnear, quote, 10n ** 23n);
-    if (out && (!best || out > best.out)) best = { id, out };
-  }
+  const ids = [100, 400, 2000, 10000].map((fee) => `${x}|${y}|${fee}`);
+  const outs = await Promise.all(ids.map((id) => dclQuote([id], NEAR.wnear, quote, 10n ** 23n).catch(() => null)));
+  for (let i = 0; i < ids.length; i += 1) { const out = outs[i], id = ids[i]; if (out && (!best || out > best.out)) best = { id, out }; }
   return best?.id || null;
 }
 export async function nearRoute(token: string, hint?: any): Promise<NearRoute> {

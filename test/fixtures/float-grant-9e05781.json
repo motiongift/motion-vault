@@ -1,0 +1,41 @@
+{
+  "engine": "motion-vault-rc 9e05781 (live sha384-ANzvjj5c…)",
+  "now": 1793048400000,
+  "wallets": [
+    {
+      "id": "w1",
+      "name": "Wallet 1",
+      "W": "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+      "R": "0x8B5bBbC764481Be94294E86D2983BB5EbE72A7CA"
+    },
+    {
+      "id": "w2",
+      "name": "Wallet 2",
+      "W": "0x1563915e194D8CfBA1943570603F7606A3115508",
+      "R": "0x08F09218154d75A5CeD178C931eFaBe3930ECBDB"
+    }
+  ],
+  "dialog": {
+    "title": "Turn on USD balance",
+    "text": [
+      "Nothing to convert now",
+      "Robinhood, BNB and Solana prices not read yet (convert later)",
+      "A little ETH / BNB / SOL stays on each chain so trades stay instant. Deposits later convert by themselves.",
+      "Limits and details",
+      "Turn on USD balance for all your wallets (Wallet 1 and Wallet 2). The vault may move money between each wallet's own addresses on Robinhood, BNB and Solana to keep it ready to trade:",
+      "up to $1,000.00 a day per wallet;",
+      "at most $2.00 a day in fees per wallet;",
+      "at most $250.00 ready per chain and $500.00 in total per wallet;",
+      "slippage at most 0.50 %.",
+      "Expected upkeep: about $0.05 a week per wallet in network and pool fees.",
+      "Wallets you add later join by themselves while this is on, with the same limits: their ETH / BNB / SOL converts once the wallet is quiet, and the app tells you.",
+      "Nothing can leave your wallets this way. Ready-to-trade amounts move with the price of ETH / BNB / SOL. Valid for 30 days.",
+      "When the money is on another chain, motion may pay you on this one from its own funds as soon as your transfer is included — and if it cannot, your transfer comes straight back."
+    ]
+  },
+  "store": {
+    "trenches.float.v1.account": "{\"v\":1,\"chains\":[\"robinhood\",\"bsc\",\"sol\"],\"caps\":{\"perDay6\":\"1000000000\",\"feesPerDay6\":\"2000000\",\"perChain6\":\"250000000\",\"total6\":\"500000000\",\"maxSlipBps\":50},\"grantedAt\":1793048400000,\"expiresAt\":1795640400000,\"wallets\":[\"0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a\",\"0x1563915e194d8cfba1943570603f7606a3115508\"],\"digest\":\"c7f9ff641814344ee7a89c61ead5d9606ca84b0dc382b6b3e788291124c9063a\",\"joined\":{}}",
+    "trenches.float.v1.perm.0x19e7e376e7c213b7e7e7e46cc70a5dd086daff2a": "{\"v\":1,\"wallet\":\"0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A\",\"reserve\":\"0x8B5bBbC764481Be94294E86D2983BB5EbE72A7CA\",\"chains\":[\"robinhood\",\"bsc\",\"sol\"],\"caps\":{\"perDay6\":\"1000000000\",\"feesPerDay6\":\"2000000\",\"perChain6\":\"250000000\",\"total6\":\"500000000\",\"maxSlipBps\":50},\"grantedAt\":1793048400000,\"expiresAt\":1795640400000,\"digest\":\"28a2c1747aedd0856431a8f9b2c7932d1a0064741be92aa4effba429fa7b15af\"}",
+    "trenches.float.v1.perm.0x1563915e194d8cfba1943570603f7606a3115508": "{\"v\":1,\"wallet\":\"0x1563915e194D8CfBA1943570603F7606A3115508\",\"reserve\":\"0x08F09218154d75A5CeD178C931eFaBe3930ECBDB\",\"chains\":[\"robinhood\",\"bsc\",\"sol\"],\"caps\":{\"perDay6\":\"1000000000\",\"feesPerDay6\":\"2000000\",\"perChain6\":\"250000000\",\"total6\":\"500000000\",\"maxSlipBps\":50},\"grantedAt\":1793048400000,\"expiresAt\":1795640400000,\"digest\":\"9597a62f9f438b40ef8fe45111ec054ab688a1478f0885e1601fcdde4c630067\"}"
+  }
+}

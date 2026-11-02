@@ -58,8 +58,9 @@ test('F-57: BSC V3 sells are guarded against fee-tier manipulation (one multical
   assert.match(eng, /const v3TierGuard = async \(quoteAsset: `0x\$\{string\}`\) => \{/);
   assert.match(eng, /if \(side !== 'sell' \|\| CFG\.key !== 'bsc' \|\| !multicallOk\) return;/);
   assert.match(eng, /if \(best \* 100n > chosen \* 102n\) reject\('a PancakeSwap V3 pool at another fee tier pays materially more for this sell — the route tier looks manipulated'\)/);
-  // wired into both V3 sell paths
-  assert.equal((eng.match(/await v3TierGuard\(/g) || []).length, 2);
+  // wired into both V3 sell paths (V13: started beside the quote, awaited before the approval and the send)
+  assert.equal((eng.match(/const guard = v3TierGuard\(/g) || []).length, 2);
+  assert.equal((eng.match(/if \(side === 'sell'\) \{ await guard; await approveIfNeeded/g) || []).length, 2);
 });
 
 test('F-57: a V3 sell unwraps only what the sell delivered, never `quoted`', () => {

@@ -17,7 +17,8 @@ test('F-54: DLMM candidates come from the indexer, never the page hint', () => {
   // candidates are kept (up to 3) and the trade picks the best out, not the reserve order
   assert.match(sol, /dlmmAlts = found\.slice\(0, 3\)/);
   assert.match(sol, /F-54 V12[\s\S]*quote every verified candidate at the real amount and take the pool with the best/);
-  assert.match(sol, /q\.out > 0n && \(!best \|\| q\.out > best\.q\.out\)/);
+  // (V13: the candidates are quoted side by side, G7; the pick is the same best `out`)
+  assert.match(sol, /x\.q\.out > 0n && \(!best \|\| x\.q\.out > best\.q\.out\)/);
 });
 
 test('F-8: applied tip + priority are clamped to ~0.005 SOL per tx', () => {

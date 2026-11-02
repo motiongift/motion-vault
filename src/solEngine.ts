@@ -16,6 +16,11 @@
 //   trades on its Meteora DLMM pool against SOL: swap2 on the LB pair (lb_clmm 0.12, on-chain IDL), the quote
 //   walked bin by bin from the pool's bin arrays exactly as the program does (fees, volatility, limit orders).
 //   The indexer only names candidate pools; the vault reads each one and verifies owner, layout, mints and status.
+// - (pumphop, 2026-11-01) a coin whose live curve is quoted in another pump coin Q, where Q trades against SOL on its own
+//   curve or its canonical PumpSwap pool: PumpSwap multi_hop_swap, ONE instruction SOL → Q → the coin (a sell the reverse),
+//   exact in with one minimum on the far end. Every account is derived from the two mints and read from the chain (never a
+//   page hint), quoted locally (protocol fee on the SOL hop, creator fee on the coin's hop), always simulated before it is
+//   signed; a simulation that fails for anything but the trader's own limits goes to the Jupiter route instead.
 // Sending — one signed transaction, several roads at once:
 //   Fast  · priority fee at Helius "high" + a Jito tip at the landed-tip 75th
 //           percentile; sent to Jito and to Helius together, simulated first.
@@ -38,10 +43,21 @@
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { nativeChainOf, nativeSeed } from './nativeKeys.ts';
+import { directIxsChecked, directInnerGuard, directBalanceGuard, directPriceCheck, directQuoteCheck } from './floatDirect.ts';   // the USD buy from the reserve (appended at the end)
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
 export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number };
-export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute; dlmmAlts?: { pool: string; dlmm: DlmmRoute }[] };
+// 'jupiter': a coin pump.fun quotes in another token, with no Meteora DLMM pool against SOL — `quote` is that token
+export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm' | 'jupiter' | 'pumphop'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute; dlmmAlts?: { pool: string; dlmm: DlmmRoute }[]; dlmmMore?: { p: Promise<{ pool: string; dlmm: DlmmRoute }[]>; v?: { pool: string; dlmm: DlmmRoute }[] }; quote?: string; quoteSymbol?: string; hop?: HopRoute; fee?: TransferFee };
+// (token2022-fee, 2026-11-01) a Token-2022 coin that charges a transfer fee (TransferFeeConfig), read from its mint account:
+// `bps` / `lowBps` the fee in force (the same figure), or — while a change the fee authority scheduled may not have taken effect
+// yet — the higher / lower of the old and the new fee; `nextBps` from epoch `nextEpoch` on; `maxFee` the per-transfer cap in raw
+// units; `changeable` = a fee authority exists (it can schedule a new fee, which takes effect two epochs later); `freezable` = the
+// mint's freeze authority is set. Such a coin trades only through the Jupiter route (feeMintFacts, loadRoute).
+export type TransferFee = { bps: number; lowBps: number; maxFee: string; nextBps: number; nextEpoch: number; changeable: boolean; freezable: boolean };
+// 'pumphop': the quote coin Q (`quote`), its token program, and where Q meets SOL — its live curve, or its canonical PumpSwap
+// pool and that pool's two vaults (read from the pool account; they never change)
+export type HopRoute = { quote: string; quoteProgram: string; via: 'curve' | 'pool'; pool?: string; baseVault?: string; quoteVault?: string };
 // a Meteora DLMM pool as the vault verified it: which side is SOL, its reserves and oracle (fixed for the pool's life),
 // the bin array the active bin sat in when the route was read (which arrays a quote prefetches)
 export type DlmmRoute = { solIsX: boolean; reserveX: string; reserveY: string; oracle: string; activeIdx: number; binStep: number };
@@ -77,6 +93,7 @@ const DISC = {
   buyV3: [225, 247, 80, 30, 213, 179, 132, 136], sellV3: [28, 146, 222, 119, 38, 196, 105, 213],
   ammBuy: [194, 171, 28, 70, 104, 77, 91, 47], ammSell: [93, 246, 130, 60, 231, 233, 64, 178],
   dlmmSwap2: [65, 75, 63, 76, 235, 91, 91, 136],   // lb_clmm swap2 (the IDL on chain, 7UZRobkzaKVm1RbCH5WdFaYCGzCRjnu3prziHAsYiSyr)
+  multiHop: [43, 100, 73, 19, 233, 246, 111, 148],  // pump_amm multi_hop_swap (pump-public-docs idl/pump_amm.json, October 2026)
 };
 // Anchor account discriminators the vault checks before it trusts a DLMM account's bytes
 const LB_PAIR_DISC = [33, 11, 49, 98, 181, 101, 177, 13], BIN_ARRAY_DISC = [92, 142, 92, 220, 5, 148, 70, 181];
@@ -84,12 +101,12 @@ const LB_PAIR_DISC = [33, 11, 49, 98, 181, 101, 177, 13], BIN_ARRAY_DISC = [92, 
 // ── program derived addresses ──
 const onCurve = (b: Uint8Array) => { try { ed25519.ExtendedPoint.fromHex(b); return true; } catch { return false; } };
 const pdaCache = new Map<string, string>();
-export function pda(seeds: Uint8Array[], program: string): string {
-  const key = program + ':' + seeds.map((s) => b58e(s)).join(','); const hit = pdaCache.get(key); if (hit) return hit;
+export function pda(seeds: Uint8Array[], program: string, memo = true): string {
+  const key = memo ? program + ':' + seeds.map((s) => b58e(s)).join(',') : ''; const hit = memo ? pdaCache.get(key) : undefined; if (hit) return hit;
   const prog = b58d(program);
   for (let bump = 255; bump >= 0; bump--) {
     const h = sha256(cat(...seeds, Uint8Array.of(bump), prog, te.encode('ProgramDerivedAddress')));
-    if (!onCurve(h)) { const a = b58e(h); pdaCache.set(key, a); return a; }
+    if (!onCurve(h)) { const a = b58e(h); if (memo) pdaCache.set(key, a); return a; }
   }
   throw new Error('no PDA');
 }
@@ -297,14 +314,17 @@ function decodeCurve(d: Uint8Array): Curve {
   return { vTok: rdU64(d, 8), vQuote: rdU64(d, 16), realTok: rdU64(d, 24), realQuote: rdU64(d, 32), supply: rdU64(d, 40), complete: d[48] === 1, creator: rdKey(d, 49), mayhem: d[81] === 1, cashback: d[82] === 1, quoteMint: d.length >= 115 ? rdKey(d, 83) : P.system, creatorFeeBps: d.length >= 123 ? rdU64(d, 115) : 0n };
 }
 type Tier = { threshold: bigint; lp: bigint; protocol: bigint; creator: bigint };
-function decodeFeeConfig(d: Uint8Array): { flat: Tier; tiers: Tier[] } {
+function decodeFeeConfig(d: Uint8Array): { flat: Tier; tiers: Tier[]; exotic?: Tier } {
   let o = 8 + 1 + 32; const fees = () => { const lp = rdU64(d, o), protocol = rdU64(d, o + 8), creator = rdU64(d, o + 16); o += 24; return { lp, protocol, creator }; };
   const flat = { threshold: 0n, ...fees() };
   const n = new DataView(d.buffer, d.byteOffset).getUint32(o, true); o += 4; const tiers: Tier[] = [];
   for (let i = 0; i < n && i < 64; i++) { const lo = rdU64(d, o), hi = rdU64(d, o + 8); o += 16; tiers.push({ threshold: (hi << 64n) | lo, ...fees() }); }
-  return { flat, tiers };
+  // (pumphop) then stable_fee_tiers and exotic_flat_fees — the schedule of a curve quoted in a pump coin; absent on an older layout
+  let exotic: Tier | undefined;
+  if (n <= 64 && o + 4 <= d.length) { const m = new DataView(d.buffer, d.byteOffset).getUint32(o, true); o += 4 + 40 * m; if (m <= 64 && o + 24 <= d.length) exotic = { threshold: 0n, ...fees() }; }
+  return { flat, tiers, ...(exotic ? { exotic } : {}) };
 }
-const feeCfgCache = new Map<string, { at: number; v: { flat: Tier; tiers: Tier[] } }>();
+const feeCfgCache = new Map<string, { at: number; v: { flat: Tier; tiers: Tier[]; exotic?: Tier } }>();
 const feeCfgFresh = (addr: string) => { const hit = feeCfgCache.get(addr); return hit && Date.now() - hit.at < 300000 ? hit.v : null; };
 // the fee config rides in the same getMultipleAccounts as the curve / pool when it is not cached
 function feeConfigFrom(addr: string, acc: Acc) {
@@ -327,35 +347,80 @@ const routeLoads = new Map<string, Promise<SolRoute>>();
 export function solRoute(mint: string, hint?: any): Promise<SolRoute> {
   if (!SOL_ADDR.test(mint)) return Promise.reject(new Error('Invalid Solana mint'));
   solWarm();   // tip floor, fee levels and a blockhash start loading while the route is checked (hover / click)
-  const hit = routeCache.get(mint); if (hit && Date.now() - hit.at < 20000) return Promise.resolve(hit.r);
-  let p = routeLoads.get(mint);
-  if (!p) { p = loadRoute(mint, hint).finally(() => routeLoads.delete(mint)); routeLoads.set(mint, p); }
-  return p;
+  // V13 (speed, G1): a route up to 60 s old is served and, past 20 s, re-read behind the click (the trade re-reads the
+  // market accounts in its first round trip anyway; a completed curve re-routes there as before)
+  const hit = routeCache.get(mint);
+  const load = () => { let p = routeLoads.get(mint); if (!p) { p = loadRoute(mint, hint).finally(() => routeLoads.delete(mint)); routeLoads.set(mint, p); } return p; };
+  if (hit && Date.now() - hit.at < 20000) return Promise.resolve(hit.r);
+  if (hit && Date.now() - hit.at < 60000) { load().catch(() => {}); return Promise.resolve(hit.r); }
+  return load();
 }
 async function loadRoute(mint: string, hint?: any): Promise<SolRoute> {
   // the hint only names the symbol: it is fetched beside the chain read, never in front of it
   const hP = hint && hint.chain === 'sol' && hint.mint === mint ? Promise.resolve(hint) : fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(4000) }).then((x) => x.json()).catch(() => null);
+  // (fix1 trade-speed-06, 2026-11-01) a page hint that names no pump.fun market (Jupiter / DLMM / LaunchLab coins, ~1 in 5 on the
+  // board): the vault's OWN indexer read that the no-pump branch below needs (F-54) starts now, beside the chain read, instead of
+  // after it — one round trip less on a cold route. Still the vault's own fetch, never the page's word; a pump / PumpSwap hint
+  // starts nothing extra, and a hint that turns out wrong is caught by the chain read as before.
+  const idxP = hint && hint.chain === 'sol' && hint.mint === mint && hint.venue !== 'pump' && hint.venue !== 'pumpswap' && hint.venue !== 'pumphop'
+    ? fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null) : null;
   // the facts that decide what gets signed are read from the chain, not taken from the hint: mint, curve and the
   // canonical PumpSwap pool (derived from the mint) in one read, so a migrated coin costs no second round trip
   const pool0 = canonicalPool(mint);
-  const [mintAcc, curveAcc, poolAcc] = await accounts([mint, curveOf(mint), pool0]);
+  // (pumphop) a hint naming the coin's quote token only says WHICH three accounts to read beside the coin's (that token's mint,
+  // curve and canonical pool, all derived here): they are used only if the coin's own curve, read in the same call, names
+  // exactly that token — otherwise they are read again from the curve's word. A hint without a quote reads what it always read.
+  const hq = hint && hint.chain === 'sol' && hint.mint === mint && typeof hint.quote === 'string' && hint.quote !== mint && hint.quote !== P.wsol && SOL_ADDR.test(hint.quote) && b58d(hint.quote).length === 32 ? String(hint.quote) : '';
+  const first = await accounts([mint, curveOf(mint), pool0, ...(hq ? [hq, curveOf(hq), canonicalPool(hq)] : [])]);
+  const [mintAcc, curveAcc, poolAcc] = first;
   if (mintAcc === undefined || curveAcc === undefined || poolAcc === undefined) throw new Error(READ_FAIL);
   if (!mintAcc) throw new Error('Unknown mint');
   const tokenProgram = mintAcc.owner; if (tokenProgram !== P.token && tokenProgram !== P.token22) throw new Error('Not an SPL token');
   const decimals = mintAcc.data[44];
+  // (token2022-fee, 2026-11-01; owner «я даю добро на все»: WOW 72yxYm…, a 3 % transfer-fee coin, was refused "charges a transfer
+  // fee") a Token-2022 coin with a TransferFeeConfig trades through the Jupiter route only — never the vault's own pump / PumpSwap /
+  // DLMM builders, whose quotes know nothing of the fee. Jupiter quotes what the wallet really receives after the fee (measured:
+  // WOW buy outAmount = the simulated balance change to the unit; a sell's quote is what the pool pays for the amount less the fee),
+  // and jupiterTradeOne still checks every instruction and the simulated balances against that minimum. A fee coin that also
+  // carries an extension that can take, lock or hide the wallet's tokens is refused here (feeMintFacts), with nothing sent.
+  // A classic SPL mint, or a Token-2022 mint without a fee (every pump.fun coin), goes on below exactly as before.
+  const fee = tokenProgram === P.token22 ? feeMintFacts(mintAcc.data) : null;
+  if (fee) {
+    if (fee.refuse) throw new Error(fee.refuse);
+    const h = await Promise.race([hP, Promise.resolve(null)]);
+    const r: SolRoute = { mint, venue: 'jupiter', tokenProgram, decimals, symbol: String(h?.symbol || ''), pool: '', isCashback: false, isMayhem: false, quote: '', fee: fee.fee };
+    routeCache.set(mint, { at: Date.now(), r }); return r;
+  }
   let venue: SolRoute['venue'] = 'pumpswap'; let isCashback = false, isMayhem = false; let pool = '';
-  let baseVault: string | undefined, quoteVault: string | undefined, dlmm: DlmmRoute | undefined, dlmmAlts: { pool: string; dlmm: DlmmRoute }[] | undefined;
+  let baseVault: string | undefined, quoteVault: string | undefined, dlmm: DlmmRoute | undefined, dlmmAlts: { pool: string; dlmm: DlmmRoute }[] | undefined, dlmmMore: SolRoute['dlmmMore'];
   // why pump.fun has no SOL market for this coin (then its Meteora DLMM pool against SOL is the venue, if it has one)
-  let noPumpSol = '';
+  let noPumpSol = '', quotedIn = '';
+  // coins-fix (b): the quote token's symbol, for words only (the indexer's answer; never decides what is signed)
+  let quoteSym = '';
+  // (2026-10-30) a completed curve whose canonical PumpSwap pool does not exist (an older coin migrated to a Raydium pool)
+  let pumpNoPool = false;
   if (curveAcc && curveAcc.owner === P.pump) {
     const c = decodeCurve(curveAcc.data); isCashback = c.cashback; isMayhem = c.mayhem;
-    if (c.quoteMint !== P.system && c.quoteMint !== P.wsol) noPumpSol = 'This coin\'s pump.fun market is quoted in another token, not SOL';
+    if (c.quoteMint !== P.system && c.quoteMint !== P.wsol) { noPumpSol = 'This coin\'s pump.fun market is quoted in another token, not SOL'; quotedIn = c.quoteMint; }
     venue = c.complete ? 'pumpswap' : 'pump';
   } else noPumpSol = 'Not a pump.fun coin: no curve and no PumpSwap pool';
+  // (pumphop, 2026-11-01) a live curve quoted in a pump coin Q that trades against SOL (Q's live curve, or its canonical PumpSwap
+  // pool): one multi_hop_swap from SOL. Q's three accounts come from the first read when the hint named Q, else one more read;
+  // anything that does not check out (or a read that failed) leaves the coin to the routes below, exactly as before.
+  if (quotedIn && venue === 'pump' && !isMayhem && !isCashback) {
+    const qa: Got[] = hq === quotedIn ? first.slice(3, 6) : await accounts([quotedIn, curveOf(quotedIn), canonicalPool(quotedIn)]).catch(() => [undefined, undefined, undefined]);
+    const ext = mintExtensions(mintAcc.data);
+    const hop = ext.has(1) || ext.has(14) ? null : hopFromChain(mint, quotedIn, qa[0], qa[1], qa[2]);
+    if (hop) {
+      const h = await Promise.race([hP, Promise.resolve(null)]);
+      const r: SolRoute = { mint, venue: 'pumphop', tokenProgram, decimals, symbol: String(h?.symbol || ''), pool: curveOf(mint), isCashback: false, isMayhem: false, hop, quote: quotedIn, quoteSymbol: symText(h?.quoteSymbol) };
+      routeCache.set(mint, { at: Date.now(), r }); return r;
+    }
+  }
   if (!noPumpSol && venue === 'pumpswap') {
     pool = pool0;
     const pa = poolAcc;
-    if (!pa || pa.owner !== P.pamm) noPumpSol = 'The curve is complete and its PumpSwap pool is not open yet — try again in a few seconds';
+    if (!pa || pa.owner !== P.pamm) { noPumpSol = 'The curve is complete and its PumpSwap pool is not open yet — try again in a few seconds'; pumpNoPool = true; }
     else {
       if (rdKey(pa.data, 43) !== mint || rdKey(pa.data, 75) !== P.wsol) throw new Error('Pool does not match the coin');
       isCashback = pa.data[8 + 1 + 2 + 32 * 6 + 8 + 32 + 1] === 1;
@@ -369,24 +434,70 @@ async function loadRoute(mint: string, hint?: any): Promise<SolRoute> {
     // the display symbol (below); here the indexer's route is fetched fresh when the hint is a page hint, and each
     // candidate it names is still verified on chain in dlmmPoolsOf (enabled LB pair of exactly this mint vs SOL).
     const idxRoute = hint && hint.chain === 'sol' && hint.mint === mint
-      ? await fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null)
+      ? await (idxP ?? fetch(API('/token/' + mint + '/route'), { signal: AbortSignal.timeout(6000) }).then((x) => x.json()).catch(() => null))
       : await hP;
+    quoteSym = symText(idxRoute?.quoteSymbol);
+    // (2026-10-28, jeff HAsTKX…: its market is a Raydium CPMM pool $58k deep, its DLMM pools $3k) a coin that is not a
+    // pump.fun coin at all and whose indexer route names Jupiter (its real market is a Raydium pool or a LaunchLab curve,
+    // sol-indexer raySwitch / isLab) trades through Jupiter, which routes over every venue, instead of a thin DLMM pool.
+    // The indexer only names the PATH, never a pool or an account: jupiterTradeOne still builds, simulates and checks the
+    // transaction itself (inner-instruction guard, wallet balances, its own price check) before anything is signed.
+    // (2026-10-30, LAZARUS DBaxXw… / ALLINDOGE HyDKNd…: pump.fun coins whose curve completed before PumpSwap and migrated to a
+    // Raydium AMM pool — "not open yet" on every click, for good) the same holds for a completed curve with no PumpSwap pool.
+    const viaJupiter = !quotedIn && (!(curveAcc && curveAcc.owner === P.pump) || pumpNoPool) && !!idxRoute && idxRoute.ok === true && idxRoute.venue === 'jupiter' && idxRoute.mint === mint && idxRoute.tradeable !== false;
+    if (viaJupiter) {
+      const ext = mintExtensions(mintAcc.data);
+      if (ext.has(1)) throw new Error('This coin charges a transfer fee (Token-2022) — not supported here');
+      if (ext.has(14)) throw new Error('This coin carries a transfer hook (Token-2022) — not supported here');
+      venue = 'jupiter'; isCashback = false;
+      const h = await Promise.race([hP, Promise.resolve(null)]);
+      const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool: '', isCashback, isMayhem, quote: '' };
+      routeCache.set(mint, { at: Date.now(), r }); return r;
+    }
     const named: string[] = Array.isArray(idxRoute?.dlmm) ? idxRoute.dlmm.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 8) : [];
-    const found = named.length ? await dlmmPoolsOf(mint, named) : [];
-    if (!found.length) throw new Error(noPumpSol + (named.length ? ' — its Meteora DLMM pools could not be verified' : /not open yet/.test(noPumpSol) ? '' : ' — and no Meteora DLMM pool against SOL was found'));
+    // V13 VA-9: the pools the vault finds on chain itself join the server's list. A coin the server names nothing for
+    // waits for that search here (it is the only list there is); otherwise it finishes in the background and a sell
+    // waits for it (solTradeIxs), a buy takes it once it is there.
+    const disc = dlmmDiscover(mint);
+    // (fix2 p2-speed-10, 2026-11-01; a pump.fun coin quoted in another token — the "buni" coins — waited 1.2–2.1 s cold on this
+    // search, 5× getMultipleAccounts, before it settled on Jupiter anyway) a coin quoted in another token whose indexer route — the
+    // vault's OWN read (F-54) — names Jupiter and no DLMM pool goes to Jupiter without waiting for it: Jupiter routes SOL → that
+    // token → the coin over every venue, those DLMM pools included, and jupiterTradeOne still builds, simulates and checks the
+    // transaction itself. The search still runs into dlmmMore. Any other coin waits for it exactly as before.
+    // (pumphop) an indexer that named the one-instruction route the chain did not confirm here counts as Jupiter's word too
+    const jupQuoted = !!quotedIn && !named.length && !!idxRoute && idxRoute.ok === true && (idxRoute.venue === 'jupiter' || idxRoute.venue === 'pumphop') && idxRoute.mint === mint && idxRoute.tradeable !== false;
+    if (!named.length && !jupQuoted) named.push(...(await disc.catch(() => [] as string[])).slice(0, 8));
+    const box: NonNullable<SolRoute['dlmmMore']> = { p: disc.then((all) => { const extra = all.filter((x) => !named.includes(x)).slice(0, 8); return extra.length ? dlmmPoolsOf(mint, extra) : []; }).then((xs) => (box.v = xs.map((f) => ({ pool: f.pool, dlmm: f.route })))) };
+    box.p.catch(() => {}); dlmmMore = box;
+    const dry: string[] = [];
+    const found = named.length ? await dlmmPoolsOf(mint, named, dry) : [];
     const ext = mintExtensions(mintAcc.data);
     if (ext.has(1)) throw new Error('This coin charges a transfer fee (Token-2022) — not supported here');
     if (ext.has(14)) throw new Error('This coin carries a transfer hook (Token-2022) — not supported here');
-    // F-54 V12: keep up to 3 verified candidates. Reserve-balance ranking is donatable, so the trade does NOT trust
-    // the order here — it quotes each candidate at the real amount and uses the best `out` (see solTradeIxs).
-    venue = 'dlmm'; isCashback = false;
-    dlmmAlts = found.slice(0, 3).map((f) => ({ pool: f.pool, dlmm: f.route }));
-    pool = dlmmAlts[0].pool; dlmm = dlmmAlts[0].dlmm;
+    if (found.length) {
+      // F-54 V12: keep up to 3 verified candidates. Reserve-balance ranking is donatable, so the trade does NOT trust
+      // the order here — it quotes each candidate at the real amount and uses the best `out` (see solTradeIxs).
+      venue = 'dlmm'; isCashback = false;
+      dlmmAlts = found.slice(0, 3).map((f) => ({ pool: f.pool, dlmm: f.route }));
+      pool = dlmmAlts[0].pool; dlmm = dlmmAlts[0].dlmm;
+    } else if (quotedIn || dry.length) {
+      // quoted in another token, no DLMM pool against SOL: Jupiter routes SOL → that token → the coin, and the vault
+      // signs only what its own simulation shows to be exactly this trade (jupiterTradeOne)
+      // (2026-10-30, HYPERPAD 31FZ9f…: a pump.fun coin quoted in HYPE whose only DLMM pool against SOL is empty — no reserves,
+      // no bin array in its bitmap — was routed there and every buy failed "too little liquidity"): a coin whose verified
+      // DLMM pools are all dry is routed by Jupiter too, under the same checks
+      venue = 'jupiter';
+    } else throw new Error(noPumpSol + (named.length ? ' — its Meteora DLMM pools could not be verified' : /not open yet/.test(noPumpSol) ? '' : ' — and no Meteora DLMM pool against SOL was found'));
   }
   const h = await Promise.race([hP, Promise.resolve(null)]);   // a symbol not here yet is not worth waiting for
-  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault, dlmm, dlmmAlts };
+  const r: SolRoute = { mint, venue, tokenProgram, decimals, symbol: String(h?.symbol || ''), pool, isCashback, isMayhem, baseVault, quoteVault, dlmm, dlmmAlts, dlmmMore, ...(venue === 'jupiter' ? { quote: quotedIn, ...(quotedIn ? { quoteSymbol: quoteSym || symText(h?.quoteSymbol) } : {}) } : {}) };
   routeCache.set(mint, { at: Date.now(), r }); return r;
 }
+// a symbol for display: short, printable, or nothing
+const symText = (v: unknown) => { const t = String(v ?? '').trim(); return /^[\p{L}\p{N} .$_-]{1,16}$/u.test(t) ? t : ''; };
+// coins-fix (b): what a coin pump.fun quotes in another token reads when no route from SOL reaches it yet (Jupiter picks a new
+// one up minutes late, or never) — the quote token named, instead of a bare "no route"
+export const quotedNoRoute = (r: { quote?: string; quoteSymbol?: string }) => `Can't be bought here yet: this coin is quoted in ${r.quoteSymbol || (r.quote ? r.quote.slice(0, 4) + '…' : 'another token')}, and no route from SOL reaches it yet — nothing was sent`;
 // the TLV extensions of a Token-2022 mint (type → present); a classic mint has none
 function mintExtensions(d: Uint8Array): Set<number> {
   const out = new Set<number>(); if (d.length <= 166 || d[165] !== 1) return out;
@@ -394,9 +505,81 @@ function mintExtensions(d: Uint8Array): Set<number> {
   for (let o = 166; o + 4 <= d.length;) { const t = v.getUint16(o, true), n = v.getUint16(o + 2, true); if (!t && !n) break; out.add(t); o += 4 + n; }
   return out;
 }
+// (token2022-fee) a Token-2022 mint's TLV entries (type → value); null when the layout does not hold together (an entry running
+// past the account, or a type twice)
+function mintTlv(d: Uint8Array): Map<number, Uint8Array> | null {
+  const out = new Map<number, Uint8Array>(); if (d.length <= 166 || d[165] !== 1) return out;
+  const v = new DataView(d.buffer, d.byteOffset);
+  for (let o = 166; o + 4 <= d.length;) {
+    const t = v.getUint16(o, true), n = v.getUint16(o + 2, true); if (!t && !n) break;
+    if (o + 4 + n > d.length || out.has(t)) return null;
+    out.set(t, d.subarray(o + 4, o + 4 + n)); o += 4 + n;
+  }
+  return out;
+}
+// a floor under the chain's current epoch with no read: epoch 1074 was running on 2026-11-01 (1793551206 s), and an epoch
+// (432,000 slots) takes under 3 days even at 0.6 s a slot; only ever low, so a fee change counts as done only once it is
+const epochFloor = () => 1074 + Math.max(0, Math.floor((Date.now() - 1_793_551_206_000) / 259_200_000));
+/** the highest transfer fee a coin may charge here, current or scheduled (basis points) */
+export const T22_FEE_MAX_BPS = 1000;
+// what a fee coin may carry beside its fee: mint-close authority (only an empty mint closes), interest-bearing / scaled UI amount
+// (display only), metadata / group pointers and data. Anything else is refused by type below; an unknown type is refused too.
+const T22_FEE_OK = new Set([1, 3, 10, 18, 19, 20, 21, 22, 23, 25]);
+const zeros = (b: Uint8Array) => b.every((x) => x === 0);
+const feePct = (bps: number) => String(Number((bps / 100).toFixed(2))) + '%';
+/**
+ * A Token-2022 mint's transfer fee and the vault's verdict on it: null = no TransferFeeConfig (the coin takes the normal routes).
+ * `refuse` is the trader's words when the coin must not be traded here: a fee over T22_FEE_MAX_BPS, or an extension that can take
+ * tokens out of the wallet (permanent delegate), lock them (non-transferable; pausable; new accounts frozen by default), run
+ * someone's code on every transfer (transfer hook), or move balances out of sight (confidential transfers / mint-burn).
+ */
+export function feeMintFacts(d: Uint8Array): { fee: TransferFee; refuse: string } | null {
+  const tlv = mintTlv(d);
+  const no = (why: string, fee?: TransferFee) => ({ fee: fee || { bps: 0, lowBps: 0, maxFee: '0', nextBps: 0, nextEpoch: 0, changeable: false, freezable: false }, refuse: `This coin ${why} (Token-2022) — not supported here` });
+  if (!tlv) return mintExtensions(d).has(1) ? no('has a mint layout the vault cannot read') : null;
+  const cfg = tlv.get(1); if (!cfg) return null;
+  if (cfg.length !== 108) return no('has a transfer-fee setting the vault cannot read');
+  const at = (o: number) => ({ epoch: Number(rdU64(cfg, o)), max: rdU64(cfg, o + 8), bps: rdU16(cfg, o + 16) });
+  const older = at(72), newer = at(90);
+  const eff = (f: { max: bigint; bps: number }) => (f.max > 0n ? f.bps : 0);
+  // the newer fee is in force from its epoch on; once that epoch has surely passed, the older one is history (BERN: 4.2 % until
+  // epoch 698, 2.69 % since) — otherwise (a change scheduled, or just made) both count: the ticket shows the range
+  const settled = newer.epoch <= epochFloor();
+  const fee: TransferFee = { bps: settled ? eff(newer) : Math.max(eff(older), eff(newer)), lowBps: settled ? eff(newer) : Math.min(eff(older), eff(newer)), maxFee: String(newer.max), nextBps: eff(newer), nextEpoch: newer.epoch, changeable: !zeros(cfg.subarray(0, 32)), freezable: d.length >= 82 && rdU32(d, 46) === 1 };
+  for (const [t, v] of tlv) {
+    if (T22_FEE_OK.has(t)) continue;
+    if (t === 12) { if (v.length >= 32 && zeros(v.subarray(0, 32))) continue; return no('lets its issuer move tokens out of any wallet (permanent delegate)', fee); }
+    if (t === 6) { if (v.length >= 1 && v[0] !== 2) continue; return no('opens every new token account frozen', fee); }
+    if (t === 14) return no('carries a transfer hook', fee);
+    if (t === 9) return no('cannot be transferred', fee);
+    if (t === 4 || t === 16 || t === 24) return no('supports confidential (hidden) balances', fee);
+    if (t === 26) return no('can be paused by its issuer', fee);
+    return no(`carries an extension the vault does not know (type ${t})`, fee);
+  }
+  if (fee.bps > T22_FEE_MAX_BPS) return no(`charges a ${feePct(fee.bps)} transfer fee — over the ${feePct(T22_FEE_MAX_BPS)} motion trades`, fee);
+  return { fee, refuse: '' };
+}
+/** the ticket's words for a coin's transfer fee: "Transfer fee 3%", "Transfer fee 2.69–4.2%" while a scheduled change is pending */
+export const transferFeeText = (f: TransferFee) => 'Transfer fee ' + (f.lowBps === f.bps ? feePct(f.bps) : feePct(f.lowBps) + '–' + feePct(f.bps));
+// (pumphop) where the quote coin Q meets SOL, from Q's own accounts as the chain holds them: Q is an SPL mint without a transfer fee
+// or hook, has a pump.fun curve paired with SOL, not mayhem, not cashback; live → its curve, complete → its canonical PumpSwap pool
+// (index 0, created by Q's pool authority, Q against wrapped SOL, not mayhem, not cashback). null → no pumphop for this coin.
+export function hopFromChain(coin: string, q: string, qMint: Got, qCurve: Got, qPool: Got): HopRoute | null {
+  if (q === coin || q === P.wsol || q === P.system) return null;
+  if (!qMint || (qMint.owner !== P.token && qMint.owner !== P.token22) || qMint.data.length < 82) return null;
+  const ext = mintExtensions(qMint.data); if (ext.has(1) || ext.has(14)) return null;
+  if (!qCurve || qCurve.owner !== P.pump || qCurve.data.length < 83) return null;
+  const qc = decodeCurve(qCurve.data);
+  if (qc.mayhem || qc.cashback || (qc.quoteMint !== P.system && qc.quoteMint !== P.wsol)) return null;
+  if (!qc.complete) return { quote: q, quoteProgram: qMint.owner, via: 'curve' };
+  const d = qPool?.data;
+  if (!qPool || qPool.owner !== P.pamm || !d || d.length < 261) return null;
+  if (rdU16(d, 9) !== 0 || rdKey(d, 11) !== pumpPda('pool-authority', b58d(q)) || rdKey(d, 43) !== q || rdKey(d, 75) !== P.wsol || d[243] === 1 || d[244] === 1) return null;
+  return { quote: q, quoteProgram: qMint.owner, via: 'pool', pool: canonicalPool(q), baseVault: rdKey(d, 139), quoteVault: rdKey(d, 171) };
+}
 // the named pools, verified on chain and ordered by their SOL reserve (the deepest first); a candidate that is not
 // an enabled LB pair of exactly this mint and SOL is dropped, never used
-async function dlmmPoolsOf(mint: string, named: string[]): Promise<{ pool: string; route: DlmmRoute; solReserve: bigint }[]> {
+async function dlmmPoolsOf(mint: string, named: string[], dry?: string[]): Promise<{ pool: string; route: DlmmRoute; solReserve: bigint }[]> {
   const accs = await readBatch(named);
   if (accs.every((a) => a === undefined)) throw new Error(READ_FAIL);
   const ok: { pool: string; route: DlmmRoute }[] = [];
@@ -410,6 +593,9 @@ async function dlmmPoolsOf(mint: string, named: string[]): Promise<{ pool: strin
     // to the simulation, time-gated ones that are not open yet are skipped here
     if ((lb.pairType === 1 || lb.pairType === 2) && lb.activationType === 1 && Number(lb.activationPoint) > Date.now() / 1000) continue;
     if (lb.oracle !== dlmmOracleOf(named[i])) continue;
+    // (2026-10-30) no bin array with liquidity in the pair's own bitmap: quoteDlmm can only answer "too little liquidity"
+    // here (it walks nothing past that bitmap), so the pool is no venue; the caller is told it exists but is dry
+    if (lb.bitmap.every((w) => w === 0n)) { dry?.push(named[i]); continue; }
     ok.push({ pool: named[i], route: { solIsX, reserveX: lb.reserveX, reserveY: lb.reserveY, oracle: lb.oracle, activeIdx: binArrayIndex(lb.activeId), binStep: lb.binStep } });
   }
   if (!ok.length) return [];
@@ -418,9 +604,47 @@ async function dlmmPoolsOf(mint: string, named: string[]): Promise<{ pool: strin
   return out.sort((a, b) => (a.solReserve === b.solReserve ? a.route.binStep - b.route.binStep : a.solReserve > b.solReserve ? -1 : 1));
 }
 
+// ── V13 VA-9: a coin's Meteora DLMM pools against SOL, found on chain ──
+// Up to V12 the candidates came only from the indexer, so a lying server could name nothing but an attacker's pool for a
+// non-pump coin and sells were dumped there. Meteora's permissionless pairs are PDAs of the program: [preset_parameter2
+// PDA(index), min(mint, SOL), max(mint, SOL)] (verified 2026-10-25 against both live pools of a test coin: presets 14
+// and 124; 392 presets exist), plus the customizable pair [ILM base, min, max] and the oldest kind [min, max, bin step].
+// Every candidate address is derived here (in slices that yield the thread: ~80 ms of hashing per coin, once per 10 min)
+// and checked for existence in batches of 100 through the relay with no account data (the full reads of the pools
+// that exist go through dlmmPoolsOf, which verifies each one as before).
+const DLMM_PRESETS = 400, DLMM_V1_STEPS = [1, 2, 4, 5, 8, 10, 15, 16, 20, 25, 30, 50, 60, 80, 100, 125, 150, 200, 250, 300, 400];
+const DLMM_ILM_BASE = 'MFGQxwAmB91SwuYX36okv2Qmdc9aMuHTwWGUrcjgtFa';
+const u16le = (n: number) => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, n, true); return b; };
+const breathe = () => new Promise<void>((ok) => setTimeout(ok, 0));
+let dlmmPresetList: Promise<string[]> | null = null;
+const dlmmPresets = () => (dlmmPresetList ||= (async () => { const out: string[] = []; for (let i = 0; i < DLMM_PRESETS; i++) { out.push(pda([te.encode('preset_parameter2'), u16le(i)], P.dlmm, false)); if (i % 40 === 39) await breathe(); } return out; })());
+const lessBytes = (a: Uint8Array, b: Uint8Array) => { for (let i = 0; i < 32; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+export async function dlmmCandidateAddrs(mint: string): Promise<string[]> {
+  const x = b58d(mint), y = b58d(P.wsol); const [lo, hi] = lessBytes(x, y) ? [x, y] : [y, x];
+  const out: string[] = [pda([b58d(DLMM_ILM_BASE), lo, hi], P.dlmm), ...DLMM_V1_STEPS.map((bs) => pda([lo, hi, u16le(bs)], P.dlmm))];
+  for (const pre of await dlmmPresets()) { out.push(pda([b58d(pre), lo, hi], P.dlmm, false)); if (out.length % 40 === 0) await breathe(); }
+  return out;
+}
+const dlmmFound = new Map<string, { at: number; p: Promise<string[]> }>();
+export function dlmmDiscover(mint: string): Promise<string[]> {
+  const hit = dlmmFound.get(mint); if (hit && Date.now() - hit.at < 600_000) return hit.p;
+  const p = (async () => {
+    const cands = await dlmmCandidateAddrs(mint);
+    const parts = slices(cands, 100);
+    const got = await Promise.all(parts.map((c) => rpcAt<any>(RPC_URL(), 'getMultipleAccounts', [c, { encoding: 'base64', dataSlice: { offset: 0, length: 0 }, commitment: 'confirmed' }], 6000)));
+    const out: string[] = [];
+    got.forEach((g, i) => { const v = g?.value; if (!Array.isArray(v) || v.length !== parts[i].length) throw new Error(READ_FAIL); v.forEach((a: any, j: number) => { if (a && a.owner === P.dlmm) out.push(parts[i][j]); }); });
+    return out;
+  })();
+  p.catch(() => dlmmFound.delete(mint));
+  dlmmFound.set(mint, { at: Date.now(), p }); if (dlmmFound.size > 200) dlmmFound.delete(dlmmFound.keys().next().value as string);
+  return p;
+}
+
 // ── quotes ──
 // what a quote needs, as one list of accounts (fee config only when it is not cached)
 function marketAddrs(r: SolRoute): string[] {
+  if (r.venue === 'pumphop' && r.hop) return hopAddrs(r);
   if (r.venue === 'pump') return [curveOf(r.mint), ...(feeCfgFresh(P.pumpFeeConfig) ? [] : [P.pumpFeeConfig])];
   // DLMM: the pair and the bin arrays around the active bin (a quote reads further ones only when the walk gets there)
   if (r.venue === 'dlmm' && r.dlmm) return [r.pool, binArrayOf(r.pool, r.dlmm.activeIdx - 1), binArrayOf(r.pool, r.dlmm.activeIdx), binArrayOf(r.pool, r.dlmm.activeIdx + 1)];
@@ -487,6 +711,99 @@ async function quoteAmm(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint, pre
   const totalBps = tier.lp + tier.protocol + tier.creator;
   if (side === 'buy') { const net = (amountIn * 10000n) / (10000n + totalBps); return { out: (base * net) / (quote + net), baseVault, quoteVault, totalBps }; }
   const gross = (quote * amountIn) / (base + amountIn); return { out: gross - ceilFee(gross, totalBps), baseVault, quoteVault, totalBps };
+}
+
+// ── pumphop: SOL → Q → the coin in one PumpSwap multi_hop_swap (pump-public-docs MULTI_HOP_SWAP.md, October 2026) ──
+// What a quote reads, in the click's one market read: the coin's curve, Q's curve (Q live) or Q's pool + its two vaults + Q's mint
+// (its supply sizes the pool's fee tier), and the fee configs not cached.
+function hopAddrs(r: SolRoute): string[] {
+  const h = r.hop!;
+  return [curveOf(r.mint), ...(h.via === 'curve' ? [curveOf(h.quote)] : [h.pool!, h.baseVault!, h.quoteVault!, h.quote]),
+    ...(feeCfgFresh(P.pumpFeeConfig) ? [] : [P.pumpFeeConfig]), ...(h.via === 'pool' && !feeCfgFresh(P.ammFeeConfig) ? [P.ammFeeConfig] : [])];
+}
+// the route no longer holds on chain (Q's pool changed, the coin turned mayhem / cashback …): the click goes to Jupiter
+const HOP_STALE = 'The route through this coin\'s quote token does not hold right now';
+async function feeCfgOf(addr: string, m: Market) {
+  const hit = feeCfgFresh(addr); if (hit) return hit;
+  const acc = m.has(addr) ? m.get(addr) : (await readBatch([addr]))[0];
+  if (acc === undefined) throw new Error(READ_FAIL);
+  return feeConfigFrom(addr, acc ?? null);
+}
+// exact in, net of one fee taken on top (the program's rounding: fee = ceil(net × bps / 10 000), net + fee ≤ in)
+const netOfFee = (x: bigint, bps: bigint) => { if (bps <= 0n) return x; let net = (x * 10000n) / (10000n + bps); const cost = net + ceilFee(net, bps); if (cost > x) net -= cost - x; return net; };
+export type HopQuote = { out: bigint; mid: bigint; protocolBps: bigint; creatorBps: bigint };
+// Fees once per route (MULTI_HOP_SWAP.md "Fees"): the protocol fee on the hop that trades SOL, at that curve's / pool's own rate;
+// the creator fee on the coin's curve; nothing else (no LP fee: the pool is not the far end). The curve and pool formulas are the
+// programs' own, checked against mainnet multi_hop_swap events (a buy spends net − 1 on both a curve and a pool; a sell takes
+// gross − fee): test/pumphop.mjs. A buy past what a curve has left is quoted at what is left (the rest buys at a worse price).
+export async function quotePumphop(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint, pre?: Market): Promise<HopQuote> {
+  const h = r.hop; if (r.venue !== 'pumphop' || !h) throw new Error(HOP_STALE);
+  const addrs = hopAddrs(r);
+  const m: Market = pre && addrs.every((a) => pre.has(a)) ? pre : (await readMarket(r)).m;
+  const tAcc = m.get(curveOf(r.mint)); if (!tAcc || tAcc.owner !== P.pump) throw new Error('Curve not found');
+  const tc = decodeCurve(tAcc.data);
+  if (tc.complete) throw new Error(CURVE_DONE);
+  if (tc.quoteMint !== h.quote || tc.mayhem || tc.cashback) throw new Error(HOP_STALE);
+  const pumpCfg = await feeCfgOf(P.pumpFeeConfig, m);
+  // a curve quoted in a pump coin: its own creator fee when set, else the schedule for such quotes (exotic_flat_fees)
+  const creatorBps = tc.creator === P.system ? 0n : tc.creatorFeeBps > 0n ? tc.creatorFeeBps : (pumpCfg.exotic ?? tierFor(pumpCfg, 0n)).creator;
+  // the SOL side: Q's curve (lamports / Q) or Q's pool (vault + the pool's virtual quote reserves / base vault)
+  let protocolBps: bigint, solToQ: (lamports: bigint) => bigint, qToSol: (q: bigint) => bigint;
+  if (h.via === 'curve') {
+    const qAcc = m.get(curveOf(h.quote)); if (!qAcc || qAcc.owner !== P.pump) throw new Error(HOP_STALE);
+    const qc = decodeCurve(qAcc.data);
+    if (qc.complete) throw new Error(CURVE_DONE);   // Q just completed: the click re-reads the route (Q's pool, once it opens)
+    if (qc.mayhem || qc.cashback || (qc.quoteMint !== P.system && qc.quoteMint !== P.wsol)) throw new Error(HOP_STALE);
+    const mcap = qc.vTok > 0n ? (qc.vQuote * 1_000_000_000_000_000n) / qc.vTok : 0n;
+    protocolBps = tierFor(pumpCfg, mcap).protocol;
+    solToQ = (net) => { if (net <= 1n) return 0n; const t = ((net - 1n) * qc.vTok) / (qc.vQuote + net - 1n); return t > qc.realTok ? qc.realTok : t; };
+    qToSol = (q) => (q * qc.vQuote) / (qc.vTok + q);
+  } else {
+    const pa = m.get(h.pool!);
+    if (!pa || pa.owner !== P.pamm || pa.data.length < 261 || rdKey(pa.data, 43) !== h.quote || rdKey(pa.data, 75) !== P.wsol || rdKey(pa.data, 139) !== h.baseVault || rdKey(pa.data, 171) !== h.quoteVault || pa.data[243] === 1 || pa.data[244] === 1) throw new Error(HOP_STALE);
+    const bv = m.get(h.baseVault!), qv = m.get(h.quoteVault!), qm = m.get(h.quote);
+    if (!bv || !qv || bv.data.length < 72 || qv.data.length < 72) throw new Error('Pool vaults not found');
+    const base = rdU64(bv.data, 64), quote = rdU64(qv.data, 64) + rdI128(pa.data, 245);
+    if (base <= 0n || quote <= 0n) throw new Error(CODE_TEXT.TooLittlePoolTokenLiquidity);
+    const supply = qm && qm.data.length >= 44 ? rdU64(qm.data, 36) : 1_000_000_000_000_000n;
+    protocolBps = tierFor(await feeCfgOf(P.ammFeeConfig, m), (quote * supply) / base).protocol;
+    solToQ = (net) => (net <= 1n ? 0n : (base * (net - 1n)) / (quote + net - 1n));
+    qToSol = (q) => (quote * q) / (base + q);
+  }
+  if (side === 'buy') {
+    const mid = solToQ(netOfFee(amountIn, protocolBps));
+    const n2 = netOfFee(mid, creatorBps);
+    let out = n2 <= 1n ? 0n : ((n2 - 1n) * tc.vTok) / (tc.vQuote + n2 - 1n); if (out > tc.realTok) out = tc.realTok;
+    return { out, mid, protocolBps, creatorBps };
+  }
+  const g1 = (amountIn * tc.vQuote) / (tc.vTok + amountIn), mid = g1 - ceilFee(g1, creatorBps);
+  if (mid <= 0n) return { out: 0n, mid: 0n, protocolBps, creatorBps };
+  const g2 = qToSol(mid);
+  return { out: g2 - ceilFee(g2, protocolBps), mid, protocolBps, creatorBps };
+}
+// the 16 fixed accounts of multi_hop_swap, then 5 per hop in route order (a curve hop: base mint, quote mint, curve, the curve's
+// base and quote token accounts; a pool hop: base mint, quote mint, pool, its two vaults). A buy pays from this wallet's
+// wrapped-SOL account (funded in this transaction when Q's SOL side is its pool; Q's curve takes native SOL and only reads the
+// account's mint), a sell lands there; the account is opened if missing and closed at the end, so SOL comes back as SOL.
+export function pumphopIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint, minOut: bigint): Ix[] {
+  const h = r.hop!; const wsolAta = ataOf(user, P.wsol, P.token), coinAta = ataOf(user, r.mint, r.tokenProgram);
+  const tCurve = curveOf(r.mint), qCurve = curveOf(h.quote);
+  const hopT: [string, boolean, boolean][] = [[r.mint, false, false], [h.quote, false, false], [tCurve, false, true], [ataOf(tCurve, r.mint, r.tokenProgram), false, true], [ataOf(tCurve, h.quote, h.quoteProgram), false, true]];
+  const hopQ: [string, boolean, boolean][] = h.via === 'curve'
+    ? [[h.quote, false, false], [P.wsol, false, false], [qCurve, false, true], [ataOf(qCurve, h.quote, h.quoteProgram), false, true], [ataOf(qCurve, P.wsol, P.token), false, true]]
+    : [[h.quote, false, false], [P.wsol, false, false], [h.pool!, false, true], [h.baseVault!, false, true], [h.quoteVault!, false, true]];
+  const [inAta, outAta] = side === 'buy' ? [wsolAta, coinAta] : [coinAta, wsolAta];
+  const accs: [string, boolean, boolean][] = [
+    [user, true, true], [inAta, false, true], [outAta, false, true], [P.ammGlobalConfig, false, false], [P.ammFeeConfig, false, false],
+    [ammPda('user_volume_accumulator', b58d(user)), false, true], [ataOf(pick(BUYBACK), P.wsol, P.token), false, true],
+    [P.token, false, false], [P.token22, false, false], [P.system, false, false], [ammPda('__event_authority'), false, false], [P.pamm, false, false],
+    [P.pump, false, false], [pumpPda('global'), false, false], [P.pumpFeeConfig, false, false], [pumpPda('__event_authority'), false, false],
+    ...(side === 'buy' ? [...hopQ, ...hopT] : [...hopT, ...hopQ]),
+  ];
+  const out: Ix[] = [ataCreate(user, user, P.wsol, P.token)];
+  if (side === 'buy') { if (h.via === 'pool') out.push(transferIx(user, wsolAta, amount), syncNative(wsolAta)); out.push(ataCreate(user, user, r.mint, r.tokenProgram)); }
+  out.push(ix(P.pamm, accs, cat(Uint8Array.from(DISC.multiHop), u64(amount), u64(minOut))), closeAcc(wsolAta, user, user));
+  return out;
 }
 
 // ── Meteora DLMM: the pool's state, its math, a quote walked bin by bin ──
@@ -676,15 +993,27 @@ function dlmmIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint
 // Each of these is fetched once however many wallets ask at the same moment (the in-flight
 // promise is shared) and kept for 10 s; solWarm() starts them on hover so a click finds them ready.
 const FALLBACK_TIPS = { p75: 0.00002, p95: 0.0015 };
+// V13 (speed, G1): stale-while-revalidate. A value up to SWR_MAX old is served at once and, past SWR_FRESH, one refresh
+// starts behind it: the click no longer waits ~420 ms for the relay's fee estimate whenever the 10 s cache had just
+// expired between two prewarms (13–30 % of clicks, measured 2026-10-25).
+const SWR_FRESH = 5_000, SWR_MAX = 60_000;
 let tipFloor: any = null, tipAt = 0, tipLoad: Promise<any> | null = null;
 function tips(): Promise<any> {
-  if (tipFloor && Date.now() - tipAt < 10000) return Promise.resolve(tipFloor);
+  const age = Date.now() - tipAt;
+  if (tipFloor && age < SWR_MAX) { if (age > SWR_FRESH) loadTips().catch(() => {}); return Promise.resolve(tipFloor); }
+  return loadTips();
+}
+function loadTips(): Promise<any> {
   return (tipLoad ||= fetch(API('/jito/tipfloor'), { signal: AbortSignal.timeout(2500) }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
     .then((j) => { tipLoad = null; if (j) { tipFloor = j; tipAt = Date.now(); } return j || tipFloor || FALLBACK_TIPS; }));
 }
 let feeLv: any = null, feeAt = 0, feeLoad: Promise<any> | null = null;
 function feeLevels(): Promise<any> {
-  if (feeLv && Date.now() - feeAt < 10000) return Promise.resolve(feeLv);
+  const age = Date.now() - feeAt;
+  if (feeLv && age < SWR_MAX) { if (age > SWR_FRESH) loadFeeLevels().catch(() => {}); return Promise.resolve(feeLv); }
+  return loadFeeLevels();
+}
+function loadFeeLevels(): Promise<any> {
   return (feeLoad ||= Promise.race([solRpc<any>('getPriorityFeeEstimate', [{ accountKeys: [P.pump, P.pamm, P.dlmm], options: { includeAllPriorityFeeLevels: true } }]).catch(() => null), new Promise<null>((ok) => setTimeout(() => ok(null), 3000))])
     .then((est) => { feeLoad = null; const lv = est?.priorityFeeLevels; if (lv) { feeLv = lv; feeAt = Date.now(); } return lv || feeLv || {}; }));
 }
@@ -731,7 +1060,26 @@ async function newerBlockhash(than: string): Promise<BlockhashInfo> {
 let warmAt = 0;
 export function solWarm() {
   if (Date.now() - warmAt < 3000) return; warmAt = Date.now();
-  tips().catch(() => {}); feeLevels().catch(() => {}); blockhash(10_000).catch(() => {});
+  // V13 (G1): the blockhash is re-read once it is 5 s old (behind the hover, not on the click)
+  tips().catch(() => {}); feeLevels().catch(() => {}); blockhash(SWR_FRESH).catch(() => {});
+  jitoWarm();
+}
+// V13 (speed, G5): the Jito send roads stay warm and are ordered by what this browser measures. Nothing kept them warm
+// (each send paid TCP + TLS, ~148 ms cold vs ~46 warm), and Fast took the list order (mainnet + ny; ny is 113 ms of TCP
+// from Europe). The first warm-up times four close regions; afterwards the two fastest are pinged every 25 s while the
+// lane is in use (getTipAccounts: no state, far under the ~1 request / s / region the block engine allows), and a send
+// takes regions fastest first. A ping counts as that region's use for the next second, so a send never 429s on it.
+const jitoRtt = new Map<string, number>(); let jitoWarmAt = 0;
+function jitoWarm() {
+  const now = Date.now(); if (now - jitoWarmAt < 25_000) return; jitoWarmAt = now;
+  const first = jitoRtt.size === 0;
+  const list = first ? JITO_ENDPOINTS.slice(0, 4) : [...jitoRtt.entries()].sort((a, b) => a[1] - b[1]).slice(0, 2).map(([u]) => u);
+  for (const u of list) {
+    if (now - (jitoLast.get(u) || 0) < 1000) continue;
+    jitoLast.set(u, now); const t0 = performance.now();
+    fetch(u + '/api/v1/bundles', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"jsonrpc":"2.0","id":1,"method":"getTipAccounts","params":[]}', keepalive: true, signal: AbortSignal.timeout(4000) })
+      .then((r) => { if (r.ok) { const ms = performance.now() - t0; jitoRtt.set(u, Math.min(jitoRtt.get(u) ?? Infinity, ms)); } }).catch(() => {});
+  }
 }
 // the first promise that resolves wins; it fails only when every one failed
 const firstOk = <T>(list: Promise<T>[]) => new Promise<T>((resolve, reject) => { let left = list.length; const errs: unknown[] = []; for (const p of list) p.then(resolve, (e) => { errs.push(e); if (--left === 0) reject(errs[0]); }); });
@@ -746,7 +1094,9 @@ function jitoRoads(mode: string, click?: Click): string[] {
   if (mode === 'eco') return [];
   const want = mode === 'turbo' ? Math.max(2, Math.ceil(JITO_ENDPOINTS.length / Math.max(1, click?.size || 1))) : 2;
   const now = Date.now();
-  let picked = JITO_ENDPOINTS.filter((u) => now - (jitoLast.get(u) || 0) >= 1000).slice(0, want);
+  // V13 (G5): measured regions first, fastest first; the rest in the list's order
+  const order = [...JITO_ENDPOINTS].sort((a, b) => (jitoRtt.get(a) ?? 1e9) - (jitoRtt.get(b) ?? 1e9));
+  let picked = order.filter((u) => now - (jitoLast.get(u) || 0) >= 1000).slice(0, want);
   if (!picked.length) picked = [JITO_ENDPOINTS[jitoTurn++ % JITO_ENDPOINTS.length]];
   for (const u of picked) jitoLast.set(u, now);
   return picked;
@@ -806,11 +1156,22 @@ const CODE_TEXT: Record<string, string> = {
   PairInsufficientLiquidity: 'The pool has too little liquidity for this trade', CannotFindNonZeroLiquidityBinArrayId: 'The pool has too little liquidity for this trade',
   BinArrayNotFound: 'The price moved further than the pool liquidity this trade carried — try again', BitmapExtensionAccountIsNotProvided: 'The price moved further than the pool liquidity this trade carried — try again',
   PoolDisabled: 'Meteora has this pool disabled', InsufficientInAmount: 'Amount too small for this pool',
+  // Jupiter v6
+  SlippageToleranceExceeded: SLIP,
+  // pump_amm / pump multi_hop_swap (pumphop)
+  MultiHopDiscontinuousPath: 'pump.fun refused the route through this coin\'s quote token (the hops do not connect) — nothing was sent',
+  MultiHopCurveRunMismatch: 'pump.fun refused the route through this coin\'s quote token — nothing was sent; try again',
+  MultiHopMixedDirection: 'pump.fun refused the route through this coin\'s quote token (mixed directions) — nothing was sent',
+  MultiHopMayhemCurveNotSupported: 'pump.fun does not route through mayhem-mode coins — nothing was sent',
 };
 // a landed failure carries only {"InstructionError":[i,{"Custom":n}]}: the number means a different thing per program
 const CUSTOM_TEXT: Record<string, Record<number, string>> = {
   pump: { 6002: SLIP, 6003: SLIP, 6042: SLIP, 6005: CODE_TEXT.BondingCurveComplete, 6040: CODE_TEXT.BuyNotEnoughSolToCoverRent, 6041: CODE_TEXT.BuyNotEnoughSolToCoverFees, 6021: CODE_TEXT.NotEnoughTokensToBuy, 6023: CODE_TEXT.NotEnoughTokensToSell },
   pumpswap: { 6004: SLIP, 6040: SLIP, 6002: CODE_TEXT.ZeroQuoteAmount, 6003: CODE_TEXT.TooLittlePoolTokenLiquidity, 6039: CODE_TEXT.BuyNotEnoughQuoteTokensToCoverFees, 6020: CODE_TEXT.DisabledBuy, 6021: CODE_TEXT.DisabledSell },
+  jupiter: { 6001: SLIP },
+  // a multi_hop_swap failure carries PumpSwap's code (6004 ExceededSlippage, 6084–6086 the route) or, from its curve hops, pump's
+  // (6002 / 6003 / 6042 slippage, 6005 a curve completed, 6108 a mayhem curve)
+  pumphop: { 6004: SLIP, 6040: SLIP, 6002: SLIP, 6003: SLIP, 6042: SLIP, 6005: CODE_TEXT.BondingCurveComplete, 6084: CODE_TEXT.MultiHopDiscontinuousPath, 6085: CODE_TEXT.MultiHopCurveRunMismatch, 6086: CODE_TEXT.MultiHopMixedDirection, 6108: CODE_TEXT.MultiHopMayhemCurveNotSupported },
   dlmm: { 6003: SLIP, 6004: SLIP, 6039: SLIP, 6012: CODE_TEXT.PairInsufficientLiquidity, 6037: CODE_TEXT.PairInsufficientLiquidity, 6009: CODE_TEXT.BinArrayNotFound, 6036: CODE_TEXT.BinArrayNotFound, 6042: CODE_TEXT.PoolDisabled, 6104: CODE_TEXT.InsufficientInAmount },
 };
 const errText = (sim: any, side: 'buy' | 'sell' = 'buy', venue = '') => {
@@ -831,6 +1192,14 @@ const errText = (sim: any, side: 'buy' | 'sell' = 'buy', venue = '') => {
 
 // the instructions of one trade for one wallet (exported for the mainnet simulation test)
 export async function solTradeIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint, slippage: number, pre?: Market) {
+  // a Jupiter route is fetched, checked and simulated per wallet (jupiterTradeOne) — never built from here
+  if (r.venue === 'jupiter') throw new Error('This coin trades through Jupiter: use the wallet trade path');
+  if (r.venue === 'pumphop') {
+    const q = await quotePumphop(r, side, amount, pre);
+    if (q.out <= 0n) throw new Error(side === 'buy' ? 'Amount too small to buy anything' : 'Amount too small for this pool');
+    let minOut = slipMin(q.out, slippage); if (minOut <= 0n) minOut = 1n;   // multi_hop_swap refuses a zero minimum
+    return { ixs: pumphopIxs(user, r, side, amount, minOut), expected: q.out, minOut };
+  }
   if (r.venue === 'pump') {
     const q = await quotePump(r.mint, side, amount, pre);
     let minOut = slipMin(q.out, slippage); if (side === 'buy' && minOut <= 0n) minOut = 1n;
@@ -839,13 +1208,18 @@ export async function solTradeIxs(user: string, r: SolRoute, side: 'buy' | 'sell
   if (r.venue === 'dlmm') {
     // F-54 V12: quote every verified candidate at the real amount and take the pool with the best `out`. The
     // deepest-reserve order from loadRoute is donatable, so the pool is chosen by what it actually fills here.
-    const cands = r.dlmmAlts?.length ? r.dlmmAlts : (r.dlmm ? [{ pool: r.pool, dlmm: r.dlmm }] : []);
+    // V13 VA-9: plus the pools the vault found on chain itself — a sell waits for that search (it is normally done since
+    // the route was loaded), a buy takes it only when it is already there; a search that failed leaves the server's list.
+    const base = r.dlmmAlts?.length ? r.dlmmAlts : (r.dlmm ? [{ pool: r.pool, dlmm: r.dlmm }] : []);
+    const more = r.dlmmMore ? (side === 'sell' ? await r.dlmmMore.p.catch(() => []) : r.dlmmMore.v || []) : [];
+    const cands = [...base, ...more.filter((m) => !base.some((b) => b.pool === m.pool))].slice(0, 6);
     let best: { q: DlmmQuote; rr: SolRoute } | null = null; let lastErr: unknown;
-    for (const c of cands) {
+    // V13 (speed, G7): every candidate is quoted at once (one round trip, not one per candidate)
+    const quotes = await Promise.all(cands.map(async (c) => {
       const rr: SolRoute = c.pool === r.pool && c.dlmm === r.dlmm ? r : { ...r, pool: c.pool, dlmm: c.dlmm };
-      try { const q = await quoteDlmm(rr, side, amount, rr === r ? pre : undefined); if (q.out > 0n && (!best || q.out > best.q.out)) best = { q, rr }; }
-      catch (e) { lastErr = e; }
-    }
+      try { return { q: await quoteDlmm(rr, side, amount, rr === r ? pre : undefined), rr }; } catch (e) { lastErr = e; return null; }
+    }));
+    for (const x of quotes) if (x && x.q.out > 0n && (!best || x.q.out > best.q.out)) best = x;
     if (!best) { if (lastErr) throw lastErr; throw new Error(side === 'buy' ? 'Amount too small to buy anything' : 'Amount too small for this pool'); }
     let minOut = slipMin(best.q.out, slippage); if (minOut <= 0n) minOut = 1n;
     return { ixs: dlmmIxs(user, best.rr, side, amount, minOut, best.q.binArrays), expected: best.q.out, minOut };
@@ -906,6 +1280,398 @@ async function sendSigned(tx: Uint8Array, hash: string, lvh: number, holdKey: st
   trackSig(hash, venue);
   return hash;
 }
+// ── Jupiter: coins pump.fun quotes in another token (2026-10-25) ──
+// pump.fun now lets a coin be quoted in any token (BTC-pump, wBTC, USDC, PUMP …). One with no Meteora DLMM pool against
+// SOL is routed by Jupiter: SOL → that token → the coin (XRP 83WuTB…: DLMM SOL→BTC-pump, then PumpSwap BTC-pump→XRP).
+// The vault asks Jupiter for the quote and the instructions itself (never through the page or the motion server) and
+// signs only what passes two checks:
+//   1. the instructions (jupIxsChecked): token-account opens paid by and owned by this wallet, a SOL transfer into this
+//      wallet's own wrapped-SOL account and its sync (a buy, at most the amount), ONE Jupiter v6 swap, closing the
+//      wrapped-SOL account back to this wallet — nothing else, and no signer but this wallet;
+//   2. the balances (jupBalanceGuard), from the vault's own simulation against the chain now: SOL out ≤ the amount +
+//      fees + the rent of the accounts it opens (a sell: SOL in ≥ Jupiter's minimum − fees − rent); the coin in ≥
+//      Jupiter's minimum (a sell: the coin out ≤ the amount); no other token account of this wallet loses a unit, gets
+//      a new delegate or is closed, and the wrapped-SOL account never ends below what it held.
+const JUP_PROGRAM = 'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4';
+const JUP_API = 'https://lite-api.jup.ag/swap/v1';
+const JUP_UNITS_MAX = 700_000;            // a two-hop DLMM + PumpSwap route measured well under it
+const JUP_FEE_CEIL = 5_000_000n;          // the F-8 ceiling (tip + priority ≤ ~0.005 SOL) held at Jupiter's compute limit
+const JUP_TOKENS_MAX = 60;                // the token accounts one simulation is checked against
+export type JupIx = { programId: string; accounts: { pubkey: string; isSigner: boolean; isWritable: boolean }[]; data: string };
+type JupQuote = { inputMint: string; outputMint: string; inAmount: string; outAmount: string; otherAmountThreshold: string; swapMode: string; slippageBps: number; routePlan?: { swapInfo?: { label?: string } }[] };
+const JUP_REFUSE = 'Jupiter\'s transaction holds an instruction the vault does not sign — refused';
+
+export function jupIxsChecked(list: JupIx[], user: string, side: 'buy' | 'sell', amount: bigint): { ixs: Ix[]; opens: number } {
+  const wsolAta = ataOf(user, P.wsol, P.token);
+  let swaps = 0, opens = 0;
+  const ixs = list.map((x): Ix => {
+    if (!x || typeof x.programId !== 'string' || !Array.isArray(x.accounts) || typeof x.data !== 'string') throw new Error(JUP_REFUSE);
+    if (x.accounts.some((a) => a.isSigner && a.pubkey !== user)) throw new Error('Jupiter asked for a signer that is not this wallet — refused');
+    const data = fromB64(x.data), keys = x.accounts.map((a) => a.pubkey);
+    let ok = false;
+    if (x.programId === JUP_PROGRAM) { swaps += 1; ok = true; }
+    // create / create_idempotent: paid by this wallet, for this wallet
+    else if (x.programId === P.ata) { ok = (data.length === 0 || (data.length === 1 && (data[0] === 0 || data[0] === 1))) && keys[0] === user && keys[2] === user; if (ok) opens += 1; }
+    // a buy funds this wallet's own wrapped-SOL account with at most the amount
+    else if (x.programId === P.system) ok = side === 'buy' && data.length === 12 && data[0] === 2 && data[1] === 0 && data[2] === 0 && data[3] === 0 && keys[0] === user && keys[1] === wsolAta && rdU64(data, 4) <= amount;
+    else if (x.programId === P.token && data.length === 1) {
+      if (data[0] === 17) ok = keys.length === 1 && keys[0] === wsolAta;                                                // sync_native
+      else if (data[0] === 9) ok = keys.length === 3 && keys[0] === wsolAta && keys[1] === user && keys[2] === user;    // close_account → this wallet
+    }
+    if (!ok) throw new Error(JUP_REFUSE);
+    return { program: x.programId, keys: x.accounts.map((a) => ({ pubkey: a.pubkey, signer: a.isSigner, writable: a.isWritable })), data };
+  });
+  if (swaps !== 1) throw new Error('Jupiter\'s transaction must hold exactly one swap — refused');
+  return { ixs, opens };
+}
+
+// a token account's amount, owner and delegate (the SPL / Token-2022 base layout); null when it is not a token account
+export type TokState = { mint: string; owner: string; amount: bigint; delegate: string };
+export const tokState = (acc: { owner: string; data: Uint8Array } | null | undefined): TokState | null =>
+  acc && (acc.owner === P.token || acc.owner === P.token22) && acc.data.length >= 165
+    ? { mint: rdKey(acc.data, 0), owner: rdKey(acc.data, 32), amount: rdU64(acc.data, 64), delegate: acc.data[72] === 1 ? rdKey(acc.data, 76) : '' } : null;
+
+// the simulated outcome must be exactly this trade (see the block comment); returns the reason it is not, or ''
+export function jupBalanceGuard(g: {
+  side: 'buy' | 'sell'; amount: bigint; minOut: bigint; feesMax: bigint; rentMax: bigint; user: string;
+  solBefore: bigint; solAfter: bigint; coinBefore: bigint; coinAfter: bigint | null;
+  wsolBefore: TokState | null; wsolAfter: TokState | null;
+  others: { address: string; before: TokState; after: TokState | null }[];
+  /** security audit VA-6: the wrapped-SOL account's lamports before / after (0 when it does not exist / was closed) */
+  wsolLamportsBefore?: bigint; wsolLamportsAfter?: bigint;
+}): string {
+  // VA-6: the wallet's native SOL and its wrapped-SOL account count as ONE total — Jupiter's cleanup closes the wSOL account, so a
+  // separate wSOL check saw nothing and pre-held wSOL could be spent (a buy) or stand in for the proceeds (a sell)
+  const nativeBefore = g.solBefore + (g.wsolLamportsBefore ?? 0n), nativeAfter = g.solAfter + (g.wsolLamportsAfter ?? 0n);
+  if (g.side === 'buy') {
+    if (nativeBefore - nativeAfter > g.amount + g.feesMax + g.rentMax) return 'it would take more SOL than the amount and its fees';
+    if (g.coinAfter === null || g.coinAfter - g.coinBefore < g.minOut) return 'it would deliver less of the coin than Jupiter\'s minimum';
+  } else {
+    if (g.coinAfter !== null && g.coinBefore - g.coinAfter > g.amount) return 'it would take more of the coin than the amount';
+    if (nativeAfter - nativeBefore < g.minOut - g.feesMax - g.rentMax) return 'it would return less SOL than Jupiter\'s minimum';
+  }
+  if (g.wsolBefore && g.wsolAfter && g.wsolAfter.amount < g.wsolBefore.amount) return 'it would spend wrapped SOL this wallet already held';
+  for (const o of g.others) {
+    if (!o.after) return `it would close the token account ${o.address.slice(0, 6)}…`;
+    if (o.after.owner !== g.user) return `it would hand the token account ${o.address.slice(0, 6)}… to someone else`;
+    if (o.after.amount < o.before.amount) return `it would take ${o.before.mint.slice(0, 6)}… tokens this wallet holds`;
+    if (o.after.delegate !== o.before.delegate) return `it would let someone spend ${o.before.mint.slice(0, 6)}… tokens`;
+  }
+  return '';
+}
+
+// security audit VA-7: Jupiter's price is not trusted alone — the route must pay within 30 % of motion's own market price (the
+// SOL lane's pool / curve price ÷ SOL/USD), read beside the quote. A sell with no motion price is refused (it can lose up to the
+// whole position); a buy without one goes ahead (bounded by the trade cap).
+let solUsdMemo: { at: number; v: number } | null = null;
+async function motionPriceSol(mint: string): Promise<number | null> {
+  try {
+    const solUsdP = solUsdMemo && Date.now() - solUsdMemo.at < 30_000 ? Promise.resolve(solUsdMemo.v)
+      : fetch(API('/prices'), { signal: AbortSignal.timeout(3000) }).then((x) => x.json()).then((j) => { const v = Number(j?.ethUsd); if (v > 0) solUsdMemo = { at: Date.now(), v }; return v; });
+    const [q, solUsd] = await Promise.all([fetch(API('/quotes?addrs=' + encodeURIComponent(mint)), { signal: AbortSignal.timeout(3000) }).then((x) => x.json()), solUsdP]);
+    const row = q?.quotes?.[mint]; const usd = Number(row?.price), age = Number(row?.priceAgeMs ?? 0);
+    return usd > 0 && solUsd > 0 && age < 120_000 ? usd / solUsd : null;
+  } catch { return null; }
+}
+// (token2022-fee) `feeBps`: a coin's transfer fee takes its share on the way — a buy delivers the coin less the fee, a sell's pool
+// receives the amount less the fee — so the fair figure is that much lower (the lower of the mint's two fees: the stricter check)
+export function jupPriceCheck(o: { side: 'buy' | 'sell'; amount: bigint; minOut: bigint; decimals: number; priceSol: number | null; feeBps?: number }): string {
+  if (o.priceSol == null || !(o.priceSol > 0)) return o.side === 'sell' ? 'motion has no market price for this coin right now — a Jupiter sell needs one' : '';
+  const amt = Number(o.amount), min = Number(o.minOut);
+  const fair = o.side === 'buy' ? (amt / 1e9) / o.priceSol * 10 ** o.decimals : (amt / 10 ** o.decimals) * o.priceSol * 1e9;
+  const net = o.feeBps && o.feeBps > 0 ? 1 - Math.min(o.feeBps, 10000) / 10000 : 1;
+  return min < fair * net * 0.7 ? 'the route pays far less than the market price' : '';
+}
+// one quote per click for every wallet buying the same amount (Jupiter's free API answers 429 to bursts): shared for 1.5 s
+const jupQuoteMemo = new Map<string, { at: number; p: Promise<JupQuote> }>();
+function jupQuote(r: SolRoute, side: 'buy' | 'sell', amount: bigint, slippage: number): Promise<JupQuote> {
+  const k = [r.mint, side, String(amount), slippage].join('|'), hit = jupQuoteMemo.get(k);
+  if (hit && Date.now() - hit.at < 1500) return hit.p;
+  const p = jupQuoteFresh(r, side, amount, slippage); jupQuoteMemo.set(k, { at: Date.now(), p }); p.catch(() => jupQuoteMemo.delete(k));
+  for (const [x, v] of jupQuoteMemo) if (Date.now() - v.at > 10_000) jupQuoteMemo.delete(x);
+  return p;
+}
+async function jupQuoteFresh(r: SolRoute, side: 'buy' | 'sell', amount: bigint, slippage: number): Promise<JupQuote> {
+  const bps = Math.max(1, Math.min(5000, Math.round(slippage * 100)));
+  const [inM, outM] = side === 'buy' ? [P.wsol, r.mint] : [r.mint, P.wsol];
+  const url = `${JUP_API}/quote?inputMint=${inM}&outputMint=${outM}&amount=${amount}&slippageBps=${bps}&swapMode=ExactIn&restrictIntermediateTokens=true`;
+  const q: JupQuote | null = await fetch(url, { signal: AbortSignal.timeout(8000) }).then((x) => x.json()).catch(() => null);
+  if (!q || typeof q.outAmount !== 'string' || typeof q.otherAmountThreshold !== 'string') throw new Error(r.quote ? quotedNoRoute(r) : 'Jupiter found no route for this coin right now — nothing was sent; try again');
+  if (q.inputMint !== inM || q.outputMint !== outM || q.inAmount !== String(amount) || q.swapMode !== 'ExactIn' || Number(q.slippageBps) !== bps) throw new Error('Jupiter answered for a different trade — refused');
+  const out = BigInt(q.outAmount), min = BigInt(q.otherAmountThreshold);
+  // the minimum must be the quote less YOUR slippage — a looser one would let a bad fill through the balance check
+  if (!(min > 0n) || min > out || min * 10000n < out * BigInt(10000 - bps) - 10000n) throw new Error('Jupiter\'s minimum does not match your slippage — refused');
+  return q;
+}
+async function jupInstructions(q: JupQuote, user: string): Promise<{ list: JupIx[]; tables: string[] }> {
+  const j: any = await fetch(`${JUP_API}/swap-instructions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quoteResponse: q, userPublicKey: user, wrapAndUnwrapSol: true, dynamicComputeUnitLimit: false }), signal: AbortSignal.timeout(10000) }).then((x) => x.json()).catch(() => null);
+  if (!j || j.error || !j.swapInstruction) throw new Error('Jupiter did not build the swap — nothing was sent; try again');
+  if (j.tokenLedgerInstruction || (Array.isArray(j.otherInstructions) && j.otherInstructions.length)) throw new Error(JUP_REFUSE);
+  const list: JupIx[] = [...(Array.isArray(j.setupInstructions) ? j.setupInstructions : []), j.swapInstruction, ...(j.cleanupInstruction ? [j.cleanupInstruction] : [])];
+  const tables: string[] = Array.isArray(j.addressLookupTableAddresses) ? j.addressLookupTableAddresses.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 4) : [];
+  return { list, tables };
+}
+// speed (2026-10-25): the route's lookup tables are cached for 10 minutes and the missing ones read in ONE call (they were read
+// one by one on every click); a table only ever grows, so a cached prefix stays valid
+const jupTableCache = new Map<string, { at: number; addresses: string[] }>();
+async function jupTables(keys: string[]): Promise<{ key: string; addresses: string[] }[]> {
+  const now = Date.now();
+  const miss = keys.filter((k) => { const hit = jupTableCache.get(k); return !hit || now - hit.at > 600_000; });
+  if (miss.length) {
+    const got = await accounts(miss);
+    miss.forEach((k, i) => { const acc = got[i]; if (!acc) throw new Error(READ_FAIL); const addrs: string[] = []; for (let o = 56; o + 32 <= acc.data.length; o += 32) addrs.push(b58e(acc.data.subarray(o, o + 32))); jupTableCache.set(k, { at: now, addresses: addrs }); });
+  }
+  return keys.map((k) => ({ key: k, addresses: jupTableCache.get(k)!.addresses }));
+}
+/** a coin's Jupiter route warmed when its page opens: the quote's connection and the route's lookup tables are ready before the
+ *  click (a throwaway user key: the tables depend on the route, not the wallet) */
+const jupWarmed = new Map<string, number>();
+// Jupiter Swap V2 /build (2026-10-25; Swap V1 /quote + /swap-instructions is no longer maintained): ONE request returns the quote,
+// the raw instructions and the route's lookup tables — no Jupiter fee on /build (the /order path charges 10–50 bps). Keyless from
+// the browser (0.5 requests/s per user); on a 429 the same request goes once through motion's server (/sol/api/jup/build), which
+// adds the API key server-side — the vault still checks every instruction, the price, the tables and the simulation itself.
+const JUP_V2 = 'https://api.jup.ag/swap/v2';
+type JupBuilt = { quote: JupQuote; list: JupIx[]; tables: string[]; claimed: Record<string, string[]> };
+export async function jupBuild(r: SolRoute, side: 'buy' | 'sell', amount: bigint, slippage: number, user: string): Promise<JupBuilt> {
+  const bps = Math.max(1, Math.min(5000, Math.round(slippage * 100)));
+  const [inM, outM] = side === 'buy' ? [P.wsol, r.mint] : [r.mint, P.wsol];
+  const qs = `inputMint=${inM}&outputMint=${outM}&amount=${amount}&taker=${user}&slippageBps=${bps}&wrapAndUnwrapSol=true`;
+  const get = (url: string) => fetch(url, { signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, j: await x.json().catch(() => null) }));
+  let res = await get(`${JUP_V2}/build?${qs}`).catch(() => ({ status: 0, j: null as any }));
+  if (res.status === 429 || res.status === 0) res = await get(API('/jup/build?' + qs)).catch(() => ({ status: 0, j: null as any }));
+  const j: any = res.j;
+  if (!j || j.error || !j.swapInstruction || typeof j.outAmount !== 'string' || typeof j.otherAmountThreshold !== 'string') throw new Error(res.status === 429 ? 'Jupiter is busy right now — nothing was sent; try again in a second' : r.quote ? quotedNoRoute(r) : 'Jupiter found no route for this coin right now — nothing was sent; try again');
+  if (j.inputMint !== inM || j.outputMint !== outM || j.inAmount !== String(amount) || j.swapMode !== 'ExactIn' || Number(j.slippageBps) !== bps) throw new Error('Jupiter answered for a different trade — refused');
+  const out = BigInt(j.outAmount), min = BigInt(j.otherAmountThreshold);
+  // the minimum must be the quote less YOUR slippage — a looser one would let a bad fill through the balance check
+  if (!(min > 0n) || min > out || min * 10000n < out * BigInt(10000 - bps) - 10000n) throw new Error('Jupiter\'s minimum does not match your slippage — refused');
+  if ((Array.isArray(j.otherInstructions) && j.otherInstructions.length) || j.tipInstruction || j.tokenLedgerInstruction) throw new Error(JUP_REFUSE);
+  const list: JupIx[] = [...(Array.isArray(j.setupInstructions) ? j.setupInstructions : []), j.swapInstruction, ...(j.cleanupInstruction ? [j.cleanupInstruction] : [])];
+  const map = j.addressesByLookupTableAddress && typeof j.addressesByLookupTableAddress === 'object' ? j.addressesByLookupTableAddress as Record<string, unknown> : {};
+  const tables = Object.keys(map).filter((k) => SOL_ADDR.test(k)).slice(0, 4);
+  const claimed: Record<string, string[]> = {};
+  for (const k of tables) claimed[k] = Array.isArray(map[k]) ? (map[k] as unknown[]).map(String) : [];
+  const quote: JupQuote = { inputMint: j.inputMint, outputMint: j.outputMint, inAmount: j.inAmount, outAmount: j.outAmount, otherAmountThreshold: j.otherAmountThreshold, swapMode: j.swapMode, slippageBps: Number(j.slippageBps), routePlan: j.routePlan };
+  return { quote, list, tables, claimed };
+}
+
+export function solJupWarm(r: SolRoute): void {
+  if (r.venue !== 'jupiter' || Date.now() - (jupWarmed.get(r.mint) || 0) < 60_000) return;
+  jupWarmed.set(r.mint, Date.now());
+  const user = b58e(ed25519.getPublicKey(ed25519.utils.randomPrivateKey()));
+  void jupBuild(r, 'buy', 100_000_000n, 5, user).then((b) => jupTables(b.tables)).catch(() => {});
+}
+// security without a slow read (2026-10-25): every move of this wallet's funds INSIDE the simulated transaction, from the node's
+// parsed inner instructions. Allowed: SOL into its own wrapped-SOL account (a buy, ≤ the amount); a rent payment for an account the
+// transaction creates; token transfers signed by this wallet only from its wrapped-SOL account, the coin's account (a sell, ≤ the
+// amount) or an account this transaction created (a route's intermediate token, empty before); closing an account back to it.
+// Anything else signed by this wallet (another token account, an approval, an authority change, a burn) is refused.
+// `through` (owner's yes, 2026-10-27: a POOH sell routed through an account of this wallet that already existed and was refused):
+// a transfer this wallet signs from another of its token accounts (or from its wSOL account on a sell) is collected there instead
+// of refused; the caller then reads those accounts before the simulation and in it, and jupBalanceGuard refuses any that ends
+// lower, closed, handed to someone else or delegated. Without `through` the old rule stands (refused).
+export function jupInnerGuard(g: { inner: unknown; user: string; side: 'buy' | 'sell'; amount: bigint; wsolAta: string; coinAta: string; rentMax: bigint; through?: Set<string> }): string {
+  const groups = Array.isArray(g.inner) ? g.inner : null;
+  if (!groups) return 'no inner instructions';
+  const created = new Set<string>();
+  const big = (v: unknown) => { try { return BigInt(String(v ?? '0')); } catch { return -1n; } };
+  for (const grp of groups) for (const x of (grp as any)?.instructions || []) {
+    const t = x?.parsed?.type, i = x?.parsed?.info || {};
+    if (x?.program === 'system' && (t === 'createAccount' || t === 'createAccountWithSeed') && i.source === g.user) { if (big(i.lamports) > g.rentMax) return 'it pays more rent than the accounts it opens need'; created.add(String(i.newAccount)); }
+    else if (x?.program === 'spl-associated-token-account' && (t === 'create' || t === 'createIdempotent') && i.wallet === g.user) created.add(String(i.account));
+  }
+  let spent = 0n, wrapped = 0n;
+  for (const grp of groups) for (const x of (grp as any)?.instructions || []) {
+    const prog = x?.program, t = x?.parsed?.type, i = x?.parsed?.info || {};
+    // a token instruction the node could not parse is refused (it could be anything); other programs' inner calls are the swap itself
+    if (!x?.parsed) { if (x?.programId === P.token || x?.programId === P.token22 || x?.programId === P.system) return 'it holds an instruction the node could not read'; continue; }
+    if (prog === 'system' && t === 'transfer' && i.source === g.user) {
+      if (g.side === 'buy' && i.destination === g.wsolAta) { wrapped += big(i.lamports); continue; }
+      if (created.has(String(i.destination))) continue;
+      return 'it sends SOL from this wallet somewhere else';
+    }
+    if (prog === 'spl-token' || prog === 'spl-token-2022') {
+      // initialising an account this transaction created names this wallet as its OWNER (not a signature): allowed
+      if ((t === 'initializeAccount' || t === 'initializeAccount2' || t === 'initializeAccount3' || t === 'initializeImmutableOwner') && created.has(String(i.account))) continue;
+      if (t === 'getAccountDataSize') continue;
+      const auth = i.authority ?? i.owner ?? i.multisigAuthority ?? i.multisigOwner;
+      if (auth !== g.user) continue;
+      if (t === 'transfer' || t === 'transferChecked' || t === 'transferCheckedWithFee') {
+        const src = String(i.source), amt = big(i.amount ?? i.tokenAmount?.amount);
+        if (src === g.wsolAta && g.side === 'buy') continue;
+        if (src === g.coinAta && g.side === 'sell') { spent += amt; continue; }
+        if (created.has(src)) continue;
+        if (g.through) { if (src !== g.wsolAta) g.through.add(src); continue; }
+        return `it moves tokens out of ${src.slice(0, 6)}…`;
+      }
+      if (t === 'closeAccount' && i.destination === g.user && (i.account === g.wsolAta || created.has(String(i.account)))) continue;
+      if (t === 'syncNative') continue;
+      return `it signs a token ${t || 'instruction'} for this wallet`;
+    }
+  }
+  if (wrapped > g.amount) return 'it wraps more SOL than the amount';
+  if (spent > g.amount) return 'it sells more of the coin than the amount';
+  return '';
+}
+// the rent this wallet pays for accounts the simulated transaction opens (jupInnerGuard has already capped each one at
+// RENT_ATA22 and refused any other SOL leaving the wallet). A route opens accounts the top-level list does not show — an
+// intermediate token's account, PumpSwap's per-user volume accumulator — so the balance check counts these, not the ATA
+// creates it can see (2026-10-25: XRP via Meteora DLMM → PumpSwap opened 3 accounts, 4.37M lamports, vs 2 × 2.1M allowed:
+// every such buy was refused). More than JUP_OPENS_MAX accounts is refused.
+const JUP_OPENS_MAX = 6;
+export function jupInnerRent(inner: unknown, user: string): { rent: bigint; opens: number } {
+  let rent = 0n, opens = 0;
+  for (const grp of Array.isArray(inner) ? inner : []) for (const x of (grp as any)?.instructions || []) {
+    const t = x?.parsed?.type, i = x?.parsed?.info || {};
+    if (x?.program === 'system' && (t === 'createAccount' || t === 'createAccountWithSeed') && i.source === user) { opens += 1; try { rent += BigInt(String(i.lamports ?? '0')); } catch { /* the guard refused it already */ } }
+  }
+  return { rent, opens };
+}
+// every token account of this wallet holding something (both token programs): what the simulation is checked against
+async function walletTokenAccounts(user: string): Promise<{ address: string; state: TokState }[]> {
+  const got = await Promise.all([P.token, P.token22].map((programId) => solRpc<any>('getTokenAccountsByOwner', [user, { programId }, { encoding: 'base64', commitment: 'processed' }])));
+  const rows: { address: string; state: TokState }[] = [];
+  for (const g of got) for (const x of g?.value || []) { const st = tokState({ owner: x.account.owner, data: fromB64(x.account.data[0]) }); if (st && st.amount > 0n) rows.push({ address: x.pubkey, state: st }); }
+  if (rows.length > JUP_TOKENS_MAX) throw new Error(`This wallet holds over ${JUP_TOKENS_MAX} tokens — the vault cannot check this route against all of them; use a wallet with fewer`);
+  return rows;
+}
+async function simulateSeeing(tx: Uint8Array, addrs: string[]) {
+  const params = [toB64(tx), { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed', innerInstructions: true, accounts: { encoding: 'base64', addresses: addrs } }];
+  const r = await solRpc<any>('simulateTransaction', params).catch(() => rpcAt<any>(PUBLIC_RPC, 'simulateTransaction', params));
+  const v = r?.value; if (!v) throw new Error(READ_FAIL);
+  if (!v.err && (!Array.isArray(v.accounts) || v.accounts.length !== addrs.length)) throw new Error('The simulation did not show this wallet\'s balances — nothing was sent; try again');
+  return v;
+}
+const simAcc = (x: any) => (x ? { owner: String(x.owner), data: fromB64(x.data?.[0] || ''), lamports: Number(x.lamports || 0) } : null);
+async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings): Promise<{ hash: string }> {
+  const k = solKeys(a.key!); const user = k.address;
+  await solHoldGate(user);
+  const click = joinClick();
+  const planP = sendPlan(s); const bhP = blockhash(10_000); planP.catch(() => {}); bhP.catch(() => {});
+  const coinAta = ataOf(user, r.mint, r.tokenProgram), wsolAta = ataOf(user, P.wsol, P.token);
+  // speed: a buy's quote starts with the wallet read, not after it (a sell needs the balance first: its amount is a share of it)
+  const buyAmount = side === 'buy' ? BigInt(Math.floor(size * 1e9)) : 0n;
+  if (side === 'buy' && buyAmount <= 0n) throw new Error('Enter an amount');
+  const bEarly = side === 'buy' ? jupBuild(r, side, buyAmount, s.slippage, user) : null; bEarly?.catch(() => {});
+  const priceP = motionPriceSol(r.mint);
+  const [uAcc, cAcc, wAcc] = await accounts([user, coinAta, wsolAta]);
+  if (uAcc === undefined || cAcc === undefined || wAcc === undefined) throw new Error('Could not read this wallet from the Solana nodes — nothing was sent; try again');
+  const coinBefore = tokState(cAcc)?.amount ?? 0n, wsolBefore = tokState(wAcc);
+  let amount = buyAmount;
+  if (side === 'sell') { if (coinBefore <= 0n) throw new Error('Nothing to sell in this wallet'); amount = (coinBefore * BigInt(Math.round(Math.min(100, Math.max(0, size)) * 100))) / 10000n; if (amount <= 0n) throw new Error('Nothing to sell'); }
+  const built0 = await (bEarly ?? jupBuild(r, side, amount, s.slippage, user));
+  const minOut = BigInt(built0.quote.otherAmountThreshold);
+  const { list, tables: tableKeys } = built0;
+  const priceWhy = jupPriceCheck({ side, amount, minOut, decimals: r.decimals, priceSol: await priceP, feeBps: r.fee?.lowBps });
+  if (priceWhy) throw new Error('Refused: ' + priceWhy + '. Nothing was sent.');
+  const { ixs, opens } = jupIxsChecked(list, user, side, amount);
+  const tables = await jupTables(tableKeys);
+  // Jupiter's copy of each table must be what the chain holds (a forged map would point the signed indexes at other accounts)
+  for (const t of tables) { const claimed = built0.claimed[t.key] || []; if (claimed.length > t.addresses.length || claimed.some((a, i) => a !== t.addresses[i])) throw new Error('Jupiter\'s lookup table does not match the chain — refused'); }
+  const plan = await planP;
+  const tip = plan.tipLamports > 0n ? [transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
+  // the F-8 ceiling at this route's compute limit: tip + priority never past ~0.005 SOL
+  const microAt = (units: number) => Math.min(plan.micro, Number(((JUP_FEE_CEIL - (plan.tipLamports > JUP_FEE_CEIL ? JUP_FEE_CEIL : plan.tipLamports)) * 1_000_000n) / BigInt(units)));
+  const feesAt = (units: number) => plan.tipLamports + (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n + SIG_FEE + 10_000n;
+  const rentMax = BigInt(opens) * RENT_ATA22;
+  const have = BigInt(uAcc?.lamports || 0), need = (side === 'buy' ? amount + RENT_WALLET : 0n) + feesAt(JUP_UNITS_MAX) + rentMax;
+  if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees + account rent)`);
+  // simulate once (no priority in the trial: the fee is counted separately), with the inner instructions — every move of this
+  // wallet's funds is checked from them; the slow list of all its token accounts only when the node does not return them
+  const trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, 0), ...ixs, ...tip], P.system, tables));
+  let sim = await simulateSeeing(trial, [user, coinAta, wsolAta]);
+  if (sim.err) throw new Error(errText(sim, side, 'jupiter'));
+  let others: { address: string; state: TokState }[] = [];
+  let post = (sim.accounts as any[]).map(simAcc);
+  const through = new Set<string>();
+  const innerWhy = Array.isArray(sim.innerInstructions) ? jupInnerGuard({ inner: sim.innerInstructions, user, side, amount, wsolAta, coinAta, rentMax: RENT_ATA22, through }) : 'no inner instructions';
+  if (innerWhy && innerWhy !== 'no inner instructions') throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + innerWhy + '. Nothing was sent.');
+  let rentSeen = rentMax;
+  if (!innerWhy) {
+    const opened = jupInnerRent(sim.innerInstructions, user);
+    if (opened.opens > JUP_OPENS_MAX) throw new Error('Refused: Jupiter\'s transaction opens more accounts than a swap needs. Nothing was sent.');
+    if (opened.rent > rentSeen) rentSeen = opened.rent;
+  }
+  if (!innerWhy && through.size) {
+    // the route passes through token accounts this wallet already held: each is read now and again in the simulation, and the
+    // balance check below refuses any that ends lower, closed, handed over or delegated (net zero is all a route may do there)
+    const via = [...through].filter((t) => t !== coinAta && t !== wsolAta);
+    if (via.length > 8) throw new Error('Refused: the Jupiter transaction passes through more token accounts of this wallet than a swap needs. Nothing was sent.');
+    const pre = await accounts(via);
+    if (pre.some((x) => x === undefined)) throw new Error('Could not read this wallet from the Solana nodes — nothing was sent; try again');
+    const states = pre.map((x) => tokState(x));
+    const bad = via.find((_, i) => !states[i] || states[i]!.owner !== user);
+    if (bad) throw new Error(`Refused: Jupiter's transaction does not do what you asked — it moves tokens out of ${bad.slice(0, 6)}…. Nothing was sent.`);
+    others = via.map((address, i) => ({ address, state: states[i]! }));
+    sim = await simulateSeeing(trial, [user, coinAta, wsolAta, ...via]);
+    if (sim.err) throw new Error(errText(sim, side, 'jupiter'));
+    post = (sim.accounts as any[]).map(simAcc);
+  }
+  if (innerWhy === 'no inner instructions') {
+    others = (await walletTokenAccounts(user)).filter((t) => t.address !== coinAta && t.address !== wsolAta);
+    sim = await simulateSeeing(trial, [user, coinAta, wsolAta, ...others.map((t) => t.address)]);
+    if (sim.err) throw new Error(errText(sim, side, 'jupiter'));
+    post = (sim.accounts as any[]).map(simAcc);
+  }
+  // the compute it really used (+25 %), and the priority price at THAT limit (it was clamped at a 700k ceiling before)
+  const units = Math.min(JUP_UNITS_MAX, Math.ceil(Number(sim.unitsConsumed || JUP_UNITS_MAX) * 1.25) + 5_000);
+  const why = jupBalanceGuard({
+    side, amount, minOut, feesMax: feesAt(units), rentMax: rentSeen, user,
+    solBefore: have, solAfter: BigInt(post[0]?.lamports ?? 0) - (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n, coinBefore, coinAfter: post[1] ? tokState(post[1])?.amount ?? null : (side === 'sell' ? 0n : null),
+    wsolBefore, wsolAfter: tokState(post[2]),
+    others: others.map((t, i) => ({ address: t.address, before: t.state, after: tokState(post[3 + i]) })),
+    wsolLamportsBefore: BigInt(wAcc?.lamports || 0), wsolLamportsAfter: BigInt(post[2]?.lamports || 0),
+  });
+  if (why) throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + why + '. Nothing was sent.');
+  let bhi = await bhP; if (Date.now() - bhi.at > 20_000) bhi = await blockhash(0);
+  let bh = bhi.v, lvh = bhi.lvh;
+  const build = (b: string) => signMessage(compileV0(user, [...budget(units, microAt(units)), ...ixs, ...tip], b, tables), k.seed);
+  let built = build(bh);
+  for (let i = 0; i < 3 && sentSigs.has(b58e(built.sig)); i++) { const nb = await newerBlockhash(bh); bh = nb.v; lvh = nb.lvh; built = build(bh); }
+  const { tx, sig } = built;
+  if (tx.length > 1232) throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount');
+  const hash = b58e(sig);
+  const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
+  sentSigs.set(hash, now);
+  // F-1/F-55 V12: the same single send path as every other outflow
+  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: 'jupiter' }); }
+  catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(hash); throw e; }
+  return { hash };
+}
+// the preview of a Jupiter route: Jupiter's own quote (the trade itself re-quotes, checks and simulates per wallet)
+async function jupiterPreviewOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings) {
+  const user = a.key && !a.ext ? solKeys(a.key).address : '';
+  const out: any = { name: a.name, address: user, side, venue: r.quote ? 'Jupiter (pump.fun quoted in ' + r.quote.slice(0, 4) + '…)' : r.fee && r.fee.bps > 0 ? 'Jupiter (best route) · ' + transferFeeText(r.fee) : 'Jupiter (best route)', contract: JUP_PROGRAM, method: 'route', amountIn: size, amountInLabel: side === 'buy' ? size + ' SOL' : size + '%', notes: [] as string[] };
+  try {
+    if (!user) throw new Error('This wallet has no Solana key here');
+    const bal = await solRpc<any>('getBalance', [user, { commitment: 'processed' }]); out.balanceEth = (bal?.value || 0) / 1e9;
+    let amount = BigInt(Math.floor(size * 1e9));
+    if (side === 'sell') { const tb = await solRpc<any>('getTokenAccountBalance', [ataOf(user, r.mint, r.tokenProgram)]).catch(() => null); amount = (BigInt(tb?.value?.amount || '0') * BigInt(Math.round(size * 100))) / 10000n; }
+    if (amount <= 0n) throw new Error(side === 'buy' ? 'Enter an amount' : 'Nothing to sell in this wallet');
+    const q = await jupQuote(r, side, amount, s.slippage);
+    const dec = side === 'buy' ? r.decimals : 9;
+    out.expected = Number(q.outAmount) / 10 ** dec; out.min = Number(q.otherAmountThreshold) / 10 ** dec;
+    out.notes.push('route: ' + (q.routePlan || []).map((h) => h.swapInfo?.label || '?').join(' → '));
+    // (token2022-fee) the coin's own transfer fee, on the ticket: Jupiter's figures above are already after it
+    if (r.fee) {
+      out.transferFeeBps = r.fee.bps; out.transferFee = transferFeeText(r.fee);
+      if (r.fee.bps > 0) out.notes.push(`${out.transferFee} (Token-2022): every transfer of this coin pays it — ${side === 'buy' ? 'what reaches this wallet' : 'what reaches the pool'} is the amount less the fee; the figures above already count it`);
+      if (r.fee.lowBps !== r.fee.bps) out.notes.push(`the fee moves to ${feePct(r.fee.nextBps)} at epoch ${r.fee.nextEpoch}`);
+      if (r.fee.changeable) out.notes.push('the coin\'s fee authority can set a new fee (it takes effect two epochs later)');
+      if (r.fee.freezable) out.notes.push('the coin\'s freeze authority is set: its issuer can freeze token accounts');
+    }
+    out.notes.push('signed only after the vault\'s own simulation shows exactly this trade');
+    out.simulated = 'at signing'; out.funded = side === 'sell' || out.balanceEth >= size;
+  } catch (e) { out.error = (e as Error).message; }
+  return out;
+}
+// (pumphop) the same coin as a Jupiter route (SOL → its quote token → the coin), the quote token named for the words
+const hopAsJupiter = (r: SolRoute): SolRoute => ({ ...r, venue: 'jupiter', pool: '', hop: undefined, quote: r.quote || r.hop?.quote || '' });
+// the trader's own limits: the words stand and nothing else is tried. Anything else a multi_hop_swap simulation refuses (the route's
+// codes 6084–6086 / 6108, an account the program did not accept, a code the vault has no words for) goes to Jupiter.
+const HOP_FINAL = new Set([SLIP, CODE_TEXT.BuyZeroAmount, CODE_TEXT.SellZeroAmount, CODE_TEXT.ZeroQuoteAmount, CODE_TEXT.NotEnoughTokensToSell, CODE_TEXT.BondingCurveComplete, CODE_TEXT.BuyNotEnoughSolToCoverRent,
+  'This wallet has no SOL yet — fund it first', 'Not enough SOL left for account rent — keep about 0.003 SOL in the wallet', 'Not enough SOL in this wallet', 'Not enough tokens in this wallet']);
+export const hopFallback = (sim: any, side: 'buy' | 'sell') => !HOP_FINAL.has(errText(sim, side, 'pumphop'));
 export async function solTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings): Promise<{ hash: string }> {
   try { return await tradeOne(a, side, r, size, s); }
   catch (e) { if (e instanceof SolSendUnknown || !(e instanceof RpcError || /timeout|abort|failed to fetch|networkerror/i.test(String((e as Error)?.name) + ' ' + String((e as Error)?.message)))) throw e; throw new Error(nodeText(e)); }
@@ -913,6 +1679,7 @@ export async function solTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute,
 async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings): Promise<{ hash: string }> {
   if (!a.key || a.ext) throw new Error('This wallet signs through Privy, which has no Solana key here');
   if (r.isCashback) throw new Error('Cashback coins are not supported yet');
+  if (r.venue === 'jupiter') return jupiterTradeOne(a, side, r, size, s);
   const k = solKeys(a.key); const user = k.address;
   // F-55 V12: refuse up front while a prior send from this wallet is unknown (also re-checked in sendSigned)
   await solHoldGate(user);
@@ -939,10 +1706,19 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   };
   if (side === 'sell') amount = sellAmount(extra[1]);
   try { ixs = (await solTradeIxs(user, r, side, amount, s.slippage, m)).ixs; } catch (e) {
+    // (2026-10-30) every DLMM candidate is too thin for this trade (a pool with liquidity on one side only, or less than the
+    // amount): Jupiter routes it over every venue, under its own checks — nothing was signed yet. Only after that failure,
+    // so a click a DLMM pool fills is unchanged.
+    if (r.venue === 'dlmm' && (e as Error).message === DLMM_DRY) return jupiterTradeOne(a, side, { ...r, venue: 'jupiter', pool: '', dlmm: undefined, dlmmAlts: undefined, dlmmMore: undefined, quote: '' }, size, s);
+    // (pumphop) the route through the quote token no longer holds on chain: Jupiter, under its own checks — nothing was signed yet
+    if (r.venue === 'pumphop' && (e as Error).message === HOP_STALE) { routeCache.delete(r.mint); return jupiterTradeOne(a, side, hopAsJupiter(r), size, s); }
     // the curve completed since the route was read: the click re-routes once (one shared read for every wallet)
     // to the PumpSwap pool and quotes there — nothing was signed yet
     if ((e as Error).message !== CURVE_DONE) throw e;
-    routeCache.delete(r.mint); r = await solRoute(r.mint); ({ m, extra } = await read(r)); mine();
+    routeCache.delete(r.mint); r = await solRoute(r.mint);
+    // (pumphop) a coin whose curve completed into a pool quoted in another token: Jupiter's route (solTradeIxs builds none for it)
+    if (r.venue === 'jupiter') return jupiterTradeOne(a, side, r, size, s);
+    ({ m, extra } = await read(r)); mine();
     if (side === 'sell') amount = sellAmount(extra[1]);
     ixs = (await solTradeIxs(user, r, side, amount, s.slippage, m)).ixs;
   }
@@ -956,16 +1732,21 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
     // account on PumpSwap (refunded in the same transaction, but held during it), the token account and the volume
     // accumulator when they do not exist yet; a buy also keeps the wallet itself rent-exempt
     const have = BigInt(extra[0]?.lamports || 0);
-    const rent = (side === 'buy' && !extra[1] ? (r.tokenProgram === P.token22 ? RENT_ATA22 : RENT_ATA) : 0n) + (r.venue === 'pumpswap' ? RENT_ATA : 0n) + (r.venue === 'dlmm' ? (extra[2] ? 0n : RENT_ATA) : extra[2] ? 0n : RENT_UVA);
+    const rent = (side === 'buy' && !extra[1] ? (r.tokenProgram === P.token22 ? RENT_ATA22 : RENT_ATA) : 0n) + (r.venue === 'pumpswap' || r.venue === 'pumphop' ? RENT_ATA : 0n) + (r.venue === 'dlmm' ? (extra[2] ? 0n : RENT_ATA) : extra[2] ? 0n : RENT_UVA);
     const fees = plan.tipLamports + (BigInt(plan.micro) * BigInt(maxUnits)) / 1_000_000n + SIG_FEE;
     const need = (side === 'buy' ? amount + RENT_WALLET : 0n) + fees + rent;
     if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : side === 'buy' ? `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees${rent ? ' + account rent' : ''})` : `Not enough SOL for the sell's fees: ${solTxt(have)} available, about ${solTxt(need)} needed`);
   }
   let units = s.turbo ? maxUnits : 200_000;
-  if (!s.turbo) {
+  // (pumphop) always simulated, Turbo too: a new instruction is never signed unseen
+  if (!s.turbo || r.venue === 'pumphop') {
     // simulate with a generous limit, then sign with what it really used (+25%): a smaller limit lands sooner at the same price
     const sim = await simulate(unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...ixs, ...tip], P.system)));
-    if (sim.err) throw new Error(errText(sim, side, r.venue));
+    if (sim.err) {
+      // (pumphop) a refusal that is not the trader's own limit (slippage, SOL, tokens, size): the Jupiter route instead — nothing was signed
+      if (r.venue === 'pumphop' && hopFallback(sim, side)) return jupiterTradeOne(a, side, hopAsJupiter(r), size, s);
+      throw new Error(errText(sim, side, r.venue));
+    }
     if (sim.unitsConsumed) units = Math.min(400_000, Math.ceil(sim.unitsConsumed * 1.25) + 5_000);
   }
   // F-1 V12: a blockhash read before the click (hover warm, ≤10 s cache) may be stale by the time this wallet signs;
@@ -988,14 +1769,17 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   return { hash };
 }
 export async function solPreviewOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings) {
+  if (r.venue === 'jupiter') return jupiterPreviewOne(a, side, r, size, s);
   const user = a.key && !a.ext ? solKeys(a.key).address : '';
-  const out: any = { name: a.name, address: user, side, venue: r.venue === 'pump' ? 'pump.fun curve' : r.venue === 'dlmm' ? 'Meteora DLMM' : 'PumpSwap', contract: r.venue === 'pump' ? P.pump : r.venue === 'dlmm' ? P.dlmm : P.pamm, method: r.venue === 'pump' ? (side === 'buy' ? 'buy_exact_quote_in_v3' : 'sell_v3') : r.venue === 'dlmm' ? 'swap2' : (side === 'buy' ? 'buy_exact_quote_in_v2' : 'sell_v2'), amountIn: size, amountInLabel: side === 'buy' ? size + ' SOL' : size + '%', notes: [] as string[] };
+  const hopSym = r.quoteSymbol || (r.quote ? r.quote.slice(0, 4) + '…' : 'its quote token');
+  const out: any = { name: a.name, address: user, side, venue: r.venue === 'pumphop' ? `pump.fun curve via ${hopSym} (${r.hop?.via === 'pool' ? 'PumpSwap pool' : 'curve'})` : r.venue === 'pump' ? 'pump.fun curve' : r.venue === 'dlmm' ? 'Meteora DLMM' : 'PumpSwap', contract: r.venue === 'pump' ? P.pump : r.venue === 'dlmm' ? P.dlmm : P.pamm, method: r.venue === 'pumphop' ? 'multi_hop_swap' : r.venue === 'pump' ? (side === 'buy' ? 'buy_exact_quote_in_v3' : 'sell_v3') : r.venue === 'dlmm' ? 'swap2' : (side === 'buy' ? 'buy_exact_quote_in_v2' : 'sell_v2'), amountIn: size, amountInLabel: side === 'buy' ? size + ' SOL' : size + '%', notes: [] as string[] };
   try {
     if (!user) throw new Error('This wallet has no Solana key here');
     const bal = await solRpc<any>('getBalance', [user, { commitment: 'processed' }]); out.balanceEth = (bal?.value || 0) / 1e9;
     let amount = BigInt(Math.floor(size * 1e9));
     if (side === 'sell') { const tb = await solRpc<any>('getTokenAccountBalance', [ataOf(user, r.mint, r.tokenProgram)]).catch(() => null); amount = (BigInt(tb?.value?.amount || '0') * BigInt(Math.round(size * 100))) / 10000n; }
-    const q = r.venue === 'pump' ? await quotePump(r.mint, side, amount) : r.venue === 'dlmm' ? await quoteDlmm(r, side, amount) : await quoteAmm(r, side, amount);
+    const q = r.venue === 'pumphop' ? await quotePumphop(r, side, amount) : r.venue === 'pump' ? await quotePump(r.mint, side, amount) : r.venue === 'dlmm' ? await quoteDlmm(r, side, amount) : await quoteAmm(r, side, amount);
+    if (r.venue === 'pumphop') out.notes.push(`one transaction: ${side === 'buy' ? `SOL → ${hopSym} → the coin` : `the coin → ${hopSym} → SOL`}, simulated before it is signed`);
     if (r.venue === 'dlmm' && r.dlmm && 'binArrays' in q) out.notes.push(`DLMM pool ${r.pool.slice(0, 6)}… · bin step ${r.dlmm.binStep} · ${q.binArrays.length} bin arrays`);
     const exp = side === 'buy' ? Number(q.out) / 10 ** r.decimals : Number(q.out) / 1e9;
     out.expected = exp; out.min = side === 'buy' ? Number(slipMin(q.out, s.slippage)) / 10 ** r.decimals : Number(slipMin(q.out, s.slippage)) / 1e9;
@@ -1250,4 +2034,273 @@ export async function solSendInstructions(a: SolAcct, list: { programId: string;
   // F-1 V12: held-wallet gate + silent-send → SolSendUnknown (a bridge deposit must never go out twice)
   await sendSigned(tx, b58e(sig), bh.lvh, k.address);
   return b58e(sig);
+}
+
+// ── limit orders (2026-10-25; src/solLimitEngine.ts, trench docs/drafts/LIMIT-ORDERS.md §14) ──
+// The venue instructions with the floor the order names (not a fresh quote): the curve, or the canonical PumpSwap pool the
+// curve lists into. That pool's vaults are its own associated accounts (checked on mainnet for Token and Token-2022), so
+// the PumpSwap variant can be signed before the migration and becomes valid the moment the pool opens.
+export function solVenueIxs(user: string, r: SolRoute, venue: 'pump' | 'pumpswap', side: 'buy' | 'sell', amount: bigint, minOut: bigint): Ix[] {
+  if (venue === 'pump') return pumpIxs(user, { ...r, venue: 'pump' }, side, amount, minOut);
+  const pool = canonicalPool(r.mint);
+  return ammIxs(user, { ...r, venue: 'pumpswap', pool }, side, amount, minOut, { baseVault: ataOf(pool, r.mint, r.tokenProgram), quoteVault: ataOf(pool, P.wsol, P.token) });
+}
+// a simulation that returns the named accounts as they would be after it (the limit's "pays the main wallet" check)
+export async function solSimulateAccounts(tx: Uint8Array, addrs: string[]): Promise<{ err: unknown; logs: string[]; accounts: ({ lamports: number; data: Uint8Array } | null)[] }> {
+  const r = await solRpc<any>('simulateTransaction', [toB64(tx), { encoding: 'base64', sigVerify: false, replaceRecentBlockhash: true, commitment: 'processed', accounts: { encoding: 'base64', addresses: addrs } }]);
+  const v = r?.value || {};
+  return { err: v.err ?? null, logs: Array.isArray(v.logs) ? v.logs : [], accounts: (Array.isArray(v.accounts) ? v.accounts : []).map((a: any) => (a ? { lamports: Number(a.lamports), data: fromB64(a.data?.[0] || '') } : null)) };
+}
+// one outflow of a limit order's own wallets (funding from the main wallet, the order wallet's setup and its way back):
+// the engine's single send path, held by sender on an unknown status like every other Solana outflow (F-1/F-55)
+export async function solLimitSend(tx: Uint8Array, holdKey: string, lvh: number): Promise<string> {
+  const hash = b58e(tx.subarray(1, 65));
+  return sendSigned(tx, hash, lvh, holdKey, { mode: 'fast', venue: 'limit' });
+}
+export const solErrText = (sim: any, side: 'buy' | 'sell', venue: string) => errText(sim, side, venue);
+export type SolIxT = Ix;
+
+// ── USD balance (src/floatEngine.ts; 2026-10-25, owner-only, NOT released): the reserve's same-chain swap on ONE pinned
+// Meteora DLMM SOL/USDC pool ── Appended beside the trade code: no trade function calls anything below.
+// No aggregator, no third-party bytes: the vault's own swap2 instruction (dlmmIxs) and a System / SPL transfer that pays
+// the OTHER wallet of the same key its floor in the same transaction, so the payout can never exceed what the swap returned.
+// The float's reads are its own requests (accounts(), never readBatch: a float read can never ride in a click's same-tick
+// batch, nor fill or read the 1.5 s market memo) and its blockhash is its own read (never the trade's cached one).
+async function floatLbPair(pool: string): Promise<LbPair> {
+  const [a] = await accounts([pool]);
+  if (a === undefined) throw new Error(READ_FAIL);
+  if (!a || a.owner !== P.dlmm || a.data.length < 904 || !hasDisc(a.data, LB_PAIR_DISC)) throw new Error('Pool not found');
+  const lb = decodeLbPair(a.data); if (lb.status !== 0) throw new Error('Pool disabled');
+  return lb;
+}
+export async function solFloatRoute(pool: string, mint: string): Promise<SolRoute> {
+  const lb = await floatLbPair(pool).catch(() => null);
+  const solIsX = !!lb && lb.tokenX === P.wsol && lb.tokenY === mint, solIsY = !!lb && lb.tokenY === P.wsol && lb.tokenX === mint;
+  const closed = !!lb && (lb.pairType === 1 || lb.pairType === 2) && lb.activationType === 1 && Number(lb.activationPoint) > Date.now() / 1000;
+  if (!lb || (!solIsX && !solIsY) || closed || lb.oracle !== dlmmOracleOf(pool)) throw new Error('The pinned SOL/USDC pool is not usable right now');
+  return { mint, venue: 'dlmm', tokenProgram: P.token, decimals: 6, symbol: 'USDC', pool, isCashback: false, isMayhem: false,
+    dlmm: { solIsX, reserveX: lb.reserveX, reserveY: lb.reserveY, oracle: lb.oracle, activeIdx: binArrayIndex(lb.activeId), binStep: lb.binStep } };
+}
+// the native price from a pool's active bin, in micro-dollars per SOL (an independent pool from the one swapped through)
+export async function solFloatPrice6(pool: string, usdcMint: string): Promise<bigint> {
+  const lb = await floatLbPair(pool).catch((e) => { throw new Error('Oracle pool: ' + String((e as Error)?.message || e)); });
+  const p = dlmmPrice(lb.activeId, lb.binStep); if (p === null || p <= 0n) throw new Error('Oracle price overflow');
+  if (lb.tokenX === P.wsol && lb.tokenY === usdcMint) return (p * 1_000_000_000n) >> 64n;          // USDC raw per lamport × 1e9
+  if (lb.tokenY === P.wsol && lb.tokenX === usdcMint) return (1_000_000_000n << 64n) / p;          // its inverse
+  throw new Error('Oracle pool is not SOL/USDC');
+}
+// the pool and the five bin arrays around its active bin in one request of the float's own (quoteDlmm reads further ones
+// only if the walk gets there — not at the float's sizes)
+async function floatMarket(r: SolRoute): Promise<Market> {
+  const d = r.dlmm; if (!d) throw new Error('No DLMM pool on this route');
+  const addrs = [r.pool, ...[-2, -1, 0, 1, 2].map((k) => binArrayOf(r.pool, d.activeIdx + k))];
+  const got = await accounts(addrs);
+  if (got[0] === undefined) throw new Error(READ_FAIL);
+  const m: Market = new Map(); addrs.forEach((x, i) => { if (got[i] !== undefined) m.set(x, got[i] as Acc); });
+  return m;
+}
+export async function solFloatQuote(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint): Promise<bigint> { return (await quoteDlmm(r, side, amountIn, await floatMarket(r))).out; }
+export async function solFloatSwapIxs(user: string, r: SolRoute, side: 'buy' | 'sell', amount: bigint, minOut: bigint): Promise<Ix[]> {
+  if (minOut <= 0n) throw new Error('A float swap needs a floor');
+  const q = await quoteDlmm(r, side, amount, await floatMarket(r));
+  return dlmmIxs(user, r, side, amount, minOut, q.binArrays);
+}
+export const solFloatPayIx = (from: string, to: string, lamports: bigint): Ix => transferIx(from, to, lamports);
+// USDC from `owner` to `to`'s token account (created if missing, idempotent), transferChecked — no compute budget of its own
+export const solFloatTokenPayIxs = (owner: string, mint: string, to: string, units: bigint, decimals: number): Ix[] => {
+  const src = ataOf(owner, mint, P.token), dst = ataOf(to, mint, P.token);
+  return [ataCreate(owner, to, mint, P.token), ix(P.token, [[src, false, true], [mint, false, false], [dst, false, true], [owner, true, false]], cat(Uint8Array.of(12), u64(units), Uint8Array.of(decimals)))];
+};
+// sign and send instructions from one of the vault's keys, through the same held-wallet send path as every outflow
+export async function solFloatSend(a: SolAcct, ixs: Ix[], units = 300_000, micro = 50_000): Promise<string> {
+  if (!a.key || a.ext) throw new Error('No Solana key for this wallet');
+  const k = solKeys(a.key);
+  const all = [...budget(units, micro), ...ixs];
+  const sim = await simulate(unsignedTx(compileLegacy(k.address, all, P.system)));
+  if (sim.err) throw new Error('Simulation failed: ' + JSON.stringify(sim.err).slice(0, 120));
+  const bh = await solBlockhashInfo();
+  const { tx, sig } = signMessage(compileLegacy(k.address, all, bh.blockhash), k.seed);
+  if (tx.length > 1232) throw new Error('Transaction too large');
+  await sendSigned(tx, b58e(sig), bh.lvh, k.address);
+  return b58e(sig);
+}
+
+// ── USD balance: the buy straight from the reserve (src/floatDirect.ts; owner 2026-10-29 «давай делай это все»; NOT released,
+// waits for the owner's yes: B:\tmp\float-direct\APPROVAL-REQUEST.md) ── Appended: no trade function above calls anything below.
+// R (the wallet's own reserve) signs ONE transaction: a Jupiter route USDC → coin whose output lands in W's coin account
+// (destinationTokenAccount), W's account created first (idempotent, R pays its rent), R's own coin account that the route
+// opens on its way closed back to R at the end. Checked like every Jupiter buy, from R's side: the instruction list
+// (directIxsChecked), motion's market price, the lookup tables against the chain, and R's own simulation — every move of R's
+// funds inside it (directInnerGuard) and the balances after it (directBalanceGuard: R's USDC down ≤ the amount, W's coin up ≥
+// Jupiter's minimum, R's SOL down ≤ fees + rent, nothing else of R's lower). Sent through the same held-wallet path.
+const DIRECT_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+// Jupiter Swap V2 /build with destinationTokenAccount; on a 429 Swap V1 (quote + swap-instructions, the same parameter) —
+// motion's keyed /sol/api/jup/build proxy takes only the six parameters of a wallet's own swap, so it is not asked here.
+// maxAccounts: the route is asked to leave room for the reserve's own instructions (W's coin account, the close, the tip):
+// Jupiter sizes a route for ITS transaction, and with them a 64-account route did not fit (1 648 bytes, 2026-10-29)
+const DIRECT_MAX_ACCOUNTS = [40, 28];
+async function jupBuildDirect(mint: string, amount: bigint, slippage: number, taker: string, dest: string, maxAccounts = DIRECT_MAX_ACCOUNTS[0]): Promise<JupBuilt> {
+  const bps = Math.max(1, Math.min(5000, Math.round(slippage * 100)));
+  const want = { usdc: DIRECT_USDC, mint, amount, bps };
+  const get = (url: string, init?: RequestInit) => fetch(url, { ...(init || {}), signal: AbortSignal.timeout(8000) }).then(async (x) => ({ status: x.status, j: await x.json().catch(() => null) }));
+  const res = await get(`${JUP_V2}/build?inputMint=${DIRECT_USDC}&outputMint=${mint}&amount=${amount}&taker=${taker}&slippageBps=${bps}&destinationTokenAccount=${dest}&maxAccounts=${maxAccounts}`).catch(() => ({ status: 0, j: null as any }));
+  let j: any = res.j, tables: string[] = [];
+  const claimed: Record<string, string[]> = {};
+  if (res.status === 429 || res.status === 0 || !j?.swapInstruction) {
+    const q = await get(`${JUP_API}/quote?inputMint=${DIRECT_USDC}&outputMint=${mint}&amount=${amount}&slippageBps=${bps}&swapMode=ExactIn&restrictIntermediateTokens=true&maxAccounts=${maxAccounts}`).catch(() => ({ status: 0, j: null as any }));
+    if (!q.j || typeof q.j.outAmount !== 'string') throw new Error(res.status === 429 || q.status === 429 ? 'Jupiter is busy right now — nothing was sent; try again in a second' : 'Jupiter found no route for this coin right now — nothing was sent; try again');
+    directQuoteCheck(q.j, want);
+    const si = await get(`${JUP_API}/swap-instructions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ quoteResponse: q.j, userPublicKey: taker, destinationTokenAccount: dest, wrapAndUnwrapSol: true, dynamicComputeUnitLimit: false }) }).catch(() => ({ status: 0, j: null as any }));
+    if (!si.j || si.j.error || !si.j.swapInstruction) throw new Error('Jupiter did not build the swap — nothing was sent; try again');
+    j = { ...q.j, setupInstructions: si.j.setupInstructions, swapInstruction: si.j.swapInstruction, cleanupInstruction: si.j.cleanupInstruction, otherInstructions: si.j.otherInstructions, tokenLedgerInstruction: si.j.tokenLedgerInstruction };
+    tables = Array.isArray(si.j.addressLookupTableAddresses) ? si.j.addressLookupTableAddresses.filter((x: unknown) => typeof x === 'string' && SOL_ADDR.test(x)).slice(0, 4) : [];
+  } else {
+    const map = j.addressesByLookupTableAddress && typeof j.addressesByLookupTableAddress === 'object' ? j.addressesByLookupTableAddress as Record<string, unknown> : {};
+    tables = Object.keys(map).filter((k) => SOL_ADDR.test(k)).slice(0, 4);
+    for (const k of tables) claimed[k] = Array.isArray(map[k]) ? (map[k] as unknown[]).map(String) : [];
+  }
+  directQuoteCheck(j, want);
+  if ((Array.isArray(j.otherInstructions) && j.otherInstructions.length) || j.tipInstruction || j.tokenLedgerInstruction) throw new Error(JUP_REFUSE);
+  const list: JupIx[] = [...(Array.isArray(j.setupInstructions) ? j.setupInstructions : []), j.swapInstruction, ...(j.cleanupInstruction ? [j.cleanupInstruction] : [])];
+  const quote: JupQuote = { inputMint: j.inputMint, outputMint: j.outputMint, inAmount: j.inAmount, outAmount: j.outAmount, otherAmountThreshold: j.otherAmountThreshold, swapMode: j.swapMode, slippageBps: Number(j.slippageBps), routePlan: j.routePlan };
+  return { quote, list, tables, claimed };
+}
+// motion's own market price in USD per whole coin (the same /quotes row motionPriceSol reads); null = none fresh
+async function motionPriceUsd(mint: string): Promise<number | null> {
+  try {
+    const q = await fetch(API('/quotes?addrs=' + encodeURIComponent(mint)), { signal: AbortSignal.timeout(3000) }).then((x) => x.json());
+    const row = q?.quotes?.[mint]; const usd = Number(row?.price), age = Number(row?.priceAgeMs ?? 0);
+    return usd > 0 && age < 120_000 ? usd : null;
+  } catch { return null; }
+}
+export class SolDirectNoGas extends Error { name = 'SolDirectNoGas'; }
+export type SolDirectBuilt = { tx: Uint8Array; hash: string; lvh: number; mode: string; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number> };
+type DirectPlan = { message: (blockhash: string) => Uint8Array; bh: BlockhashInfo; mode: string; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number>; mark: (k: string) => void };
+/** Build, check, simulate and sign R's buy — never sent here (solDirectBuy sends). */
+export async function solDirectBuild(rAcct: SolAcct, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings): Promise<SolDirectBuilt> {
+  if (!rAcct.key || rAcct.ext) throw new Error('No Solana key for this reserve');
+  const k = solKeys(rAcct.key);
+  const p = await directPlan(k.address, w, r, usdcIn, s);
+  let bh = p.bh.v, lvh = p.bh.lvh;
+  const sign = (b: string) => signMessage(p.message(b), k.seed);
+  let signed = sign(bh);
+  for (let i = 0; i < 3 && sentSigs.has(b58e(signed.sig)); i++) { const nb = await newerBlockhash(bh); bh = nb.v; lvh = nb.lvh; signed = sign(bh); }
+  if (signed.tx.length > 1232) throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount');
+  p.mark('signed');
+  return { tx: signed.tx, hash: b58e(signed.sig), lvh, mode: p.mode, minOut: p.minOut, outQuote: p.outQuote, route: p.route, timing: p.timing };
+}
+/** Every step of R's buy up to its signature, for an address only (no key, nothing signed or sent): measurements and tests. */
+export async function solDirectDryRun(R: string, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings): Promise<{ bytes: number; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number> }> {
+  const p = await directPlan(R, w, r, usdcIn, s);
+  const bytes = unsignedTx(p.message(p.bh.v)).length; p.mark('compiled');
+  return { bytes, minOut: p.minOut, outQuote: p.outQuote, route: p.route, timing: p.timing };
+}
+// a route that does not fit one transaction with the reserve's own instructions is asked again once, for fewer accounts
+class DirectTooLarge extends Error {}
+async function directPlan(R: string, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings): Promise<DirectPlan> {
+  try { return await directPlanAt(R, w, r, usdcIn, s, DIRECT_MAX_ACCOUNTS[0]); }
+  catch (e) { if (!(e instanceof DirectTooLarge)) throw e; return directPlanAt(R, w, r, usdcIn, s, DIRECT_MAX_ACCOUNTS[1]); }
+}
+async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings, maxAccounts: number): Promise<DirectPlan> {
+  if (!SOL_ADDR.test(w) || !SOL_ADDR.test(R)) throw new Error('Bad trading wallet');
+  if (r.isCashback) throw new Error('Cashback coins are not supported yet');
+  if (usdcIn <= 0n) throw new Error('Enter an amount');
+  const t0 = performance.now(); const timing: Record<string, number> = {}; const mark = (k: string) => { timing[k] = Math.round(performance.now() - t0); };
+  if (R === w) throw new Error('The reserve cannot buy for itself');
+  const usdcAta = ataOf(R, DIRECT_USDC, P.token), rWsolAta = ataOf(R, P.wsol, P.token);
+  const wCoinAta = ataOf(w, r.mint, r.tokenProgram), rCoinAta = ataOf(R, r.mint, r.tokenProgram);
+  const planP = sendPlan(s); const bhP = blockhash(10_000); planP.catch(() => {}); bhP.catch(() => {});
+  const bP = jupBuildDirect(r.mint, usdcIn, s.slippage, R, wCoinAta, maxAccounts); bP.catch(() => {});
+  const priceP = motionPriceUsd(r.mint);
+  const [rAcc, uAcc, cAcc, rcAcc] = await accounts([R, usdcAta, wCoinAta, rCoinAta]);
+  mark('read');
+  if (rAcc === undefined || uAcc === undefined || cAcc === undefined || rcAcc === undefined) throw new Error(READ_FAIL);
+  const usdcBefore = tokState(uAcc)?.amount ?? 0n;
+  if (usdcBefore < usdcIn) throw new Error(`The reserve holds ${(Number(usdcBefore) / 1e6).toFixed(2)} USDC — less than this buy`);
+  const coinState = tokState(cAcc);
+  if (cAcc && (!coinState || coinState.owner !== w || coinState.mint !== r.mint)) throw new Error('The trading wallet\'s coin account is not what it should be — refused');
+  const coinBefore = coinState?.amount ?? 0n;
+  const built = await bP; mark('jupiter');
+  const minOut = BigInt(built.quote.otherAmountThreshold);
+  const priceWhy = directPriceCheck({ usdcIn, minOut, decimals: r.decimals, priceUsd: await priceP, feeBps: r.fee?.lowBps });
+  if (priceWhy) throw new Error('Refused: ' + priceWhy + '. Nothing was sent.');
+  const { opens } = directIxsChecked(built.list, { r: R, wCoinAta, rWsolAta });
+  const ixs: Ix[] = built.list.map((x) => ({ program: x.programId, keys: x.accounts.map((a) => ({ pubkey: a.pubkey, signer: a.isSigner, writable: a.isWritable })), data: fromB64(x.data) }));
+  // R's coin account, opened by the route's setup in this transaction (it did not exist): closed back to R at the end
+  const opensRCoin = rcAcc === null && built.list.some((x) => x.programId === P.ata && x.accounts[1]?.pubkey === rCoinAta);
+  const tail: Ix[] = opensRCoin ? [ix(r.tokenProgram, [[rCoinAta, false, true], [R, false, true], [R, true, false]], Uint8Array.of(9))] : [];
+  const head: Ix[] = [ataCreate(R, w, r.mint, r.tokenProgram)];
+  const tables = await jupTables(built.tables);
+  for (const t of tables) { const claimed = built.claimed[t.key] || []; if (claimed.length > t.addresses.length || claimed.some((a, i) => a !== t.addresses[i])) throw new Error('Jupiter\'s lookup table does not match the chain — refused'); }
+  mark('tables');
+  const plan = await planP;
+  mark('plan');
+  const tip = plan.tipLamports > 0n ? [transferIx(R, pick(JITO_TIP), plan.tipLamports)] : [];
+  const microAt = (units: number) => Math.min(plan.micro, Number(((JUP_FEE_CEIL - (plan.tipLamports > JUP_FEE_CEIL ? JUP_FEE_CEIL : plan.tipLamports)) * 1_000_000n) / BigInt(units)));
+  const feesAt = (units: number) => plan.tipLamports + (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n + SIG_FEE + 10_000n;
+  const rentMax = BigInt(opens + 1) * RENT_ATA22;   // the route's own opens + W's coin account
+  const have = BigInt(rAcc?.lamports || 0), need = feesAt(JUP_UNITS_MAX) + rentMax + RENT_WALLET;
+  if (have < need) throw new SolDirectNoGas(`The reserve needs about ${solTxt(need)} for the network fee and account rent — it has ${solTxt(have)}`);
+  const all = (units: number, micro: number) => [...budget(units, micro), ...head, ...ixs, ...tail, ...tip];
+  const trial = unsignedTx(compileV0(R, all(JUP_UNITS_MAX, 0), P.system, tables));
+  if (trial.length > 1232) { if (maxAccounts > DIRECT_MAX_ACCOUNTS[1]) throw new DirectTooLarge(); throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount'); }
+  let sim = await simulateSeeing(trial, [R, usdcAta, wCoinAta]);
+  mark('simulate');
+  if (sim.err) throw new Error(errText(sim, 'buy', 'jupiter'));
+  let post = (sim.accounts as any[]).map(simAcc);
+  const through = new Set<string>();
+  const innerWhy = directInnerGuard({ inner: sim.innerInstructions, r: R, w, usdcAta, rWsolAta, wCoinAta, amount: usdcIn, rentMax: RENT_ATA22, through });
+  if (innerWhy && innerWhy !== 'no inner instructions') throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + innerWhy + '. Nothing was sent.');
+  let others: { address: string; state: TokState }[] = [];
+  let rentSeen = rentMax;
+  if (!innerWhy) {
+    const opened = jupInnerRent(sim.innerInstructions, R);
+    if (opened.opens > JUP_OPENS_MAX + 1) throw new Error('Refused: Jupiter\'s transaction opens more accounts than a swap needs. Nothing was sent.');
+    if (opened.rent > rentSeen) rentSeen = opened.rent;
+    const via = [...through].filter((t) => t !== usdcAta && t !== wCoinAta);
+    if (via.length) {
+      // the route passes through token accounts R already held: read now and again in the simulation (net zero at most)
+      if (via.length > 8) throw new Error('Refused: the Jupiter transaction passes through more of the reserve\'s token accounts than a swap needs. Nothing was sent.');
+      const pre = await accounts(via);
+      if (pre.some((x) => x === undefined)) throw new Error(READ_FAIL);
+      const states = pre.map((x) => tokState(x));
+      const bad = via.find((_, i) => !states[i] || states[i]!.owner !== R);
+      if (bad) throw new Error(`Refused: Jupiter's transaction does not do what you asked — it moves tokens out of ${bad.slice(0, 6)}…. Nothing was sent.`);
+      others = via.map((address, i) => ({ address, state: states[i]! }));
+    }
+  } else {
+    // the node did not return the inner instructions: every token account R holds is checked instead (a reserve holds few)
+    others = (await walletTokenAccounts(R)).filter((t) => t.address !== usdcAta);
+  }
+  if (others.length) {
+    sim = await simulateSeeing(trial, [R, usdcAta, wCoinAta, ...others.map((t) => t.address)]);
+    if (sim.err) throw new Error(errText(sim, 'buy', 'jupiter'));
+    post = (sim.accounts as any[]).map(simAcc);
+  }
+  const units = Math.min(JUP_UNITS_MAX, Math.ceil(Number(sim.unitsConsumed || JUP_UNITS_MAX) * 1.25) + 5_000);
+  const why = directBalanceGuard({
+    amount: usdcIn, minOut, feesMax: feesAt(units), rentMax: rentSeen, r: R, w,
+    usdcBefore, usdcAfter: post[1] ? tokState(post[1])?.amount ?? null : null,
+    coinBefore, coinAfter: tokState(post[2]),
+    solBefore: have, solAfter: BigInt(post[0]?.lamports ?? 0) - (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n,
+    others: others.map((t, i) => ({ address: t.address, before: t.state, after: tokState(post[3 + i]) })),
+  });
+  if (why) throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + why + '. Nothing was sent.');
+  let bhi = await bhP; if (Date.now() - bhi.at > 20_000) bhi = await blockhash(0);
+  return { message: (b) => compileV0(R, all(units, microAt(units)), b, tables), bh: bhi, mode: plan.mode, minOut, outQuote: BigInt(built.quote.outAmount), route: (built.quote.routePlan || []).map((h) => h.swapInfo?.label || '?').join(' → '), timing, mark };
+}
+/** R's buy for W, sent through the engine's single held-wallet path (held by R's address on an unknown status). */
+export async function solDirectBuy(rAcct: SolAcct, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings, gate?: () => boolean): Promise<{ hash: string; minOut: bigint; route: string; timing: Record<string, number> }> {
+  if (!rAcct.key || rAcct.ext) throw new Error('No Solana key for this reserve');
+  const R = solKeys(rAcct.key).address;
+  await solHoldGate(R);
+  const click = joinClick();
+  const b = await solDirectBuild(rAcct, w, r, usdcIn, s);
+  // the caller's pre-send deadline (owner 2026-11-01, src/preSendDeadline.ts): a build it already answered "not started" is never sent
+  if (gate && !gate()) throw new Error('The buy from your USD balance took too long to prepare — nothing was sent');
+  const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
+  sentSigs.set(b.hash, now);
+  try { await sendSigned(b.tx, b.hash, b.lvh, R, { mode: b.mode, click, venue: 'jupiter' }); }
+  catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(b.hash); throw e; }
+  return { hash: b.hash, minOut: b.minOut, route: b.route, timing: b.timing };
 }

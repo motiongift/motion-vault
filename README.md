@@ -51,6 +51,7 @@ report it (see [SECURITY.md](SECURITY.md)) and tell people.
 | --- | --- |
 | `src/webEngine.ts` | the engine: key store, EVM trading (Robinhood Chain, BNB Chain), the postMessage surface the terminal talks to, the 2FA gate, dialogs |
 | `src/vaultRecovery.ts` | key derivation, the encrypted vault at rest, account backup (v3), survival rules after a lost key store |
+| `src/passkeyBackup.ts`, `src/passkeyCopy.ts` | account backup v4 (opt-in): a passkey (WebAuthn PRF, RP ID = the vault's host) as a second factor on the backup key; the recovery code; the words of its dialogs in six languages ([docs/PASSKEY-BACKUP-V4.md](docs/PASSKEY-BACKUP-V4.md)) |
 | `src/solEngine.ts` | the Solana lane: ed25519 identities, pump.fun / PumpSwap / Meteora DLMM trades, sending through Jito + RPC |
 | `src/nearEngine.ts` | the NEAR lane: NEAR identities, Rhea DCL swaps |
 | `src/bridgeEngine.ts` | balances and sends on other EVM chains for the Relay bridge leg |
@@ -95,6 +96,17 @@ terminal website, not of the engine; their hashes are also published in `release
   cannot open it on its own — it holds the ciphertext, not the signature. Anyone holding *both*
   your Privy session and your main wallet's derivation signature could open it; that is the
   deliberate trade-off that lets a fresh browser restore your wallets after login + one signature.
+- **Optional: a passkey on the backup (backup v4).** You can add a lock that neither your login nor
+  motion's server holds: a passkey scoped to the vault's own host (`vault.motion.gift`). Its WebAuthn
+  PRF output is mixed into the backup key (`src/passkeyBackup.ts`), so the backup then opens only
+  with your sign-in **and** a touch of your passkey (or the recovery code shown once, in the vault's
+  own dialog, at enrolment). The PRF output, the data key and the recovery code never leave the
+  vault frame. The switch is staged: the new copy is saved next to the old one, the vault opens it
+  with a fresh touch and checks every wallet, and only then does the server swap it in. The
+  replaced copy is kept sealed on the server for a retention window (30 days by default) as a safety
+  net; during that window motion's operator could put it back, and it still opens only with your
+  sign-in. Wallets of the first accounts that derive from the sign-in alone (v1) are not covered.
+  Plain-language explainer: <https://motion.gift/security/backup>.
 - **The text your main wallet signs.** That signature is the seed, so its text can never change for an
   existing account (another text would derive other wallets). Accounts created before 17 Oct 2026 sign
   the original text, which still names the project's former domain, `copytrade.gg`; accounts created
@@ -133,9 +145,9 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   712161
-sha384  sha384-TapMv1EgPzruy83h62NvRAkPNoIcS46lgEe1Qrd7RFrXjU5z8Kv90a369UT/dvJ4
-sha256  264cea40bd932ba6eab7026c89708e0c0dbe638e64835b2f8c0106bf338cb05e
+bytes   1185460
+sha384  sha384-VbQBxTa3INneiNvc99ccWyXYzNZCSQzBtxId/Dxt+j2zx79n57x3ZWepQuZTr6sa
+sha256  7152f6e4926d7a24e899dc973c06a27f5d02a7f7e78ffa09214a3345fbfbb0bf
 ```
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.

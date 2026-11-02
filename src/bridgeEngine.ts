@@ -11,6 +11,7 @@
 // funds anywhere but Relay.
 import { createPublicClient, createWalletClient, defineChain, http, fallback, formatEther, parseEther, serializeTransaction } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { evmStepsProblem, NATIVE_EVM, type SolIxJ } from './relayApi.ts';
 
 // F-44 (V12): OP-stack chains charge an L1 data fee ON TOP of the L2 gas (gas × maxFeePerGas), billed at execution and
 // not reflected in the gas estimate. A "max" transfer that reserves only L2 gas leaves too little and the tx fails.
@@ -34,13 +35,44 @@ export const BRIDGE_CHAINS: Record<number, { id: number; key: string; name: stri
   42161: { id: 42161, key: 'arbitrum', name: 'Arbitrum', symbol: 'ETH', rpcs: ['https://arbitrum-one-rpc.publicnode.com'], explorer: 'https://arbiscan.io' },
   43114: { id: 43114, key: 'avalanche', name: 'Avalanche', symbol: 'AVAX', rpcs: ['https://avalanche-c-chain-rpc.publicnode.com'], explorer: 'https://snowtrace.io' },
 };
+// (audit 2026-11-01, vault-security-bridge-gas-ceiling) F-73 for the bridge / cross-chain-swap sends: the fee a node quotes is
+// signed only under a per-chain ceiling, like every other signing path (webEngine signAndSend / floatSendR / nativeDonorSend).
+// maxGasPrice is the fee per gas (EIP-1559 maxFeePerGas), maxFeeWei the most one transaction may spend on gas (gas × that fee),
+// in the chain's native (Arc: USDC with 18 decimals). Generous on purpose: live eth_gasPrice on 2026-11-01 was Ethereum 0.03,
+// Optimism 0.001, BNB 0.05, Polygon 266, Robinhood 0.02, Arc 25, Base 0.006, Arbitrum 0.02, Avalanche 2.5 gwei.
+const GWEI = 1_000_000_000n, ETHER = 10n ** 18n;
+export const BRIDGE_GAS_CAPS: Record<number, { maxGasPrice: bigint; maxFeeWei: bigint }> = {
+  1: { maxGasPrice: 300n * GWEI, maxFeeWei: (3n * ETHER) / 10n },
+  10: { maxGasPrice: 10n * GWEI, maxFeeWei: ETHER / 20n },
+  56: { maxGasPrice: 50n * GWEI, maxFeeWei: ETHER / 2n },
+  137: { maxGasPrice: 20_000n * GWEI, maxFeeWei: 50n * ETHER },
+  4663: { maxGasPrice: 20n * GWEI, maxFeeWei: ETHER / 10n },
+  5042: { maxGasPrice: 2_000n * GWEI, maxFeeWei: 5n * ETHER },
+  8453: { maxGasPrice: 10n * GWEI, maxFeeWei: ETHER / 20n },
+  42161: { maxGasPrice: 10n * GWEI, maxFeeWei: ETHER / 20n },
+  43114: { maxGasPrice: 1_000n * GWEI, maxFeeWei: 2n * ETHER },
+};
+// the EIP-1559 fields a bridge send signs: the node's estimate, refused above the chain's ceiling (per gas, and gas × fee for
+// each transaction's gas limit), the tip never above the fee cap. No estimate = refused (a send without fee fields would let
+// the wallet client estimate again, unbounded).
+export function cappedFees(chainId: number, fees: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } | null | undefined, gasLimits: bigint[]): { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint } {
+  const cap = BRIDGE_GAS_CAPS[chainId]; if (!cap) throw new Error(`Chain ${chainId} is not bridgeable here`);
+  const maxFeePerGas = fees?.maxFeePerGas;
+  if (!maxFeePerGas || maxFeePerGas <= 0n) throw new Error('Could not read the network fee on that chain — nothing was sent; try again');
+  if (maxFeePerGas > cap.maxGasPrice) throw new Error('Gas price is far above normal for that chain — refusing');
+  for (const g of gasLimits) if (g * maxFeePerGas > cap.maxFeeWei) throw new Error('Refusing to sign: abnormal gas');
+  const tip = fees?.maxPriorityFeePerGas ?? 0n;
+  return { maxFeePerGas, maxPriorityFeePerGas: tip < 0n ? 0n : tip > maxFeePerGas ? maxFeePerGas : tip };
+}
 const RELAY = 'https://api.relay.link';
 const NATIVE = '0x0000000000000000000000000000000000000000';
 type Acct = { id: string; name: string; address: `0x${string}`; key?: `0x${string}`; ext?: string };
 export type DepositStep = { to: string; data: string; value: string; chainId: number; gas?: string; maxFeePerGas?: string; maxPriorityFeePerGas?: string };
 // phase 'bind' (vault quotes + gates, signs nothing, hands back a single-use ticket and the request id to follow);
 // ticket (sign what the bind fixed); minOut (the floor the page showed, in the destination's smallest unit)
-export type BridgeQuoteLite = { requestId: string; originChainId: number; destinationChainId: number; amount: string; recipient: string; step: DepositStep; out?: string; outFormatted?: string; minOut?: string; phase?: 'bind'; ticket?: string };
+// source (2026-10-29): 'relay' = the vault's own keyless quote; 'motion' = Relay's answer through motion's keyed pass-through
+// (only when Relay wanted a key) — checked against the pinned depository, never against a second answer from that server
+export type BridgeQuoteLite = { requestId: string; originChainId: number; destinationChainId: number; amount: string; recipient: string; step: DepositStep; out?: string; outFormatted?: string; minOut?: string; phase?: 'bind'; ticket?: string; source?: 'relay' | 'motion'; sol?: { ixs: SolIxJ[]; tables: string[] } };
 
 const clients = new Map<number, ReturnType<typeof createPublicClient>>();
 function chainOf(chainId: number) {
@@ -82,26 +114,33 @@ export async function bridgeDeposit(a: Acct, q: BridgeQuoteLite): Promise<`0x${s
   if (BigInt(step.value) !== BigInt(q.amount)) throw new Error('Deposit value does not match the amount');
   const data = String(step.data || '').toLowerCase();
   if (!data.includes(me.slice(2))) throw new Error('Deposit calldata does not name this wallet');
-  const own = await relayQuoteDirect(a.address, q.originChainId, q.destinationChainId, q.amount, q.recipient);
-  if (own.to !== String(step.to).toLowerCase() || own.chainId !== Number(step.chainId) || selectorOf(own.data) !== selectorOf(data)) throw new Error('Deposit target is not Relay\'s contract for this route — refused');
+  if (q.source === 'motion') {
+    // (2026-10-29) no second keyless quote to compare with (Relay wants a key): Relay's pinned depository, depositNative
+    // naming this wallet, the exact value — the same rule the swap uses (relayApi.ts evmStepsProblem)
+    const s = evmStepsProblem({ steps: [{ id: 'deposit', kind: 'transaction', items: [{ data: step }] }] }, { user: a.address, originChainId: q.originChainId, originCurrency: NATIVE_EVM, amount: q.amount });
+    if ('problem' in s) throw new Error(`Deposit refused: ${s.problem}`);
+  } else {
+    const own = await relayQuoteDirect(a.address, q.originChainId, q.destinationChainId, q.amount, q.recipient);
+    if (own.to !== String(step.to).toLowerCase() || own.chainId !== Number(step.chainId) || selectorOf(own.data) !== selectorOf(data)) throw new Error('Deposit target is not Relay\'s contract for this route — refused');
+  }
   const account = privateKeyToAccount(a.key);
   const pc = publicFor(q.originChainId);
   const bal = await pc.getBalance({ address: account.address });
   const value = BigInt(step.value);
   const gas = step.gas ? (BigInt(step.gas) * 13n) / 10n : 60_000n;
-  const fees = await pc.estimateFeesPerGas().catch(() => null);
-  const maxFee = fees?.maxFeePerGas ?? (step.maxFeePerGas ? BigInt(step.maxFeePerGas) : undefined);
-  if (maxFee && bal < value + gas * maxFee) throw new Error(`Not enough ${BRIDGE_CHAINS[q.originChainId].symbol} for the amount plus gas on ${BRIDGE_CHAINS[q.originChainId].name}`);
+  const fees = cappedFees(q.originChainId, await pc.estimateFeesPerGas().catch(() => null), [gas]);
+  if (bal < value + gas * fees.maxFeePerGas) throw new Error(`Not enough ${BRIDGE_CHAINS[q.originChainId].symbol} for the amount plus gas on ${BRIDGE_CHAINS[q.originChainId].name}`);
   const wc = createWalletClient({ account, chain: chainOf(q.originChainId), transport: http(BRIDGE_CHAINS[q.originChainId].rpcs[0], { timeout: 20000 }) });
-  return wc.sendTransaction({ to: step.to as `0x${string}`, data: data as `0x${string}`, value, gas, ...(fees?.maxFeePerGas ? { maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas } : {}) });
+  return wc.sendTransaction({ to: step.to as `0x${string}`, data: data as `0x${string}`, value, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas });
 }
 // a plain native transfer on any bridgeable chain (the hop → final leg, or topping up a wallet elsewhere)
 export async function bridgeSend(a: Acct, chainId: number, to: string, amount: number | 'max'): Promise<`0x${string}`> {
   if (!a.key || a.ext) throw new Error('This wallet cannot sign here');
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('Invalid address');
   const account = privateKeyToAccount(a.key); const pc = publicFor(chainId);
-  const fees = await pc.estimateFeesPerGas();
-  const gas = 21_000n; const gasCost = gas * (fees.maxFeePerGas || 0n);
+  const gas = 21_000n;
+  const fees = cappedFees(chainId, await pc.estimateFeesPerGas(), [gas]);
+  const gasCost = gas * fees.maxFeePerGas;
   let value: bigint;
   if (amount === 'max') {
     const bal = await pc.getBalance({ address: account.address });

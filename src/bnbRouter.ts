@@ -50,6 +50,9 @@ export const BSC = {
 export const FOUR_MANAGER_ABI = [
   { name: 'buyTokenAMAP', type: 'function', stateMutability: 'payable', inputs: [{ name: 'token', type: 'address' }, { name: 'funds', type: 'uint256' }, { name: 'minAmount', type: 'uint256' }], outputs: [] },
   { name: 'sellToken', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [] },
+  // V13 VA-8: TokenManager2's overload with a floor (origin 0 = no referral; selector 0x0da74935, in the live implementation):
+  // the two-argument sellToken above has no minimum and every four.meme sell could be sandwiched without bound
+  { name: 'sellToken', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'origin', type: 'uint256' }, { name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }, { name: 'minFunds', type: 'uint256' }], outputs: [] },
 ] as const;
 export const FOUR_HELPER_ABI = [
   { name: 'tryBuy', type: 'function', stateMutability: 'view', inputs: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }, { name: 'funds', type: 'uint256' }],

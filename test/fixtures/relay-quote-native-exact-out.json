@@ -1,0 +1,387 @@
+{
+ "recorded": "2026-10-30T11:14:10.475Z",
+ "note": "api.relay.link/quote/v2 keyless, read-only; Robinhood ETH -> Solana SOL, EXACT_OUTPUT 0.13 SOL; nothing signed",
+ "body": {
+  "user": "0x5b72000000000000000000000000000000007ad0",
+  "recipient": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+  "originChainId": 4663,
+  "destinationChainId": 792703809,
+  "originCurrency": "0x0000000000000000000000000000000000000000",
+  "destinationCurrency": "11111111111111111111111111111111",
+  "amount": "130000000",
+  "tradeType": "EXACT_OUTPUT",
+  "appFees": [],
+  "slippageTolerance": "50"
+ },
+ "quote": {
+  "requestId": "0x17933588505339a9649100c7b0db869384b512657032863abffaf7fe47cd3552",
+  "steps": [
+   {
+    "id": "deposit",
+    "action": "Confirm transaction in your wallet",
+    "description": "Depositing funds to the relayer to execute the swap for SOL",
+    "kind": "transaction",
+    "items": [
+     {
+      "status": "incomplete",
+      "data": {
+       "from": "0x5b72000000000000000000000000000000007ad0",
+       "to": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+       "data": "0x49290c1c0000000000000000000000005b72000000000000000000000000000000007ad0325c984721e9abc18bd7a1ba003a283b59ecc71f13fee545f44d303c5b9ddb50",
+       "value": "5650211000770727",
+       "chainId": 4663,
+       "gas": "39660",
+       "maxFeePerGas": "28000000",
+       "maxPriorityFeePerGas": "0"
+      },
+      "check": {
+       "endpoint": "/intents/status/v3?requestId=0x17933588505339a9649100c7b0db869384b512657032863abffaf7fe47cd3552",
+       "method": "GET"
+      }
+     }
+    ],
+    "requestId": "0x17933588505339a9649100c7b0db869384b512657032863abffaf7fe47cd3552",
+    "depositAddress": ""
+   }
+  ],
+  "fees": {
+   "gas": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "1110480000000",
+    "amountFormatted": "0.00000111048",
+    "amountUsd": "0.002490",
+    "minimumAmount": "1110480000000"
+   },
+   "relayer": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "19918662825134",
+    "amountFormatted": "0.000019918662825134",
+    "amountUsd": "0.044663",
+    "minimumAmount": "19918662825134"
+   },
+   "relayerGas": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "326625498192",
+    "amountFormatted": "0.000000326625498192",
+    "amountUsd": "0.000732",
+    "minimumAmount": "326625498192"
+   },
+   "relayerService": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "19592037326942",
+    "amountFormatted": "0.000019592037326942",
+    "amountUsd": "0.043930",
+    "minimumAmount": "19592037326942"
+   },
+   "app": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "0",
+    "amountFormatted": "0.0",
+    "amountUsd": "0",
+    "minimumAmount": "0"
+   },
+   "subsidized": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "0",
+    "amountFormatted": "0.0",
+    "amountUsd": "0",
+    "minimumAmount": "0"
+   }
+  },
+  "details": {
+   "operation": "swap",
+   "sender": "0x5b72000000000000000000000000000000007ad0",
+   "recipient": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+   "currencyIn": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "5650211000770727",
+    "amountFormatted": "0.005650211000770727",
+    "amountUsd": "12.669220",
+    "minimumAmount": "5650211000770727"
+   },
+   "currencyOut": {
+    "currency": {
+     "chainId": 792703809,
+     "address": "11111111111111111111111111111111",
+     "symbol": "SOL",
+     "name": "Solana",
+     "decimals": 9,
+     "metadata": {
+      "logoURI": "https://upload.wikimedia.org/wikipedia/en/b/b9/Solana_logo.png",
+      "verified": true
+     }
+    },
+    "amount": "130000000",
+    "amountFormatted": "0.13",
+    "amountUsd": "12.570892",
+    "minimumAmount": "130000000"
+   },
+   "refundCurrency": {
+    "currency": {
+     "chainId": 4663,
+     "address": "0x0000000000000000000000000000000000000000",
+     "symbol": "ETH",
+     "name": "Ether",
+     "decimals": 18,
+     "metadata": {
+      "logoURI": "https://assets.relay.link/icons/1/light.png",
+      "verified": true
+     }
+    },
+    "amount": "5650211000770727",
+    "amountFormatted": "0.005650211000770727",
+    "amountUsd": "12.669220",
+    "minimumAmount": "5650211000770727"
+   },
+   "totalImpact": {
+    "usd": "-0.098328",
+    "percent": "-0.78"
+   },
+   "swapImpact": {
+    "usd": "-0.053665",
+    "percent": "-0.42"
+   },
+   "expandedPriceImpact": {
+    "swap": {
+     "usd": "-0.070021"
+    },
+    "execution": {
+     "usd": "-0.020732"
+    },
+    "relay": {
+     "usd": "-0.007574"
+    },
+    "app": {
+     "usd": "0"
+    },
+    "sponsored": {
+     "usd": "0"
+    }
+   },
+   "rate": "23.007990317930982",
+   "slippageTolerance": {
+    "total": "50",
+    "origin": {
+     "usd": "0.000000",
+     "value": "0",
+     "percent": "0.00"
+    },
+    "destination": {
+     "usd": "0.000000",
+     "value": "0",
+     "percent": "0.00"
+    }
+   },
+   "timeEstimate": 1,
+   "userBalance": "0",
+   "isFixedRate": false,
+   "route": {
+    "origin": {
+     "inputCurrency": {
+      "currency": {
+       "chainId": 4663,
+       "address": "0x0000000000000000000000000000000000000000",
+       "symbol": "ETH",
+       "name": "Ether",
+       "decimals": 18,
+       "metadata": {
+        "logoURI": "https://assets.relay.link/icons/1/light.png",
+        "verified": true
+       }
+      },
+      "amount": "5650211000770727",
+      "amountFormatted": "0.005650211000770727",
+      "amountUsd": "12.669220",
+      "minimumAmount": "5650211000770727"
+     },
+     "outputCurrency": {
+      "currency": {
+       "chainId": 4663,
+       "address": "0x0000000000000000000000000000000000000000",
+       "symbol": "ETH",
+       "name": "Ether",
+       "decimals": 18,
+       "metadata": {
+        "logoURI": "https://assets.relay.link/icons/1/light.png",
+        "verified": true
+       }
+      },
+      "amount": "5650211000770727",
+      "amountFormatted": "0.005650211000770727",
+      "amountUsd": "12.669220",
+      "minimumAmount": "5650211000770727"
+     },
+     "router": "relay"
+    },
+    "destination": {
+     "inputCurrency": {
+      "currency": {
+       "chainId": 792703809,
+       "address": "11111111111111111111111111111111",
+       "symbol": "SOL",
+       "name": "Solana",
+       "decimals": 9,
+       "metadata": {
+        "logoURI": "https://upload.wikimedia.org/wikipedia/en/b/b9/Solana_logo.png",
+        "verified": true
+       }
+      },
+      "amount": "130000000",
+      "amountFormatted": "0.13",
+      "amountUsd": "12.570892",
+      "minimumAmount": "130000000"
+     },
+     "outputCurrency": {
+      "currency": {
+       "chainId": 792703809,
+       "address": "11111111111111111111111111111111",
+       "symbol": "SOL",
+       "name": "Solana",
+       "decimals": 9,
+       "metadata": {
+        "logoURI": "https://upload.wikimedia.org/wikipedia/en/b/b9/Solana_logo.png",
+        "verified": true
+       }
+      },
+      "amount": "130000000",
+      "amountFormatted": "0.13",
+      "amountUsd": "12.570892",
+      "minimumAmount": "130000000"
+     },
+     "router": "relay"
+    }
+   }
+  },
+  "protocol": {
+   "v2": {
+    "orderId": "0x325c984721e9abc18bd7a1ba003a283b59ecc71f13fee545f44d303c5b9ddb50",
+    "hubType": "onchain",
+    "orderData": {
+     "version": "v1",
+     "solverChainId": "base",
+     "solver": "0xf70da97812cb96acdf810712aa562db8dfa3dbef",
+     "salt": "0x4d6efb25e1d61e6ca8b2dd0bb7241726a0fecbf80b7748b5325fbe4783153310",
+     "inputs": [
+      {
+       "payment": {
+        "chainId": "robinhood",
+        "currency": "0x0000000000000000000000000000000000000000",
+        "amount": "5650211000770727",
+        "weight": "1"
+       },
+       "refunds": [
+        {
+         "chainId": "robinhood",
+         "recipient": "0x5b72000000000000000000000000000000007ad0",
+         "currency": "0x0000000000000000000000000000000000000000",
+         "minimumAmount": "0",
+         "deadline": 1793963650,
+         "extraData": "0x0000000000000000000000000729e2a4716d9f7dd17858d5d504426d228697f7"
+        },
+        {
+         "chainId": "solana",
+         "recipient": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+         "currency": "11111111111111111111111111111111",
+         "minimumAmount": "0",
+         "deadline": 1793963650,
+         "extraData": "0x"
+        }
+       ]
+      }
+     ],
+     "output": {
+      "chainId": "solana",
+      "payments": [
+       {
+        "recipient": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        "currency": "11111111111111111111111111111111",
+        "minimumAmount": "130000000",
+        "expectedAmount": "130000000"
+       }
+      ],
+      "calls": [],
+      "deadline": 1793963650,
+      "extraData": "0x"
+     },
+     "fees": []
+    },
+    "paymentDetails": {
+     "chainId": "robinhood",
+     "depository": "0x4cd00e387622c35bddb9b4c962c136462338bc31",
+     "currency": "0x0000000000000000000000000000000000000000",
+     "amount": "5650211000770727"
+    }
+   }
+  }
+ }
+}

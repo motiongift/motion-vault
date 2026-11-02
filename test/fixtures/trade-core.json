@@ -1,0 +1,33 @@
+{
+ "note": "TRADE CORE pins — docs/TRADE-CORE.md. Change only with the owner's explicit approval.",
+ "approval": "owner 2026-11-01 «я даю добро на все» (relayed with «latency A/B with no slowdown on normal paths + re-pin quoting it; never risk user money»): token2022-fee — Token-2022 transfer-fee coins trade through the Jupiter route with the fee on the ticket; A/B in B:\\tmp\\foreman\\token2022-fee.md",
+ "pinnedAt": "2026-11-01T17:09:35.359Z",
+ "files": {
+  "src/solEngine.ts": "ebd644dc48b86ebe5e7dc9c71ccd0e2b1cdfa8d230af5937f9c135a93f60b479",
+  "src/bnbRouter.ts": "3537715ca01e1c0b2198b35e437e9cfb661b7e887b5aec0d1cb8d9a3c874b3cd",
+  "src/evmV4Router.ts": "12df29bc311fc82198be67d2832e231ed5f8c3b86cb108cf582da155b796b611",
+  "src/standardRouter.ts": "c8f0eff9a8d0902fc67c5a691e46aee6a7bf5275cf6c0b60ea8a5c09d7b2e909",
+  "src/v13Guards.ts": "f6b739d6ffd1a117fe6172bde5f2677a83e305169091c08b669b9c04b49eeb3f",
+  "src/turboGas.ts": "3fa68bb3b8e84222c06d01c96c1d46f7a250a7a275961cf0a9bc8453f93ab3ec"
+ },
+ "decls": {
+  "src/webEngine.ts#mkTransport": "83544c99da1383b46aae28b5d7831f2c5da74caf302bbd20912ac00ad4456024",
+  "src/webEngine.ts#mkHeavyRing": "5111a680c9cd2ad4f7cc0fa5a208f6379c19c4416bf5007ccab6c6d77d5ee561",
+  "src/webEngine.ts#heavyFor": "a5cc29ff3e3b17f0da7d64df98318121d055e36712e45c16f24ce808ec98ce6a",
+  "src/webEngine.ts#makeShared": "d3d5dd351c0b27a18ac84efc30e43580cca337a5c77b297049600f6d782b6261",
+  "src/webEngine.ts#broadcast": "9a0669d9e43d0215a3bc739abefc9a6724c9da7f2296c6cff5ca74ae2007d190",
+  "src/webEngine.ts#nextNonce": "89e9fffba888a8b6f38197332e04ad2c0a896cfa8f03d5804b195fcf77b1a1d4",
+  "src/webEngine.ts#nonceSheet": "56b62e5c91b42854a14ce47185db5f730186151d3a7e65da9af8ebf3d1af99f6",
+  "src/webEngine.ts#noteNonceUsed": "e62a53c50e850433013a7b869b36e84559421666d6c18e269160a2bcfa51c231",
+  "src/webEngine.ts#inLane": "cc3a6e41c176bec465197d90c3d3a1e4cdd5d9443bec1b1335910c0a2fc1648a",
+  "src/webEngine.ts#laneLock": "7ae2074a278ffe1d4acd2741643832f8424b7f3aaf5c62fa9bc8f41b4008663d",
+  "src/webEngine.ts#signAndSend": "63dbc6228845f1a8c537a792c5f3997a1ac4ae1bb715dffd8d17debdd3cf9c1d",
+  "src/webEngine.ts#sendCall": "e8d5f393f615210d47fe7fbaa8761081f93b1a9dd7f1dbb9ac0e8279ea37b22d",
+  "src/webEngine.ts#landed": "1a760d134a7da4d94d3ed28eda488d0873550e8dd32901bfbe256247a54e123d",
+  "src/webEngine.ts#feeFloor": "81f2d4a6efae0a3f09c717eb4afa1134a2e309c84031dfd942e486bc4db37c70",
+  "src/webEngine.ts#feeFor": "3c80b895dbcb2af64a398d0ad42f913bc159f9f462391d27d436c35e49b9a814",
+  "src/webEngine.ts#keepHot": "69e726abd50ee3b8d8cb16f4fe456bc5de4ec8fafce00faeea990b71fb097c36",
+  "src/webEngine.ts#loadSettings": "212657b30d14be498663e8f5739fa22c0ee93386c3ffd2561d615a0205cd2026",
+  "src/webEngine.ts#verifyCache…REASONS": "ad8bde92ec72b8f719b0d02170f3268385e2f19747df78020a1ad550e7c8a81d"
+ }
+}

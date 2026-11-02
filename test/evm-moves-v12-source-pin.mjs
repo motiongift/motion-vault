@@ -75,9 +75,13 @@ test('F-43/F-22: trades held across tabs until receipt or 120s via a Web Lock', 
 });
 
 test('F-70: rolling one-hour buy ledger per lane, 5× cap asks', () => {
-  has(eng, 'const sum = recordBuy(total);');
-  has(eng, 'if (sum > buyCap() * 5)');
-  has(eng, 'const BUY_WINDOW_MS = 60 * 60_000;');
+  // (fix1 trade-speed-07) the hour's total is worked out first (ledgerAdd, nothing written), the ask's confirmation is kept
+  // (hourOk) and the buy is recorded once it goes on — behaviour in test/hourly-limit-fix1.mjs
+  has(eng, 'const { entries, sum: ahead } = ledgerAdd(all[lane], Date.now(), total);');
+  has(eng, 'if (!(ahead > buyCap() * 5) || covered) saveLimits({ ...l, buys: { ...all, [lane]: entries } });');
+  has(eng, 'recordBuy(total);   // after the dialog');
+  // V13: the window and the ledger arithmetic moved to src/v13Guards.ts (ledgerAdd; see test/v13-guards-behavior.mjs)
+  has(readFileSync(join(here, '..', 'src', 'v13Guards.ts'), 'utf8'), 'export const BUY_WINDOW_MS = 60 * 60_000;');
 });
 
 test('F-52: a failed RPC read or nonce>0 counts as held → remove gate not bypassed', () => {
