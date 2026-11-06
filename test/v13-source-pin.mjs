@@ -16,7 +16,8 @@ const before = (s, a, b) => { const i = s.indexOf(a), j = s.indexOf(b); assert.o
 const body = (s, start, end) => { const i = s.indexOf(start); assert.ok(i >= 0, `missing: ${start}`); const j = s.indexOf(end, i + start.length); return s.slice(i, j < 0 ? undefined : j); };
 
 test('VA-1: the frame reads the route from the lane\'s own /route (not the page) and keeps it stale-while-revalidate', () => {
-  has(eng, "const routeApi = () => (HOST && parentOrigin ? parentOrigin : location.origin) + (CFG.key === 'bsc' ? '/bsc' : '') + '/api';");
+  // (trade-core.patch E6) + the Elysium lane's prefix; Robinhood ('') and BNB ('/bsc') read exactly the same path as before
+  has(eng, "const routeApi = () => (HOST && parentOrigin ? parentOrigin : location.origin) + (CFG.key === 'bsc' ? '/bsc' : CFG.key === 'elysium' ? '/elysium' : '') + '/api';");
   has(eng, 'fetch(`${routeApi()}/token/${key}/route`');
   has(eng, 'const OWN_FRESH = 10_000, OWN_MAX = 60_000, OWN_TIMEOUT = 3_000;');
   const rf = body(eng, 'async function routeFor(token: string, hint?: unknown): Promise<Route> {', '\n}\n');

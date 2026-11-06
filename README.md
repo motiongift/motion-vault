@@ -1,7 +1,7 @@
 # motion-vault
 
 The in-browser vault and trading engine of [motion.gift](https://motion.gift), a non-custodial
-trading terminal for Robinhood Chain, BNB Chain, Solana and NEAR.
+trading terminal for Robinhood Chain, BNB Chain, Solana, NEAR and Elysium.
 
 This repository is the exact source of `https://vault.motion.gift/vendor/engine.js` — the one script
 that runs inside the isolated vault frame, creates and stores the trading keys, and signs every
@@ -56,6 +56,8 @@ report it (see [SECURITY.md](SECURITY.md)) and tell people.
 | `src/nearEngine.ts` | the NEAR lane: NEAR identities, Rhea DCL swaps |
 | `src/bridgeEngine.ts` | balances and sends on other EVM chains for the Relay bridge leg |
 | `src/perpsEngine.ts`, `src/lighter/perpsCore.ts`, `src/lighter/signer.ts`, `src/lighter/wasmExec.js` | perpetuals on Lighter from the vault's own wallets: orders, deposits and withdrawals to the wallet's own address; transactions signed by Lighter's official WebAssembly signer, whose bytes are checked against a pinned sha256 before it runs |
+| `src/elysiumCore.ts`, `src/elysiumUsdCore.ts`, `src/elysiumUsdEngine.ts`, `src/elysiumHyperFund.ts`, `src/elysiumRoute.ts`, `src/elysiumExitCore.ts`, `contracts/ElysiumGuard.sol`, `contracts/ElysiumProbe.sol` | the Elysium lane: the pure rules the vault checks before it signs an Elysium trade (pinned routers and hooks, the on-chain guard and probe), a buy paid from the USD balance, HyperEVM HYPE in through motion's bridge, the official route (Relay to the wallet's own HyperEVM address, then its own Inbox deposit), the way back |
+| `src/earnEngine.ts`, `src/earnCore.ts`, `src/earnAave.ts`, `src/earnKamino.ts` | Earn on the USD balance: the wallet's own reserve in one allow-listed venue per chain (Morpho on Robinhood Chain, Aave v3 on BNB Chain, Kamino on Solana); every step simulated and checked before the reserve signs |
 | `src/evmV4Router.ts`, `src/bnbRouter.ts`, `src/standardRouter.ts` | calldata for the venues the engine is allowed to trade through (Uniswap V4 / Universal Router, PancakeSwap Infinity, four.meme, Flap, standardreserve) |
 | `server/web/vault.html` | the vault frame document: one `<script>` tag, pinned to the engine by Subresource Integrity |
 | `vite.web-engine.config.ts` | the build (`src/webEngine.ts` → one IIFE, `server/web/vendor/engine.js`) |
@@ -145,9 +147,9 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   1189510
-sha384  sha384-glncySWJiRqNmpokwZcgWzDC8X1PnEyDrzBCGAUID8mrw7A960ZvBqXRklke+QQr
-sha256  5da0a63f13ff8087e75c0706ff2f78b366a28239cd5bc42811b992d5b1f8fe33
+bytes   1470188
+sha384  sha384-XrJOCi8NR772POeXPaQQI6vpWLWMwzCh88W95exR2v4BomBASdQcuc5IN4CQ3Pco
+sha256  022e61472e46eef826417813180b97436c81fba1828a390f5d8d6a89fa799dc9
 ```
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.

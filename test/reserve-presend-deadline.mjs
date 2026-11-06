@@ -87,7 +87,7 @@ function frame({ chain, build, send, locks = true }) {
     usdBuyArgs: (o) => o, tradesInFlight: 0, post: () => {}, keepHot: () => {},
     requireUnlocked: () => [W], meta: { selectedAccountIds: ['w1'], activeAccountId: 'w1' },
     float: { directFor: () => ({ price6: 150_000_000n }), directGas: async () => true, noteBuy: () => {}, directAllowSoon: () => {} },
-    loadSettings: () => ({ slippage: 12, gasBoost: 1.5 }), tradeSizeProblem: () => '', MAX_BUY: {}, laneKey: () => chain, MAX_BUY_ETH: 10,
+    loadSettings: () => ({ slippage: 12, gasBoost: 1.5 }), tradeSettings: () => ({ slippage: 12, gasBoost: 1.5 }), tradeSizeProblem: () => '', MAX_BUY: {}, laneKey: () => chain, MAX_BUY_ETH: 10,
     tradeLimits: async () => {}, unrecordBuy: () => {}, nothingSent: () => false, /* fix1 trade-speed-07: the ledger take-back is tested in test/hourly-limit-fix1.mjs */ clickId: (o) => o?.id || 'c', solAddressOf: (a) => a.address, txEvent: (e) => events.push(e),
     solRoute: async () => ({ mint: 'COIN', venue: 'jupiter' }), solReceipt: async () => ({ pending: false, status: 'success' }),
     poolSize: () => 4, inFlight: new Set(), solAcctsOf: () => ({ r: { key: 'k' } }), SolDirectNoGas, SolSendUnknown, DirectUnsupported, solDirectNeedOf,

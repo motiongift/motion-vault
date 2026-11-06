@@ -1,0 +1,31 @@
+  robinhood: {
+    id: 4663, key: 'robinhood', name: 'Robinhood Chain', symbol: 'ETH', rpc: 'https://robinhood-rpc.publicnode.com', rpc2: 'https://rpc.mainnet.chain.robinhood.com',
+    rpcSingle: 'https://robinhood.drpc.org',   // single requests only (no batches): the heavy path's second node; the official node's 429 carries a doubled CORS header and is unreadable from a browser
+    explorer: 'https://robin.etherscan.io', wrapped: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', stable: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+    v3Router: '0xcaf681a66d020601342297493863e78c959e5cb2', universalRouter: UNIVERSAL_ROUTER as `0x${string}`, permit2: PERMIT2 as `0x${string}`,
+    ponsFactory: '0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e',
+    flapPortal: '0x26605f322f7ff986f381bb9a6e3f5dab0beaeb09',   // Flap's Portal on Robinhood (same contract family as on BNB)
+    standard: STANDARD,   // standardreserve.xyz: stock-quoted curves → V4 pools behind its hook (src/standardRouter.ts)
+    knownHooks: [...KNOWN_LAUNCHER_HOOKS, '0x745d717620052a97a22deee2e5eba59583f3e0cc'],   // Pons V4, Long (Doppler), DART
+    bridgeTokens: ['0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168'],   // WETH, USDG
+    maxGasPrice: parseGwei('20'), maxFeeWei: parseEther('0.1'),   // F-73: generous placeholders — confirm against live p99 (this L2's gas is sub-gwei)
+    // measured 2026-11-04 from a browser origin (vault.motion.gift): CORS *, 111-113 ms from Spain (publicnode 44-47 ms, which
+    // forwards to it); answers only sends. First accept wins, so it costs nothing when a closer node is faster
+    sendOnly: ['https://sequencer.mainnet.chain.robinhood.com'],
+  },
+  bsc: {
+    id: BSC.id, key: 'bsc', name: 'BNB Chain', symbol: 'BNB', rpc: BSC.rpc, rpc2: BSC.rpc2, rpcSingle: BSC.rpcSingle, explorer: BSC.explorer, wrapped: BSC.wrapped, stable: BSC.stable,
+    v3Router: BSC.v3Router, v2Router: BSC.v2Router, universalRouter: BSC.universalRouter, permit2: BSC.permit2,
+    ponsFactory: '0x78eae9537c0ef90dfe9b7ae964682fe8138afe31',   // genius.fun (Pons V2 family)
+    fourManager: BSC.fourManager, fourHelper: BSC.fourHelper, flapPortal: BSC.flapPortal, infPoolManager: BSC.clPoolManager,
+    knownHooks: ['0xff17f41c5efd6cce944af0912f300097d62df5c9'],   // genius.fun Infinity hook
+    // WBNB, USDT, USDC, USD1, BTCB, ETH — what a bridge leg may pass through on the way to a quote asset
+    bridgeTokens: [BSC.wrapped, BSC.stable, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d', '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', '0x2170Ed0880ac9A755fd29B2688956BD959F933F8'],
+    maxGasPrice: parseGwei('50'), maxFeeWei: parseEther('0.5'),   // F-73: generous placeholders — BSC floor is ~1 gwei, spikes a few gwei; confirm against live p99
+    // TC-M1: private builders / protect RPCs, each measured 2026-11-04 from a browser origin: CORS *, eth_chainId 0x38 in
+    // 44-62 ms p50 (publicnode 55-61 ms). 48 Club (Puissant) + BlockRazor built ~96 % of BSC blocks May–Nov 2025; bloXroute
+    // and PancakeSwap's MEV Guard reach the others. bsc.merkle.io refuses browser preflight (405) and is not listed.
+    // MEV v2 (2026-11-04): BlockRazor's /fullprivacy (straight to the builders, nothing shared with searchers; the default
+    // endpoint discloses hash, logs and state to searchers for backrun refunds). Same host, same CORS *, 61 ms p50.
+    privateSend: ['https://rpc-bsc.48.club', 'https://bsc.blockrazor.xyz/fullprivacy', 'https://bsc.rpc.blxrbdn.com', 'https://bscrpc.pancakeswap.finance'],
+  },

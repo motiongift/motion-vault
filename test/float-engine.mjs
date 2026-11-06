@@ -219,8 +219,10 @@ function makeWorld(o = {}) {
     fetch: fetchFn,
     click: () => click,
     wait: async () => {},
+    // (usd-mode 2026-11-05) these worlds rebalance into a chain never bought on: the rule of before unless a test asks for the new one
+    crossNeedsTrade: o.crossNeedsTrade ?? false,
   };
-  const f = createFloat(deps);
+  const f = createFloat(Object.assign(deps, { readyFloat: true, gasFromW: true }));   // usd-mode2: the buffer of before
   const settle = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
   return { f, chain, W, R, W_KEY, R_KEY, sol, store, events, asks, gates: () => gates, click, fetchLog, settle, solCalls, deps, sw };
 }
@@ -536,6 +538,19 @@ test('rebalance: Robinhood\'s reserve funds Solana\'s through Relay — exact ap
   await wd.f.ensure({ walletId: 'w1', chain: 'robinhood', reason: 'tick' }); await wd.settle();
   assert.equal((await wd.f.jobs({ walletId: 'w1' })).jobs.find((x) => x.kind === 'rebalance').state, 'arrived');
   keyScan(wd, jobs);
+});
+
+test('(usd-mode 2026-11-05) the engine default: no routine rebalance into a chain the user never bought on — a page open there is not enough; one buy there in 7 days and it moves as before', async () => {
+  const wd = makeWorld({ wEth: C.gasFloor + 20_000_000_000_000_000n, crossNeedsTrade: true }); await on(wd);
+  solSnap(wd);
+  await wd.f.ensure({ walletId: 'w1', chain: 'robinhood', reason: 'tick' }); await wd.settle();
+  assert.equal((await wd.f.jobs({ walletId: 'w1' })).jobs.filter((x) => x.kind === 'rebalance').length, 0);
+  assert.equal(wd.chain.deposits.length, 0, 'nothing sent to a bridge');
+  const k = `trenches.float.v1.prefs.sol.${lc(wd.W)}`; let p = {}; try { p = JSON.parse(wd.store.get(k) || '{}'); } catch {}
+  wd.store.set(k, JSON.stringify({ ...p, buysAt: [Date.now() - 60_000] }));
+  await wd.f.ensure({ walletId: 'w1', chain: 'robinhood', reason: 'tick' }); await wd.settle();
+  const j = (await wd.f.jobs({ walletId: 'w1' })).jobs.find((x) => x.kind === 'rebalance');
+  assert.ok(j && j.from === 'robinhood' && j.chain === 'sol', 'a chain bought on is rebalanced into');
 });
 
 test('failover before the send: a Relay quote naming another depositor is refused and deBridge carries the move; all refused = nothing sent', async () => {

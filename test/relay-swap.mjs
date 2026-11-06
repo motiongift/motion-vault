@@ -165,7 +165,7 @@ test('bind: the real ERC-20 quote binds keyless; a quote motion would relay is r
 test('engine: relaySwap has the bridge\'s two phases, gates and dialogs; bridges fall back to the pass-through only with the extra checks', () => {
   const src = readFileSync(new URL('../src/webEngine.ts', import.meta.url), 'utf8');
   const sw = src.slice(src.indexOf('  relaySwap: async (id: string'), src.indexOf('  relayTokenBalances: async'));
-  assert.ok(sw.includes("await gate('withdraw', auth);") && sw.includes("await gate('transfer', auth);") && sw.includes("title: login ? 'Swap to your login wallet' : 'Swap outside your vault', danger: !login"));
+  assert.ok(sw.includes("await gate('withdraw', auth);") && sw.includes("await gate('transfer', auth);") && sw.includes("title: login ? 'Swap to your login wallet' : 'Swap outside your vault', danger: true"));   // SEC-6 (batch 2): danger either way
   assert.ok(sw.includes("if (!t || t.id !== id || Date.now() - t.at > 90_000) throw new Error('This swap quote expired — press Swap again');"));
   assert.ok(sw.indexOf('swapTickets.set(ticket') > sw.indexOf("await gate('transfer', auth);"), 'the ticket is minted only after the gate and the trusted click');
   assert.ok(sw.includes('const bound = await bindSwap(user,'), 'the vault binds its own quote; the page\'s numbers are only the request');

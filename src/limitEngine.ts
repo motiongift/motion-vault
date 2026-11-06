@@ -454,7 +454,7 @@ export function createLimit(d: LimitDeps) {
           kv('Expires', esc(utc(expiry))),
           kv('Moves now', esc(a.side === 'buy' ? `${eth(fundValue)} ${C.native} (${eth(reserve)} gas reserve)` : `${a.amount} ${symbol} + ${eth(reserve)} ${C.native} gas reserve`)),
           addrRow('Order wallet', ow),
-        ].join('')}</div>${muted(`The order wallet is this order's own; only this vault can sign for it. motion's server keeps the signed swap and sends it when the price is reached — it cannot change the amount, price, venue or recipient. The floor is your limit price minus the slippage: a better price at that moment may not reach you in full. Cancel any time: everything comes back to ${esc(w.name)}.${a.kind === 'sl' ? ' A stop-loss fills at the minimum or not at all: in a fast drop it may not fill.' : ''} Network fees apply.`)}`,
+        ].join('')}</div>${muted(`The order wallet is this order's own; only this vault can sign for it. motion's server keeps the signed swap and sends it when the price is reached — it cannot change the amount, price, venue or recipient. The floor is your limit price minus the slippage: a better price at that moment may not reach you in full. Cancel any time: everything comes back to ${esc(w.name)}.${a.kind === 'sl' ? ' A stop-loss fills at the minimum or not at all: in a fast drop it may not fill. Its floor sits under today\'s price, so whoever holds the signed swap (motion\'s server) can send it at any moment, not only when the price is reached — it then fills at that floor.' : ''} Network fees apply.`)}`,
       });
       if (!ok) throw named('Cancelled', 'Cancelled');
       // ── funding (the point after which this key's outcome is recorded) ──

@@ -341,6 +341,12 @@ export type ChainState = {
   // W's native the user chose to KEEP as native when the switch went on (2026-11-01, owner «я даю добро на все»: "why does it
   // ask me to convert when I already have $800 USDC?"): the routine sweep never converts it — only what arrives above it
   keep?: bigint;
+  // (usd-mode2 2026-11-05, B:/tmp/usd-mode-1105 follow-up: a tester's wallet kept getting R's USDG swapped into ETH, "for buys",
+  // while his buys were paid by R) buys on this chain are paid straight from the reserve (float.buy, rules >= 2): W keeps no
+  // ready-native buffer here. No routine top-up ('below low', 'refill') and no cross-chain move for one; W keeps what it holds
+  // (its gas floor is never swept) and the sweep's threshold is the one of before (a sell's proceeds above it still join R).
+  // A waiting click (hold & fire, a market R cannot buy) still tops W up for itself. Left out = the buffer of before
+  directPays?: boolean;
 };
 export type PlanInput = {
   now: number; caps: Caps; chains: Partial<Record<FloatChain, ChainState>>; enabled: FloatChain[];
@@ -359,6 +365,25 @@ export type PlanInput = {
   // `feesDay6` = what such moves cost this wallet in the last 24 h; `from` = the reserves a public bridge can send from (EVM).
   // Left out (a click, the after-trade refill, older callers, the tests of before) = the plan is exactly as before
   ready?: { feesDay6: bigint; from: FloatChain[] };
+  // a click is planned all or nothing (TC-1, 2026-11-04, B:/tmp/usd-scenarios + B:/tmp/usd-buy-final): when everything this frame
+  // can reach for it (W here, this chain's reserve, the reserves it can sign a cold top-up from within XCHAIN, and `urgentExtra6`:
+  // what the wallet's own native on the other EVM chains can bring, the engine's estimate) cannot pay the bare need (the buy + W's
+  // floor + what the moves may lose), NO move is planned for it and `short.infeasible` says what it can pay instead. The engine
+  // leaves it out while a move into this chain is still landing or settling (its dollars are not in the read yet). Left out = as before
+  urgentAtomic?: boolean;
+  urgentExtra6?: bigint;
+  // TC-1: the reserves whose cold top-up for this click runs in THIS frame (the engine knows: its own chain, the EVM reserves
+  // through motion's bridge, the Solana reserve when it can pay its transfer). Left out = every other reserve counts (optimistic)
+  urgentSign?: FloatChain[];
+  // (usd-mode 2026-11-05, B:/tmp/usd-mode-1105: a tester's 100 USDG went Robinhood → BNB through Relay right after his deposit,
+  // though he never bought on BNB; the BNB reserve and wallet hold no BNB, so those dollars could not even be used there): a
+  // routine cross-chain rebalance 'local reserve short' goes INTO a chain only when the user bought there in the last 7 days
+  // (`traded`), not because a page of it was open (`active`). A click's own cold top-up is unchanged. Left out = as before
+  crossNeedsTrade?: boolean;
+  // (usd-mode2 2026-11-05) the reserve's gas comes from motion's gas drop (the engine asks it), never from W in a ROUTINE plan:
+  // W sends R gas only in front of a click that waits for R (job reason 'reserve gas', click). A tester saw his wallet send its
+  // reserve 0.0000868 ETH on a background tick. Left out = as before (W refills R's gas whenever idle)
+  gasFromWClickOnly?: boolean;
 };
 // ── a click's cross-chain top-up in parts (2026-11-01 pass 2, owner «я даю добро на все … главное скорость и стабильность»):
 // motion's bridge carries at most $1,000 a fill (the vault's MOTION_BRIDGE_MAX6 and the solver's maxFillUsd). A click whose
@@ -416,13 +441,16 @@ export function readyFeesOf(jobs: readonly FloatJob[], now: number): { day6: big
   return { day6, week6, movedWeek6, moves };
 }
 export type Move = { kind: MoveKind; chain: FloatChain; from?: FloatChain; usd6: bigint; fee6: bigint; reason: string; trimmed?: boolean; ready?: boolean };
-export type Skip = { chain: FloatChain; why: 'stale-price' | 'cap-total' | 'cap-day' | 'cap-fees' | 'no-reserve' | 'below-min' | 'bridge-busy' | 'no-gas' };
+export type Skip = { chain: FloatChain; why: 'stale-price' | 'cap-total' | 'cap-day' | 'cap-fees' | 'no-reserve' | 'below-min' | 'bridge-busy' | 'no-gas' | 'not-traded' };
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
 const max = (a: bigint, b: bigint) => (a > b ? a : b);
-export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; short?: { chain: FloatChain; usd6: bigint } } {
+/** What a click still lacks after every move the plan found. TC-1: `infeasible` = nothing was planned for it (it could not be paid
+ *  at all), `can6` = the largest buy everything it can reach would pay (after the floor and the moves' losses). */
+export type PlanShort = { chain: FloatChain; usd6: bigint; infeasible?: boolean; can6?: bigint };
+export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; short?: PlanShort } {
   const moves: Move[] = []; const skips: Skip[] = [];
   // what a waiting click still lacks after every move this plan could find for it (no donor, or donors too poor)
-  let short: { chain: FloatChain; usd6: bigint } | undefined;
+  let short: PlanShort | undefined;
   const { caps, now } = input;
   const live = input.enabled.filter((c) => input.chains[c]);
   const stateOf = (c: FloatChain) => input.chains[c]!;
@@ -462,6 +490,8 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
   const order = [...live].sort((a, b) => (a === input.urgent?.chain ? -1 : b === input.urgent?.chain ? 1 : FLOAT_CHAIN_KEYS.indexOf(a) - FLOAT_CHAIN_KEYS.indexOf(b)));
   for (const c of order) {
     const x = stateOf(c); const cfg = FLOAT_CFG[c];
+    // TC-1: the moves this chain's turn adds (its reserve's gas first) — taken back when the click turns out infeasible
+    const movesAt = moves.length;
     if (priceState(x.priceAt, now) === 'dead' || !(x.price6 > 0n)) { skips.push({ chain: c, why: 'stale-price' }); continue; }
     // R needs its own gas before it can move anything: refilled from W's float above its gas floor (an idle W send)
     if (x.reserveNative < cfg.reserveGas / 2n && (left.get(c) ?? 0n) > 0n) {
@@ -478,7 +508,7 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       // click no longer waits for a W → R gas send to land first (2026-10-28: "SOL ready" ~12 s after the tap). W refills R
       // later, while idle (the rule below, unchanged for background ticks)
       const solPaysOwn = c === 'sol' && x.reserveNative >= SOL_GAS.enough;
-      if (spare > want && (x.idle || urgentHere) && !(urgentHere && solPaysOwn)) take({ kind: 'gas', chain: c, usd6: nativeToUsd6Up(want, x.price6, cfg.nativeDecimals), reason: 'reserve gas' });
+      if (spare > want && (x.idle || urgentHere) && !(urgentHere && solPaysOwn) && !(input.gasFromWClickOnly && !urgentHere)) take({ kind: 'gas', chain: c, usd6: nativeToUsd6Up(want, x.price6, cfg.nativeDecimals), reason: 'reserve gas' });
       // a Solana reserve that already holds what its own moves cost (motion's gas drop, SOL_GAS) pays them itself when W cannot
       // spare its gas (2026-10-27) or a click is waiting; with W able to spare it later, the old rule (W refills R while idle) stands
       else if (solPaysOwn && (urgentHere || !(spare > want))) { /* R pays its own fees */ }
@@ -500,6 +530,34 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       const deficit6 = x.float < cf ? nativeToUsd6Up(cf - x.float, x.price6, cfg.nativeDecimals) : 0n;
       const want6 = (urgentNeed * RULES.clickMarginPct) / 100n + deficit6;
       const clickNow6 = clickUsd6(c, x.float, x.price6) + x.inFlight6;
+      // PROPOSAL TC-1 (2026-11-04, B:/tmp/usd-scenarios, the owner's $540 Robinhood buy): before, a click its reserves could not pay
+      // still moved everything they held (the whole $239 BNB reserve became ETH in W) and the page waited 15 s for a figure W could
+      // never reach. Now the plan first adds up what this click can reach at all; below the bare need it plans NOTHING for it (no
+      // swap, no bridge, no gas move) and says what it can pay. A move landing here right now (bridge-busy) keeps the old answer
+      if (input.urgentAtomic && clickNow6 < want6 && !(x.busyBridge || x.inFlightReserve6 > 0n)) {
+        const bare6 = urgentNeed + deficit6;
+        const part6 = input.partMax6 && input.partMax6 > 0n ? input.partMax6 : XCHAIN.part6;
+        // only the reserves this frame signs a cold top-up from (no solver = none): a move planned from any other one never runs here
+        // (review usd-buy-final) a reserve counts only when it holds more than its own move's fee estimate: a dust reserve would
+        // add less reach than "loss" and turn a payable click infeasible
+        // (release #3 gate, F2b) every signable reserve decides whether this click could move anything at all (the guard below);
+        // reach and loss count only the reserves above their own move fee (F2): a click whose only reserve is dust is refused, not bridged
+        const signableAll = live.filter((d) => d !== c && (!input.urgentSign || input.urgentSign.includes(d)) && (left.get(d) ?? 0n) >= RULES.clickMin6);
+        const signable = signableAll.filter((d) => (left.get(d) ?? 0n) > input.estFee6('cold', c, d));
+        const cross6 = min(signable.reduce((t, d) => t + (left.get(d) ?? 0n), 0n), part6 * BigInt(XCHAIN.parts));
+        const local6 = left.get(c) ?? 0n;
+        const reach6 = clickNow6 + local6 + cross6 + (input.urgentExtra6 && input.urgentExtra6 > 0n ? input.urgentExtra6 : 0n);
+        // what the moves may lose on the way: each swap / payout within the slippage bound, and each move's own fee estimate
+        const moved6 = bare6 > clickNow6 ? bare6 - clickNow6 : 0n;
+        const loss6 = (moved6 * BigInt(caps.maxSlipBps)) / 10_000n + (local6 >= RULES.clickMin6 ? input.estFee6('topup', c) : 0n) + signable.reduce((t, d) => t + input.estFee6('cold', c, d), 0n);
+        // only when the reserves could move something for it: a click no reserve can reach plans nothing either way (the old answer)
+        if (local6 + cross6 + signableAll.filter((d) => !signable.includes(d)).reduce((t, d) => t + (left.get(d) ?? 0n), 0n) >= RULES.clickMin6 && reach6 < bare6 + loss6) {
+          moves.splice(movesAt);
+          skips.push({ chain: c, why: 'no-reserve' });
+          short = { chain: c, usd6: bare6 + loss6 - reach6, infeasible: true, can6: reach6 > loss6 + deficit6 ? reach6 - loss6 - deficit6 : 0n };
+          continue;
+        }
+      }
       if (clickNow6 < want6) {
         let rest = want6 - clickNow6;
         const local = left.get(c) ?? 0n;
@@ -532,7 +590,7 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       }
       continue;
     }
-    const want6 = tgt.trading6;
+    const want6 = x.directPays ? 0n : tgt.trading6;   // usd-mode2: no ready buffer where R pays the buys
     const refillNow = !!x.refill && want6 > 0n && now6 >= tgt.low6 && want6 - now6 >= REFILL.min6;
     if (want6 > 0n && (now6 < tgt.low6 || refillNow)) {
       const need = want6 - now6;
@@ -545,7 +603,8 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       const rest = need - covered;
       // a reserve elsewhere is asked only below the low band (a refill above it never starts a bridge move)
       if (!refillNow && rest >= RULES.sameChainMin6) {
-        if (x.busyBridge || x.inFlightReserve6 > 0n) skips.push({ chain: c, why: 'bridge-busy' });
+        if (input.crossNeedsTrade && !x.traded) skips.push({ chain: c, why: 'not-traded' });
+        else if (x.busyBridge || x.inFlightReserve6 > 0n) skips.push({ chain: c, why: 'bridge-busy' });
         else {
           // the richest other reserve that can send at least the cross-chain chunk: reserves rebalance, the next plan tops up locally
           // (READY: on a chain the user trades, from $10 instead of $100 - from a reserve a public bridge can send from)
@@ -1186,7 +1245,7 @@ export async function afterTrade<T>(running: () => boolean, wait: (ms: number) =
 }
 
 // ── page arguments: exact shapes, unknown fields refused ──
-export const FLOAT_METHODS = ['status', 'configure', 'ensure', 'sweep', 'off', 'jobs'] as const;
+export const FLOAT_METHODS = ['status', 'configure', 'ensure', 'sweep', 'off', 'jobs', 'convert', 'withdraw'] as const;
 export type FloatMethod = typeof FLOAT_METHODS[number];
 export const ENSURE_REASONS = ['lane', 'page', 'preset', 'fill', 'visible', 'tick', 'click'] as const;
 // status: `scope: 'account'` = every wallet of the account and the total; configure / off act on the whole account (the
@@ -1200,8 +1259,12 @@ const SHAPES: Record<FloatMethod, string[]> = {
   sweep: ['walletId', 'chain'],
   off: ['walletId', 'lang'],
   jobs: ['walletId'],
+  // (release 9) the USD balance into this chain's own coin, kept in the wallet (float.convert)
+  convert: ['walletId', 'chain', 'usd', 'lang'],
+  // (release 9) the reserve's stablecoin out, as the stablecoin, to the wallet itself or to an outside address (float.withdraw)
+  withdraw: ['walletId', 'chain', 'usd', 'to', 'address', 'idempotencyKey', 'lang', 'twofa'],
 };
-const REQUIRED: Record<FloatMethod, string[]> = { status: ['walletId'], configure: ['walletId', 'chains'], ensure: ['walletId', 'chain', 'reason'], sweep: ['walletId', 'chain'], off: ['walletId'], jobs: ['walletId'] };
+const REQUIRED: Record<FloatMethod, string[]> = { status: ['walletId'], configure: ['walletId', 'chains'], ensure: ['walletId', 'chain', 'reason'], sweep: ['walletId', 'chain'], off: ['walletId'], jobs: ['walletId'], convert: ['walletId', 'chain', 'usd'], withdraw: ['walletId', 'chain', 'usd', 'to', 'idempotencyKey'] };
 export function floatArgs(method: string, o: unknown): Record<string, unknown> {
   if (!(FLOAT_METHODS as readonly string[]).includes(method)) throw new Error(`Bad arguments: unknown method float.${method}`);
   const m = method as FloatMethod;
@@ -1217,7 +1280,15 @@ export function floatArgs(method: string, o: unknown): Record<string, unknown> {
     for (const k of Object.keys(c)) if (!['perDay', 'feesPerDay', 'perChain', 'total', 'maxSlipBps'].includes(k)) throw new Error(`Bad arguments: unknown field caps.${k}`);
     capsFrom(c as never);   // range checks
   }
-  if ('usd' in rec && rec.usd != null) { const u = Number(rec.usd); if (typeof rec.usd !== 'number' || !Number.isFinite(u) || u <= 0 || u > 10_000) throw new Error('Bad arguments: usd'); }
+  if (m === 'withdraw') {
+    const u = rec.usd; if (!(u === 'max' || (typeof u === 'number' && Number.isFinite(u) && u >= 0.1 && u <= WITHDRAW_MAX_USD))) throw new Error('Bad arguments: usd');
+    if (rec.to !== 'wallet' && rec.to !== 'address') throw new Error('Bad arguments: to');
+    if (rec.to === 'address') { const ad = rec.address; if (typeof ad !== 'string' || !(rec.chain === 'sol' ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ad) : /^0x[0-9a-fA-F]{40}$/.test(ad) && !/^0x0{40}$/.test(ad))) throw new Error('Bad arguments: address'); }
+    else if (rec.address != null) throw new Error('Bad arguments: address goes with to \'address\' only');
+    if (typeof rec.idempotencyKey !== 'string' || !/^[\w:-]{8,64}$/.test(rec.idempotencyKey)) throw new Error('Bad arguments: idempotencyKey');
+    if (rec.twofa != null && (typeof rec.twofa !== 'string' || !rec.twofa.length || rec.twofa.length > 4096)) throw new Error('Bad arguments: twofa');
+  }
+  if ('usd' in rec && rec.usd != null && m !== 'withdraw') { const u = Number(rec.usd); if (typeof rec.usd !== 'number' || !Number.isFinite(u) || u <= 0 || u > 10_000) throw new Error('Bad arguments: usd'); }
   if ('reason' in rec && !(ENSURE_REASONS as readonly string[]).includes(String(rec.reason))) throw new Error('Bad arguments: reason');
   if ('scope' in rec && rec.scope != null && rec.scope !== 'wallet' && rec.scope !== 'account') throw new Error('Bad arguments: scope');
   if ('fresh' in rec && rec.fresh != null && typeof rec.fresh !== 'boolean') throw new Error('Bad arguments: fresh');
@@ -1225,6 +1296,209 @@ export function floatArgs(method: string, o: unknown): Record<string, unknown> {
   if ('lang' in rec && rec.lang != null && !(FLOAT_LANGS as readonly unknown[]).includes(rec.lang)) throw new Error('Bad arguments: lang');
   if ('presets' in rec && rec.presets != null) { const ps = rec.presets; if (!Array.isArray(ps) || ps.length > 8 || ps.some((x) => typeof x !== 'number' || !Number.isFinite(x) || x <= 0 || x > 10_000)) throw new Error('Bad arguments: presets'); }
   return rec;
+}
+
+// ── float.convert (release 9, owner 2026-11-05: the app's "Buy ETH / BNB" presets pay from the USD balance itself) ──
+// { walletId, chain, usd, lang? }: the wallet's OWN reserve R on `chain` spends `usd` of its stable and the chain's native lands in
+// the wallet W itself — the existing top-up move (ALLOWED_MOVES.topup: R → W, stable → native, the float's own pinned pool and
+// router, the oracle price check at the permission's maxSlipBps, R's standing allowance), signed by R in ONE transaction. What
+// lands is the user's coin from then on: it is kept out of the dollar figure and out of every sweep (convKept below). Covered by
+// the rules-2 line the grant already agreed to ("a buy you tap in USD may be paid straight from that wallet's own reserve: the
+// reserve buys the coin and it lands in the wallet, in one transaction"), so no new consent and no rules bump: it needs a live
+// grant on rules >= DIRECT_BUY_RULES for that wallet and chain, like float.buy. No limits (owner in chat 2026-11-05: «убрать лимиты,
+// тогда текст останется верным» — the consent says "no daily or volume limits"): the bounds are the $1 minimum, what R holds liquid,
+// the oracle / slippage check of the top-up, the live grant and one move per wallet and chain at a time (the lock).
+export const CONVERT_MIN6 = 1n * USD;
+// a conversion sent less than this long ago and not landed yet: its kept amount is never shrunk (W's read may predate it)
+export const CONVERT_SETTLE_MS = 180_000;
+export type ConvertCode = 'lane' | 'off' | 'rules' | 'min' | 'trade' | 'busy' | 'price' | 'short' | 'gas' | 'quote' | 'failed';
+/** The bounds of one conversion: null = it may go; else the code, its numbers, and the most that could go now (what R holds). */
+export function convertCheck(x: { usd6: bigint; reserve6: bigint }): { code: ConvertCode; vars: Record<string, string>; max6: bigint } | null {
+  if (x.usd6 < CONVERT_MIN6) return { code: 'min', vars: { min: fmtUsd6(CONVERT_MIN6) }, max6: x.reserve6 };
+  if (x.usd6 > x.reserve6) return { code: 'short', vars: { have: fmtUsd6(x.reserve6) }, max6: x.reserve6 };
+  return null;
+}
+export type ConvItem = { raw: bigint; at: number; job?: string | null };
+/**
+ * What of W's native on a chain is the user's converted coin (float.convert), not USD balance. `items` = the conversions still
+ * counted, each with its job's state (null = settled). A failed / refunded one counts nothing. The sum is never more than W holds
+ * above its gas floor — a trade or a send that spent W's native spends the ready float first, then the kept coin — except while a
+ * conversion is still landing (W's read may predate it): then nothing is shrunk, it is only bounded by what W holds.
+ * Returns the kept amount and the items to store (a shrink folds them into one settled item).
+ */
+export function convKept(items: (ConvItem & { state?: JobState | null })[], wNative: bigint, gasFloor: bigint, now: number): { kept: bigint; items: ConvItem[]; changed: boolean } {
+  const live = items.filter((i) => i.raw > 0n && i.state !== 'failed' && i.state !== 'refunded');
+  const sum = live.reduce((t, i) => t + i.raw, 0n);
+  const room = wNative > gasFloor ? wNative - gasFloor : 0n;
+  const strip = (l: typeof live): ConvItem[] => l.map((i) => ({ raw: i.raw, at: i.at, ...(i.job ? { job: i.job } : {}) }));
+  if (sum <= room) return { kept: sum, items: strip(live), changed: live.length !== items.length };
+  const landing = live.some((i) => i.state != null && i.state !== 'arrived' && now - i.at < CONVERT_SETTLE_MS);
+  if (landing) return { kept: min(sum, wNative), items: strip(live), changed: live.length !== items.length };
+  const at = live.reduce((t, i) => (i.at < t ? i.at : t), now);
+  return { kept: room, items: room > 0n ? [{ raw: room, at }] : [], changed: true };
+}
+// the refusal texts (each ends "nothing was moved": nothing was signed), six languages
+type CT = Record<ConvertCode, (v: Record<string, string>) => string>;
+export const CONVERT_TEXT: Record<FloatLang, CT> = {
+  en: {
+    lane: () => 'Ask the vault of that network — nothing was moved',
+    off: () => 'The USD balance is off for this wallet on this network — nothing was moved',
+    rules: () => 'The USD balance needs your yes to its newer rule first (turn it on again) — nothing was moved',
+    min: (v) => `The smallest amount is ${v.min} — nothing was moved`,
+    trade: () => 'A trade is being sent: try again in a moment — nothing was moved',
+    busy: () => 'This wallet\'s USD balance is moving right now: try again in a moment — nothing was moved',
+    price: () => 'No fresh price on this network — nothing was moved',
+    short: (v) => `Your USD balance on this network holds ${v.have} — nothing was moved`,
+    gas: () => 'Your USD balance on this network has no gas for its swap yet — nothing was moved',
+    quote: (v) => `The pool's price is off the market price (${v.why}) — nothing was moved`,
+    failed: (v) => `The swap was not sent (${v.why}) — nothing was moved`,
+  },
+  ru: {
+    lane: () => 'Спросите хранилище этой сети — ничего не перемещено',
+    off: () => 'Баланс в USD выключен для этого кошелька в этой сети — ничего не перемещено',
+    rules: () => 'Балансу в USD сначала нужно ваше согласие с новым правилом (включите его снова) — ничего не перемещено',
+    min: (v) => `Минимальная сумма — ${v.min} — ничего не перемещено`,
+    trade: () => 'Сейчас отправляется сделка: попробуйте через мгновение — ничего не перемещено',
+    busy: () => 'Баланс в USD этого кошелька сейчас в движении: попробуйте через мгновение — ничего не перемещено',
+    price: () => 'Нет свежей цены в этой сети — ничего не перемещено',
+    short: (v) => `Ваш баланс в USD в этой сети: ${v.have} — ничего не перемещено`,
+    gas: () => 'У баланса в USD в этой сети пока нет газа на обмен — ничего не перемещено',
+    quote: (v) => `Цена пула отличается от рыночной (${v.why}) — ничего не перемещено`,
+    failed: (v) => `Обмен не отправлен (${v.why}) — ничего не перемещено`,
+  },
+  zh: {
+    lane: () => '请向该网络的保险库发起 — 未移动任何资金',
+    off: () => '此钱包在该网络上的 USD 余额已关闭 — 未移动任何资金',
+    rules: () => 'USD 余额需要你先同意其新规则（重新开启） — 未移动任何资金',
+    min: (v) => `最小金额为 ${v.min} — 未移动任何资金`,
+    trade: () => '正在发送一笔交易：请稍后再试 — 未移动任何资金',
+    busy: () => '此钱包的 USD 余额正在移动：请稍后再试 — 未移动任何资金',
+    price: () => '该网络没有最新价格 — 未移动任何资金',
+    short: (v) => `你在该网络的 USD 余额为 ${v.have} — 未移动任何资金`,
+    gas: () => '你在该网络的 USD 余额暂无兑换所需的 gas — 未移动任何资金',
+    quote: (v) => `池子价格偏离市场价格（${v.why}） — 未移动任何资金`,
+    failed: (v) => `兑换未发送（${v.why}） — 未移动任何资金`,
+  },
+  id: {
+    lane: () => 'Minta ke vault jaringan itu — tidak ada yang dipindahkan',
+    off: () => 'Saldo USD nonaktif untuk dompet ini di jaringan ini — tidak ada yang dipindahkan',
+    rules: () => 'Saldo USD perlu persetujuan Anda atas aturan barunya dulu (aktifkan lagi) — tidak ada yang dipindahkan',
+    min: (v) => `Jumlah terkecil adalah ${v.min} — tidak ada yang dipindahkan`,
+    trade: () => 'Sebuah transaksi sedang dikirim: coba lagi sebentar lagi — tidak ada yang dipindahkan',
+    busy: () => 'Saldo USD dompet ini sedang bergerak: coba lagi sebentar lagi — tidak ada yang dipindahkan',
+    price: () => 'Tidak ada harga terbaru di jaringan ini — tidak ada yang dipindahkan',
+    short: (v) => `Saldo USD Anda di jaringan ini ${v.have} — tidak ada yang dipindahkan`,
+    gas: () => 'Saldo USD Anda di jaringan ini belum punya gas untuk swap — tidak ada yang dipindahkan',
+    quote: (v) => `Harga pool berbeda dari harga pasar (${v.why}) — tidak ada yang dipindahkan`,
+    failed: (v) => `Swap tidak terkirim (${v.why}) — tidak ada yang dipindahkan`,
+  },
+  es: {
+    lane: () => 'Pídelo a la bóveda de esa red — no se movió nada',
+    off: () => 'El saldo en USD está desactivado para esta cartera en esta red — no se movió nada',
+    rules: () => 'El saldo en USD necesita primero tu sí a su nueva regla (actívalo de nuevo) — no se movió nada',
+    min: (v) => `El importe mínimo es ${v.min} — no se movió nada`,
+    trade: () => 'Se está enviando una operación: inténtalo en un momento — no se movió nada',
+    busy: () => 'El saldo en USD de esta cartera se está moviendo ahora: inténtalo en un momento — no se movió nada',
+    price: () => 'No hay precio reciente en esta red — no se movió nada',
+    short: (v) => `Tu saldo en USD en esta red es ${v.have} — no se movió nada`,
+    gas: () => 'Tu saldo en USD en esta red aún no tiene gas para el intercambio — no se movió nada',
+    quote: (v) => `El precio del pool se aleja del precio de mercado (${v.why}) — no se movió nada`,
+    failed: (v) => `El intercambio no se envió (${v.why}) — no se movió nada`,
+  },
+  fr: {
+    lane: () => 'Demandez au coffre de ce réseau — rien n’a été déplacé',
+    off: () => 'Le solde en USD est désactivé pour ce portefeuille sur ce réseau — rien n’a été déplacé',
+    rules: () => 'Le solde en USD a d’abord besoin de votre accord à sa nouvelle règle (réactivez-le) — rien n’a été déplacé',
+    min: (v) => `Le montant minimum est de ${v.min} — rien n’a été déplacé`,
+    trade: () => 'Un ordre est en cours d’envoi : réessayez dans un instant — rien n’a été déplacé',
+    busy: () => 'Le solde en USD de ce portefeuille bouge en ce moment : réessayez dans un instant — rien n’a été déplacé',
+    price: () => 'Pas de prix récent sur ce réseau — rien n’a été déplacé',
+    short: (v) => `Votre solde en USD sur ce réseau est de ${v.have} — rien n’a été déplacé`,
+    gas: () => 'Votre solde en USD sur ce réseau n’a pas encore de gas pour l’échange — rien n’a été déplacé',
+    quote: (v) => `Le prix du pool s’écarte du prix du marché (${v.why}) — rien n’a été déplacé`,
+    failed: (v) => `L’échange n’a pas été envoyé (${v.why}) — rien n’a été déplacé`,
+  },
+};
+export const convertWhy = (code: ConvertCode, lang: FloatLang, v: Record<string, string> = {}): string => (CONVERT_TEXT[lang] ?? CONVERT_TEXT.en)[code]({ why: '', ...v });
+
+// ── float.withdraw (release 9, 2026-11-05: a tester "USD withdrawal is not available") ──
+// { walletId, chain, usd: number | 'max', to: 'wallet' | 'address', address?, idempotencyKey, lang?, twofa? }: ONE plain transfer of
+// the chain's pinned stablecoin (USDG on Robinhood, USDC on BNB / Solana) signed by the wallet's OWN reserve R — to the wallet itself
+// (to 'wallet': no address argument) or to an outside address (to 'address'). No swap, no bridge. The consent is Send's own: an
+// address the vault holds no key for = the 'withdraw' 2FA gate + the vault's "Send outside your vault" dialog (trusted click); the
+// vault's own wallets = the 'transfer' gate. No limits (owner 2026-11-05: «убрать лимиты»): never more than R holds liquid, at
+// least $0.10. A repeat of the same idempotencyKey returns the first answer and never sends twice.
+export const WITHDRAW_MIN6 = 100_000n;              // $0.10
+export const WITHDRAW_MAX_USD = 100_000;            // the argument's range (not a limit: R never pays more than it holds)
+export type WithdrawCode = 'lane' | 'busy' | 'trade' | 'amount' | 'gas' | 'address' | 'unsupported' | 'failed';
+type WT = Record<WithdrawCode, (v: Record<string, string>) => string>;
+export const WITHDRAW_TEXT: Record<FloatLang, WT> = {
+  en: {
+    lane: () => 'Ask the vault of that network — nothing was sent',
+    busy: () => 'This wallet\'s USD balance is moving right now: try again in a moment — nothing was sent',
+    trade: () => 'A trade is being sent: try again in a moment — nothing was sent',
+    amount: (v) => `Only ${v.have} can be withdrawn now (at least $0.10) — nothing was sent`,
+    gas: () => 'Your USD balance on this network has no gas for the transfer yet — nothing was sent',
+    address: () => 'That address is one of this account\'s USD-balance reserves — nothing was sent',
+    unsupported: () => 'Withdrawing from the USD balance on this network arrives with the next wallet update — nothing was sent',
+    failed: (v) => `The transfer was not sent (${v.why}) — nothing was sent`,
+  },
+  ru: {
+    lane: () => 'Спросите хранилище этой сети — ничего не отправлено',
+    busy: () => 'Баланс в USD этого кошелька сейчас в движении: попробуйте через мгновение — ничего не отправлено',
+    trade: () => 'Сейчас отправляется сделка: попробуйте через мгновение — ничего не отправлено',
+    amount: (v) => `Сейчас можно вывести только ${v.have} (не меньше $0.10) — ничего не отправлено`,
+    gas: () => 'У баланса в USD в этой сети пока нет газа на перевод — ничего не отправлено',
+    address: () => 'Этот адрес — резерв баланса в USD этого аккаунта — ничего не отправлено',
+    unsupported: () => 'Вывод из баланса в USD в этой сети появится со следующим обновлением кошелька — ничего не отправлено',
+    failed: (v) => `Перевод не отправлен (${v.why}) — ничего не отправлено`,
+  },
+  zh: {
+    lane: () => '请向该网络的保险库发起 — 未发送任何资金',
+    busy: () => '此钱包的 USD 余额正在移动：请稍后再试 — 未发送任何资金',
+    trade: () => '正在发送一笔交易：请稍后再试 — 未发送任何资金',
+    amount: (v) => `目前最多可提取 ${v.have}（至少 $0.10） — 未发送任何资金`,
+    gas: () => '你在该网络的 USD 余额暂无转账所需的 gas — 未发送任何资金',
+    address: () => '该地址是此账户 USD 余额的储备地址 — 未发送任何资金',
+    unsupported: () => '该网络的 USD 余额提取将随下一次钱包更新推出 — 未发送任何资金',
+    failed: (v) => `转账未发送（${v.why}） — 未发送任何资金`,
+  },
+  id: {
+    lane: () => 'Minta ke vault jaringan itu — tidak ada yang dikirim',
+    busy: () => 'Saldo USD dompet ini sedang bergerak: coba lagi sebentar lagi — tidak ada yang dikirim',
+    trade: () => 'Sebuah transaksi sedang dikirim: coba lagi sebentar lagi — tidak ada yang dikirim',
+    amount: (v) => `Saat ini hanya ${v.have} yang bisa ditarik (minimal $0.10) — tidak ada yang dikirim`,
+    gas: () => 'Saldo USD Anda di jaringan ini belum punya gas untuk transfer — tidak ada yang dikirim',
+    address: () => 'Alamat itu adalah cadangan saldo USD akun ini — tidak ada yang dikirim',
+    unsupported: () => 'Penarikan saldo USD di jaringan ini hadir pada pembaruan dompet berikutnya — tidak ada yang dikirim',
+    failed: (v) => `Transfer tidak terkirim (${v.why}) — tidak ada yang dikirim`,
+  },
+  es: {
+    lane: () => 'Pídelo a la bóveda de esa red — no se envió nada',
+    busy: () => 'El saldo en USD de esta cartera se está moviendo ahora: inténtalo en un momento — no se envió nada',
+    trade: () => 'Se está enviando una operación: inténtalo en un momento — no se envió nada',
+    amount: (v) => `Ahora solo se pueden retirar ${v.have} (mínimo $0.10) — no se envió nada`,
+    gas: () => 'Tu saldo en USD en esta red aún no tiene gas para la transferencia — no se envió nada',
+    address: () => 'Esa dirección es una reserva del saldo en USD de esta cuenta — no se envió nada',
+    unsupported: () => 'Retirar del saldo en USD en esta red llega con la próxima actualización de la cartera — no se envió nada',
+    failed: (v) => `La transferencia no se envió (${v.why}) — no se envió nada`,
+  },
+  fr: {
+    lane: () => 'Demandez au coffre de ce réseau — rien n’a été envoyé',
+    busy: () => 'Le solde en USD de ce portefeuille bouge en ce moment : réessayez dans un instant — rien n’a été envoyé',
+    trade: () => 'Un ordre est en cours d’envoi : réessayez dans un instant — rien n’a été envoyé',
+    amount: (v) => `Seuls ${v.have} peuvent être retirés maintenant (au moins 0,10 $) — rien n’a été envoyé`,
+    gas: () => 'Votre solde en USD sur ce réseau n’a pas encore de gas pour le virement — rien n’a été envoyé',
+    address: () => 'Cette adresse est une réserve du solde en USD de ce compte — rien n’a été envoyé',
+    unsupported: () => 'Le retrait du solde en USD sur ce réseau arrive avec la prochaine mise à jour du portefeuille — rien n’a été envoyé',
+    failed: (v) => `Le virement n’a pas été envoyé (${v.why}) — rien n’a été envoyé`,
+  },
+};
+export const withdrawWhy = (code: WithdrawCode, lang: FloatLang, v: Record<string, string> = {}): string => (WITHDRAW_TEXT[lang] ?? WITHDRAW_TEXT.en)[code]({ why: '', have: '$0.00', ...v });
+/** A raw token amount as a decimal string, exactly (12_500_000 at 6 decimals = "12.5"). */
+export function decimalOf(raw: bigint, decimals: number): string {
+  const d = 10n ** BigInt(decimals); const i = raw / d, f = raw % d;
+  return f === 0n ? String(i) : `${i}.${f.toString().padStart(decimals, '0').replace(/0+$/, '')}`;
 }
 
 // ── jobs (§5) ──

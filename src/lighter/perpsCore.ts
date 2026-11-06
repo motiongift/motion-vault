@@ -52,6 +52,12 @@ export const FAST_WITHDRAW_POOL: number | null = null;
 export const CAP_DEFAULT = 1000;          // USDG notional per order per wallet that goes out without a dialog
 export const SLIP_MAX_BPS = 500;          // the widest slippage the engine signs
 export const LIMIT_BAND = 0.05;           // an aggressive limit price at most 5 % through the mark
+// PERP-1 (security batch 2): a market order or a close is priced off the BOOK top, which one resting order on a thin market can put
+// far from the mark (a compromised page picks such a market for the user's wallet; the cap was ref ± slippage, the mark never
+// looked at). The book price an open is built on must be within MARKET_BAND of the mark (Lighter's own, read by the vault with
+// the market — no extra request); a close's limit never goes further through the mark than MARKET_BAND + the slippage (a book
+// far from the mark then fills what is fair and the rest is cancelled — the exit is never refused).
+export const MARKET_BAND = LIMIT_BAND;
 /** Lighter's terms (lighter.xyz/terms, 2025-12-29): not available to persons in these places. */
 export const RESTRICTED = ['US', 'CA', 'GB', 'CN', 'KP', 'RU', 'UA', 'CU', 'IR', 'VE', 'SD', 'BY', 'MM', 'SY'] as const;
 export const RESTRICTED_NAMES = 'the United States, Canada, the United Kingdom, China, North Korea, Russia, Ukraine, Cuba, Iran, Venezuela, Sudan, Belarus, Myanmar or Syria';
@@ -214,6 +220,7 @@ export function buildOrder(r: OrderReq, m: Market, book: { bid: number; ask: num
     worst = price;
   } else {
     price = ref;
+    if (r.side === 'long' ? ref > mark * (1 + MARKET_BAND) : ref < mark * (1 - MARKET_BAND)) errors.push(`The ${r.side === 'long' ? 'best offer' : 'best bid'} on ${m.symbol} is more than ${(MARKET_BAND * 100).toFixed(0)} % ${r.side === 'long' ? 'over' : 'under'} the mark price (a thin book) — refused; try again in a moment or use a limit order`);
     worst = r.side === 'long' ? ref * (1 + slip) : ref * (1 - slip);
   }
   const priceTicks = ticks(worst, m.priceDecimals, r.side === 'long');
@@ -236,8 +243,10 @@ export function buildOrder(r: OrderReq, m: Market, book: { bid: number; ask: num
     return { market: m.id, clientOrderIndex: coi(), baseAmount: 0n, price: ticks(lim, m.priceDecimals, r.side === 'short'), isAsk: exitAsk, type: kind === 'tp' ? ORDER_TYPE.takeProfitLimit : ORDER_TYPE.stopLossLimit, timeInForce: TIF.gtt, reduceOnly: 1 as const, triggerPrice: t, orderExpiry: exp28 };
   };
   const tp = r.tp ? Number(r.tp.trigger) : 0, sl = r.sl ? Number(r.sl.trigger) : 0;
-  if (r.tp) { if (!(tp > 0) || (r.side === 'long' ? tp <= price : tp >= price)) errors.push('Take profit must be ' + (r.side === 'long' ? 'above' : 'below') + ' the entry'); else orders.push(child('tp', tp)); }
-  if (r.sl) { if (!(sl > 0) || (r.side === 'long' ? sl >= price : sl <= price)) errors.push('Stop loss must be ' + (r.side === 'long' ? 'below' : 'above') + ' the entry'); else orders.push(child('sl', sl)); }
+  // PERP-1: a child trigger more than TRIGGER_BAND from the mark is refused as for a trigger on an open position (buildTrigger)
+  const farFromMark = (x: number) => x < mark / TRIGGER_BAND || x > mark * TRIGGER_BAND;
+  if (r.tp) { if (!(tp > 0) || (r.side === 'long' ? tp <= price : tp >= price)) errors.push('Take profit must be ' + (r.side === 'long' ? 'above' : 'below') + ' the entry'); else if (farFromMark(tp)) errors.push(`A take profit more than ${TRIGGER_BAND}× away from the mark price is refused`); else orders.push(child('tp', tp)); }
+  if (r.sl) { if (!(sl > 0) || (r.side === 'long' ? sl >= price : sl <= price)) errors.push('Stop loss must be ' + (r.side === 'long' ? 'below' : 'above') + ' the entry'); else if (farFromMark(sl)) errors.push(`A stop loss more than ${TRIGGER_BAND}× away from the mark price is refused`); else orders.push(child('sl', sl)); }
   // inside a group the entry is a LIMIT IOC at the cap (Lighter's own grouped pattern); alone a market order is MARKET IOC
   if (orders.length > 1 && r.type === 'market') { entry.type = ORDER_TYPE.limit; entry.timeInForce = TIF.ioc; entry.orderExpiry = 0; }
   const group = orders.length === 3 ? GROUP.otoco : orders.length === 2 ? GROUP.oto : 0;
@@ -249,10 +258,15 @@ export function buildClose(m: Market, pos: { size: bigint; side: Side }, fractio
   const ref = pos.side === 'long' ? (book.bid || m.mark) : (book.ask || m.mark);
   if (!(ref > 0)) throw new Error('No price for this market right now');
   const slip = slippageBps / 10000;
-  const worst = pos.side === 'long' ? ref * (1 - slip) : ref * (1 + slip);
+  const mark = m.mark || m.last;
+  let worst = pos.side === 'long' ? ref * (1 - slip) : ref * (1 + slip);
+  // PERP-1: the limit never further through the mark than MARKET_BAND + the slippage (a thin book fills what is fair, the rest is cancelled)
+  const bound = mark > 0 ? (pos.side === 'long' ? mark * (1 - MARKET_BAND - slip) : mark * (1 + MARKET_BAND + slip)) : 0;
+  const clamped = bound > 0 && (pos.side === 'long' ? worst < bound : worst > bound);
+  if (clamped) worst = bound;
   const base = fraction >= 1 ? pos.size : BigInt(Math.floor(Number(pos.size) * fraction));
   if (base <= 0n) throw new Error('Nothing to close');
-  return { ref, worst, order: { market: m.id, clientOrderIndex: coi(), baseAmount: base, price: ticks(worst, m.priceDecimals, pos.side === 'short'), isAsk, type: ORDER_TYPE.market, timeInForce: TIF.ioc, reduceOnly: 1 as const, triggerPrice: 0n, orderExpiry: 0 } };
+  return { ref, worst, clamped, order: { market: m.id, clientOrderIndex: coi(), baseAmount: base, price: ticks(worst, m.priceDecimals, pos.side === 'short'), isAsk, type: ORDER_TYPE.market, timeInForce: TIF.ioc, reduceOnly: 1 as const, triggerPrice: 0n, orderExpiry: 0 } };
 }
 
 /** SL / TP set on an OPEN position (perps.trigger, 2026-10-22): the limit behind the trigger sits this far through it, so

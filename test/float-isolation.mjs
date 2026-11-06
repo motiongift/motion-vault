@@ -130,12 +130,15 @@ test('no key reaches the float module; R is derived in webEngine and never store
 test('the frame surface: float.<method> for exactly the documented methods, its event forwarded, its rows in policy()', () => {
   const row = WE.match(/  float: \{ ([^}]+) \},\n/)[1];
   // + buy (2026-10-29): the buy straight from the reserve — a click of its own (clickRun), never a float move
-  assert.deepEqual(row.split(', ').map((x) => x.split(':')[0]).sort(), [...FLOAT_METHODS, 'buy'].sort());
-  assert.match(row, /buy: \(o: unknown\) => clickRun\(\(\) => usdBuy\(o\)\)$/);
+  // + earn (2026-11-03): Earn on the USD balance (src/earnEngine.ts), its own argument check (earnCore.earnArgs) and dialog
+  assert.deepEqual(row.split(', ').map((x) => x.split(':')[0]).sort(), [...FLOAT_METHODS, 'buy', 'earn'].sort());
+  assert.match(row, /earn: float.earn, buy:/);
+  // + convert (release 9): the USD balance into the chain's coin — a float move of its own (the top-up R → W), never a click
+  assert.match(row, /buy: \(o: unknown\) => clickRun\(\(\) => usdBuy\(o\)\), convert: float\.convert, withdraw: float\.withdraw$/);
   for (const h of ['async function trade(', 'async function tradeInner(']) assert.ok(!/usdBuy|solDirect/.test(fnText(WE, h)), h + ' reaches the buy from the reserve');
   assert.match(WE, /path\[0\] === 'float' \? engine\.float/);
   assert.match(WE, /'trench:perps', 'trench:float'\]\) document\.addEventListener/);
-  for (const m of ['float.configure', 'float.ensure', 'float.sweep', 'float.off', 'float.buy']) assert.ok(WE.includes(`method: '${m}'`), m);
+  for (const m of ['float.configure', 'float.ensure', 'float.sweep', 'float.off', 'float.buy', 'float.earn', 'float.convert', 'float.withdraw']) assert.ok(WE.includes(`method: '${m}'`), m);
 });
 
 test('the click path (2026-10-26): the dialogs\' reads skip the bucket, never the trade gate; only they use it; background reads keep the bucket', () => {

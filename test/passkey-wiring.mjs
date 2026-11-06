@@ -10,7 +10,7 @@ const method = (name) => { const i = src.indexOf(`\n  ${name}: async`); assert.o
 test('the ceremony starts inside the trusted click, before anything is awaited', () => {
   const click = src.slice(src.indexOf("if (!e.isTrusted) return;"), src.indexOf("if (o.validate)"));
   const g = click.indexOf('o.gesture()'), firstAwait = click.indexOf('await ');
-  assert.ok(g > 0 && g < firstAwait, 'gesture() runs before the first await of the OK handler');
+  assert.ok(g > 0 && (firstAwait < 0 || g < firstAwait), 'gesture() runs before the first await of the OK handler (SEC-2: none left before validate)');
   assert.ok(click.indexOf('if (!e.isTrusted) return;') < g, 'after the isTrusted check');
   assert.match(src, /gesture: \(\) => \{ if \(!run\) run = start\(\); \}/, 'one ceremony per click, restartable after a failure');
 });

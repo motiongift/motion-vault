@@ -137,8 +137,10 @@ function makeWorld(o = {}) {
     now: () => Date.now(),
     store: { get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, v), del: (k) => store.delete(k), keys: (p) => [...store.keys()].filter((k) => k.startsWith(p)) },
     lock: async (k, fn) => fn(), emit: (d) => events.push(d), fetch: fetchFn, click: () => click, wait: async () => {},
+    // (usd-mode 2026-11-05) this world rebalances into a chain never bought on: the rule of before (floatCore crossNeedsTrade)
+    crossNeedsTrade: o.crossNeedsTrade ?? false,
   };
-  const f = createFloat(deps);
+  const f = createFloat(Object.assign(deps, { readyFloat: o.readyFloat ?? true, gasFromW: o.gasFromW ?? true }));   // usd-mode2: the buffer of before unless asked
   const settle = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
   return { f, deps, solver, W: W.address, R: R.address, W_KEY, R_KEY, sol, store, events, relayCalls, signedEvm, signedSol, chain, click, settle };
 }
@@ -478,11 +480,19 @@ test('the EVM reserves are short: Solana covers the rest (or the whole need, in 
   assert.deepEqual((await coldJobs(one)).map((j) => [j.from, j.usd6]), [['sol', String(F.usd6(150))]]);
   assert.equal(one.signedEvm.length, 0); assert.equal(one.signedSol.length, 1);
   // Robinhood $50, Solana $60: both, the EVM reserve first
+  // (PROPOSAL TC-1, 2026-11-04: was a $120 click — $110 of reserves could never pay it, yet both were moved and the page waited its
+  // 15 s; now a $100 click, which they do pay; the $120 one moves nothing and says what it can pay)
   const two = bnbFrame({ solReserve: { stable: 0n, native: 0n } }); await on(two);
   rhSnap(two, { reserve: '50000000' }); solSnap(two, { reserve: '60000000' });
-  await two.f.ensure({ walletId: 'w1', chain: 'bsc', usd: 120, reason: 'click' }); await two.settle();
-  assert.deepEqual((await coldJobs(two)).map((j) => [j.from, j.usd6]), [['robinhood', String(F.usd6(50))], ['sol', String(F.usd6(60))]]);
+  await two.f.ensure({ walletId: 'w1', chain: 'bsc', usd: 100, reason: 'click' }); await two.settle();
+  // (PROPOSAL TC-6: the two parts are signed side by side now — the job list's order is the order they finished in)
+  assert.deepEqual((await coldJobs(two)).map((j) => [j.from, j.usd6]).sort(), [['robinhood', String(F.usd6(50))], ['sol', String(F.usd6(60))]]);
   assert.equal(two.signedEvm.length, 1); assert.equal(two.signedSol.length, 1);
+  const no = bnbFrame({ solReserve: { stable: 0n, native: 0n } }); await on(no);
+  rhSnap(no, { reserve: '50000000' }); solSnap(no, { reserve: '60000000' });
+  const r = await no.f.ensure({ walletId: 'w1', chain: 'bsc', usd: 120, reason: 'click' }); await no.settle();
+  assert.equal((await coldJobs(no)).length, 0); assert.equal(no.signedEvm.length + no.signedSol.length, 0, 'nothing signed for a click it cannot pay');
+  assert.equal(r.click.state, 'failed'); assert.equal(r.click.code, 'short'); assert.ok(r.click.short.canUsd > 108 && r.click.short.canUsd <= 110, JSON.stringify(r.click));
 });
 
 test('a Solana reserve that cannot pay its transfer fee, a failed read, or a frame without the Solana read: nothing is signed for Solana (as before)', async () => {
@@ -875,4 +885,24 @@ test('p2: a move INTO this chain that arrived under 10 s ago holds a second clic
   rhSnap(wd, { reserve: '500000000' });
   await wd.f.ensure({ walletId: 'w1', chain: 'bsc', usd: 120, reason: 'click' }); await wd.settle();
   assert.equal(wd.signedEvm.length, 1);
+});
+
+// ── usd-mode2 (2026-11-05, a tester under rel-9: his wallet sent its reserve 0.0000868 ETH on a background tick, and the reserve
+// swapped $100.46 of USDG into ETH for his wallet an hour after buys the reserve itself had paid) ──
+test('usd-mode2: a routine tick with the reserve short of gas asks motion\'s gas drop and has W send nothing; the ready-ETH buffer is not topped up', async () => {
+  // W holds 0.0002 ETH of floor + a little trading ETH (well under its $150 target), R holds $2,000 of USDG and 0.00001 ETH
+  const wd = makeWorld({ wEth: RH.gasFloor + 5_000_000_000_000_000n, readyFloat: false, gasFromW: false }); await on(wd);
+  wd.chain.eth.set(lc(wd.R), 10_000_000_000_000n);
+  quiet(wd);
+  await wd.f.ensure({ walletId: 'w1', chain: 'robinhood', reason: 'tick' }); await wd.settle();
+  assert.deepEqual(wd.solver.gas, [{ chain: 'robinhood', address: wd.R }], 'motion is asked for the reserve\'s gas');
+  const jobs = (await wd.f.jobs({ walletId: 'w1' })).jobs;
+  assert.equal(jobs.filter((j) => j.kind === 'gas').length, 0, 'no W -> R gas send: ' + JSON.stringify(jobs.map((j) => [j.kind, j.reason])));
+  assert.equal(jobs.filter((j) => j.kind === 'topup').length, 0, 'no ready-ETH top-up where the reserve pays the buys');
+  // the same world on the rules of before: W refills R's gas (the planned 'gas' job; this world broadcasts nothing, so it fails)
+  const old = makeWorld({ wEth: RH.gasFloor + 5_000_000_000_000_000n }); await on(old);
+  old.chain.eth.set(lc(old.R), 10_000_000_000_000n); quiet(old);
+  await old.f.ensure({ walletId: 'w1', chain: 'robinhood', reason: 'tick' }); await old.settle();
+  const oj = (await old.f.jobs({ walletId: 'w1' })).jobs;
+  assert.ok(oj.some((j) => j.kind === 'gas' && j.reason === 'reserve gas' && BigInt(j.usd6) > 0n), JSON.stringify(oj.map((j) => [j.kind, j.reason])));
 });

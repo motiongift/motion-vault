@@ -14,7 +14,12 @@ export const CORE_FILES = ['src/solEngine.ts', 'src/bnbRouter.ts', 'src/evmV4Rou
 // webEngine.ts: the EVM click → send path (transport, nonces, lanes, signing, broadcast, receipts, fees, route checks, the trade)
 export const CORE_DECLS = {
   'src/webEngine.ts': ['mkTransport', 'mkHeavyRing', 'heavyFor', 'makeShared', 'broadcast', 'nextNonce', 'nonceSheet', 'noteNonceUsed',
-    'inLane', 'laneLock', 'signAndSend', 'sendCall', 'landed', 'feeFloor', 'feeFor', 'keepHot', 'loadSettings'],
+    'inLane', 'laneLock', 'signAndSend', 'sendCall', 'landed', 'feeFloor', 'feeFor', 'keepHot', 'loadSettings',
+    // release #3 (2026-11-04): the per-lane slippage / road choice of an order (exec-quality TC-S1/S2, TC-M1 switch) and the
+    // BNB private send (mev-v2, OFF by default: flipping MEV_DEFAULT must trip this pin)
+    'MEV_DEFAULT', 'vaultFeatures', 'mevOn', 'laneSlip', 'orderSlip', 'tradeSettings',
+    'broadcastUrls', 'postRaw', 'mevFallback', 'mevPrivate', 'publicSendUrls', 'holdNonce', 'releaseHold', 'privHold', 'includedTx',
+    'holdBus', 'STATE_REFUSAL', 'MEV_MIN_GAS', 'MEV_HEDGE_MS', 'MEV_FALLBACK_MS', 'MEV_HOLD_MS', 'MEV_SHARED_HOLD_MS'],
 };
 // …and one contiguous region of webEngine.ts: route checks → tradeOne → preview → leftovers → limits → tradeGuard → trade /
 // tradeInner → receipts (from the first declaration to the line before the second)

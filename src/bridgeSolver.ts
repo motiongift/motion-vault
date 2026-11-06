@@ -8,7 +8,7 @@
 // What it can never do: sign anything else, pay anyone but the solver's published deposit address, accept a payout to
 // an address that is not this wallet's own W, or send twice for the same need.
 import {
-  type BridgeChain, type Quote, bridgeCfg, quoteProblem, stableToUsd6, USD6, USER_STATE, QUOTE_ID, SOL_PROGRAMS,
+  type BridgeChain, type Quote, bridgeCfg, quoteProblem, stableToUsd6, nativeToUsd6, USD6, USER_STATE, QUOTE_ID, SOL_PROGRAMS,
 } from './motionBridgeCore.ts';
 
 export type SolverQuote = { quote: Quote; sig: string };
@@ -53,6 +53,20 @@ export function solBridgeTransferIxs(a: { owner: string; src: string; dst: strin
     ix(SOL_PROGRAMS.token, [[a.src, false, true], [a.mint, false, false], [a.dst, false, true], [a.owner, true, false]], cat(Uint8Array.of(12), u64(a.amount), Uint8Array.of(a.decimals))),
   ];
 }
+// (2026-11-04) native SOL towards Elysium: budget, the memo = the quote id, ONE System Program transfer (instruction 2) from the
+// owner to the solver's deposit address — what the solver's solNativeSourceProblem accepts, nothing more
+export function solBridgeNativeIxs(a: { owner: string; to: string; amount: bigint; memo: string; units: number; micro: bigint }): SolBridgeIx[] {
+  const u64 = (v: bigint) => { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, v, true); return b; };
+  const u32 = (v: number) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v, true); return b; };
+  const cat = (...xs: Uint8Array[]) => { const o = new Uint8Array(xs.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of xs) { o.set(x, i); i += x.length; } return o; };
+  const ix = (program: string, keys: [string, boolean, boolean][], data: Uint8Array): SolBridgeIx => ({ program, keys: keys.map(([pubkey, signer, writable]) => ({ pubkey, signer, writable })), data });
+  return [
+    ix(SOL_PROGRAMS.budget, [], cat(Uint8Array.of(2), u32(a.units))),
+    ix(SOL_PROGRAMS.budget, [], cat(Uint8Array.of(3), u64(a.micro))),
+    ix(SOL_PROGRAMS.memo, [[a.owner, true, true]], new TextEncoder().encode(a.memo)),
+    ix(SOL_PROGRAMS.system, [[a.owner, true, true], [a.to, false, true]], cat(u32(2), u64(a.amount))),
+  ];
+}
 export const MOTION_BRIDGE_MAX6 = 1_000n * USD6;   // the vault's own ceiling for this route, whatever the solver offers
 
 export function createSolverBridge(deps: SolverDeps) {
@@ -65,9 +79,15 @@ export function createSolverBridge(deps: SolverDeps) {
   };
 
   /** the solver's published deposit addresses and whether it is open for business (cached by the caller) */
-  async function health(): Promise<{ on: boolean; chains: BridgeChain[]; deposits: Partial<Record<BridgeChain, string>>; maxFillUsd: number; minFillUsd: number; solver: string }> {
+  async function health(): Promise<{ on: boolean; chains: BridgeChain[]; deposits: Partial<Record<BridgeChain, string>>; maxFillUsd: number; minFillUsd: number; solver: string; elysium?: { paused: boolean; why: string[]; assets: string[]; maxFillUsd?: number; fee?: { bps: number; minUsd: number }; sources?: string[] } }> {
     const j = await ask('/health');
-    return { on: !!j.on, chains: Array.isArray(j.chains) ? j.chains : [], deposits: j.deposits || {}, maxFillUsd: Number(j.maxFillUsd) || 0, minFillUsd: Number(j.minFillUsd) || 0, solver: String(j.solver || '') };
+    return { on: !!j.on, chains: Array.isArray(j.chains) ? j.chains : [], deposits: j.deposits || {}, maxFillUsd: Number(j.maxFillUsd) || 0, minFillUsd: Number(j.minFillUsd) || 0, solver: String(j.solver || ''),
+      ...(j.elysium && typeof j.elysium === 'object' ? { elysium: { paused: j.elysium.paused !== false, why: Array.isArray(j.elysium.why) ? j.elysium.why.map(String).slice(0, 5) : [], assets: Array.isArray(j.elysium.assets) ? j.elysium.assets.map(String) : ['native'],
+        // (2026-11-04, USD-balance buys on Elysium) the solver's own per-fill cap for Elysium, its HYPE headroom included; absent = the route's
+        ...(Number(j.elysium.maxFillUsd) > 0 ? { maxFillUsd: Number(j.elysium.maxFillUsd) } : {}),
+        // (release 6) motion's fee into Elysium as the solver publishes it (the vault never accepts more than its own ELY_FEE) and the sources
+        ...(j.elysium.fee && typeof j.elysium.fee === 'object' ? { fee: { bps: Number(j.elysium.fee.bps), minUsd: Number(j.elysium.fee.minUsd) } } : {}),
+        ...(Array.isArray(j.elysium.sources) ? { sources: j.elysium.sources.map(String).slice(0, 8) } : {}) } } : {}) };
   }
 
   /**
@@ -78,15 +98,19 @@ export function createSolverBridge(deps: SolverDeps) {
   async function quote(a: {
     from: BridgeChain; to: BridgeChain; amountIn: bigint; depositor: string; recipient: string;
     oracle6: bigint; maxSlipBps: number; deposits?: Partial<Record<BridgeChain, string>>;
+    // (2026-11-03, Elysium) pay with the source chain's native coin (srcOracle6 = OUR price of it) and/or receive the
+    // destination's stablecoin; both absent = the one shape every other route has (stable in, native out)
+    pay?: 'native' | 'stable'; asset?: 'native' | 'stable'; srcOracle6?: bigint;
   }): Promise<SolverQuote & { usd6: bigint; out: bigint; fee6: bigint; etaMs: number }> {
-    const in6 = stableToUsd6(a.amountIn, bridgeCfg(a.from).stable.decimals);
+    const in6 = a.pay === 'native' ? nativeToUsd6(a.amountIn, a.srcOracle6 ?? 0n, bridgeCfg(a.from).nativeDecimals) : stableToUsd6(a.amountIn, bridgeCfg(a.from).stable.decimals);
     if (in6 > MOTION_BRIDGE_MAX6) throw new SolverRefused('above what motion\'s own bridge carries');
-    const j = await ask('/quote', { method: 'POST', body: JSON.stringify({ from: a.from, to: a.to, amount: String(a.amountIn), depositor: a.depositor, recipient: a.recipient }) });
+    const j = await ask('/quote', { method: 'POST', body: JSON.stringify({ from: a.from, to: a.to, amount: String(a.amountIn), depositor: a.depositor, recipient: a.recipient, ...(a.pay === 'native' ? { pay: 'native' } : {}), ...(a.asset === 'stable' ? { asset: 'stable' } : {}) }) });
     if (!j.ok || !j.quote) throw new SolverRefused('motion bridge: ' + String(j.reason || j.error || 'no quote').slice(0, 80));
     const q = j.quote as Quote; const sig = String(j.sig || '');
     const why = quoteProblem(q, sig, {
       pinnedSolver: deps.pinnedKey(), from: a.from, to: a.to, amountIn: a.amountIn, depositor: a.depositor, recipient: a.recipient,
       oracle6: a.oracle6, maxSlipBps: a.maxSlipBps, maxFill6: MOTION_BRIDGE_MAX6, now: deps.now(), deposits: a.deposits,
+      pay: a.pay, asset: a.asset, srcOracle6: a.srcOracle6,
     });
     if (why) throw new SolverRefused('motion bridge: ' + why);
     return { quote: q, sig, usd6: BigInt(q.usd6), out: BigInt(q.dst.amount), fee6: BigInt(q.fee6), etaMs: Math.max(600, bridgeCfg(a.from).inclusionMs + bridgeCfg(a.to).inclusionMs + 400) };
@@ -127,11 +151,11 @@ export function createSolverBridge(deps: SolverDeps) {
   }
 
   /** where a fill stands, for the vault's own job record (quoted → source sent → filled | refunded) */
-  async function status(id: string): Promise<{ state: string; user: string; srcHash?: string; dstHash?: string; refundHash?: string; error?: string }> {
+  async function status(id: string): Promise<{ state: string; user: string; srcHash?: string; dstHash?: string; refundHash?: string; error?: string; delayed?: boolean }> {
     if (!QUOTE_ID.test(id)) throw new SolverRefused('bad quote id');
     const j = await ask('/status?id=' + encodeURIComponent(id));
     const state = String(j.state || '');
-    return { state, user: USER_STATE[state as keyof typeof USER_STATE] || state, srcHash: j.srcHash, dstHash: j.dstHash, refundHash: j.refundHash, error: j.error ? String(j.error).slice(0, 160) : undefined };
+    return { state, user: USER_STATE[state as keyof typeof USER_STATE] || state, srcHash: j.srcHash, dstHash: j.dstHash, refundHash: j.refundHash, error: j.error ? String(j.error).slice(0, 160) : undefined, ...(j.delayed === true ? { delayed: true } : {}) };
   }
 
   /** a gas drop for this wallet's reserve: motion pays a little native (about $0.2 on EVM, 0.003 SOL on Solana, once a day)

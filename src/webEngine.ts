@@ -10,7 +10,7 @@
 // broadcast straight to the RPC; the board server never sees a key or a
 // transaction. Export shows a key only on a real click, in the engine's own
 // dialog, and the engine signs only routes it has verified on chain itself.
-import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, parseGwei, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, decodeFunctionResult, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, parseUnits, parseGwei, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, decodeFunctionResult, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
 import { ed25519 } from '@noble/curves/ed25519';
 import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS, NearSendUnknown } from './nearEngine';
@@ -20,7 +20,7 @@ import { createSolLimit } from './solLimitEngine';
 import { solOrderIdOf, solOrderKeys, solAuthTextProblem } from './solLimitCore';
 import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, solUnwrap, solWsolBalancesFor, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
-import { setRelayProxyBase, relayQuote, evmStepsProblem, solStepsProblem, independentOut, priceProblem, NATIVE_EVM, NATIVE_SOL } from './relayApi';
+import { setRelayProxyBase, relayQuote, relayStatus, evmStepsProblem, solStepsProblem, independentOut, priceProblem, NATIVE_EVM, NATIVE_SOL } from './relayApi';
 import { nativeDonorTxProblem } from './nativeDonor';
 import { bindSwap, evmSwapSend, solSwapSend, swapRequestProblem, relayTokenBalances, type SwapBound } from './relaySwap';
 import {
@@ -66,6 +66,11 @@ import { createLimit, type OrderSigner } from './limitEngine';
 import { orderKey, orderIdOf, authTextProblem, LIMIT_CHAIN_ID, BSC_CHAIN_ID } from './limitCore';
 // one USD balance (2026-10-25, owner-only, NOT released): src/floatEngine.ts + the pure src/floatCore.ts
 import { createFloat, FloatUnknown, type EvmTx, type FloatWallet, type FloatWalletList } from './floatEngine';
+// Earn on the USD balance (2026-11-03, phase 1: Robinhood, USDG, Morpho Steakhouse USDG; NOT released)
+import { createEarn, type EarnWallet } from './earnEngine';
+import { EARN, earnVenueOf, earnTxProblem, type EarnTx } from './earnCore';
+import { kaminoIxsProblem, readReserve, kPinnedOracles, KAMINO_SOL, KAMINO_UNITS, KAMINO_MICRO, type KIx, type ReserveRead } from './earnKamino';
+import { inClickWindow } from './floatCore';
 import { reserveKeyOf, FLOAT_CFG, bucket as floatBucketOf, afterTrade, FLOAT_DLG_RULES, SOL_FWD, SOL_BRIDGE, oraclePrice6 as floatOraclePrice6, solDirectNeedOf, type FloatChain } from './floatCore';
 import { solFloatRoute, solFloatPrice6, solFloatQuote, solFloatSwapIxs, solFloatPayIx, solFloatTokenPayIxs, solFloatSend, solRpc as solFloatRpc, ataOf as solFloatAta } from './solEngine';
 // motion's own bridge (2026-10-26, owner-only, NOT released): src/bridgeSolver.ts + the pure src/motionBridgeCore.ts.
@@ -81,7 +86,16 @@ import { usdBuyArgs } from './floatDirect';
 // …and on Robinhood / BNB (owner 2026-10-29 «давай делай и все что там осталось выкатывай тоже тогда»; src/usdBuyEvm.ts)
 import { evmDirectPlan, probeCall, decodeProbe, evmDirectGuard, evmPriceCheck, routerOut, minOutOf, PROBE_RUNTIME, DirectUnsupported, USD_BUY_ROUTER_ABI, CURVE_BUY_MAX_USD, type EvmChain, type EvmRoute, type EvmPlan } from './usdBuyEvm';
 import { erc20TransferData as bridgeTransferData } from './motionBridgeCore';
-import { solBridgeTransferIxs } from './bridgeSolver';
+import { solBridgeTransferIxs, solBridgeNativeIxs } from './bridgeSolver';
+import { createSolverBridge, SolverRefused, SolverUnknown } from './bridgeSolver';
+import { bridgeCfg as mbCfg, v3Price6 as mbPrice6, NATIVE_TOKEN as MB_NATIVE, NATIVE_SOL_TOKEN as MB_NATIVE_SOL } from './motionBridgeCore';
+import { exitCall as elyExitCall, exitProblem as elyExitProblem, EXIT_DAYS as ELY_EXIT_DAYS } from './elysiumExitCore';
+// Elysium (trade-core.patch E1; owner's yes needed): the pure decisions of the Elysium trade path (src/elysiumCore.ts)
+import * as ELY from './elysiumCore';
+// (2026-11-04) a buy on Elysium paid from the USD balance: the Elysium frame's float.ensure { chain: 'elysium' } (src/elysiumUsdEngine.ts)
+import { createElyUsd } from './elysiumUsdEngine';
+import { createElyHyperFund } from './elysiumHyperFund';   // (release 6) HyperEVM HYPE → Elysium HYPE through motion's bridge, 0.1 %
+import { createElyRoute, pickRoute as pickElyRoute, ELY_ROUTE, ELY_ROUTE_SRC, type SrcChain as ElyRouteSrc, type SrcCoin as ElyRouteCoin, type FloatHealth as ElyFloatHealth } from './elysiumRoute';   // (2026-11-04) the official route into Elysium
 
 // The page says which chain it is on (chain.js loads first); the same vault
 // keys sign on every EVM chain, so only the endpoints and venues change.
@@ -95,6 +109,12 @@ type ChainCfg = {
   ponsFactory?: `0x${string}`; fourManager?: `0x${string}`; fourHelper?: `0x${string}`; flapPortal?: `0x${string}`; infPoolManager?: `0x${string}`;
   standard?: typeof STANDARD;
   knownHooks: string[]; bridgeTokens: string[];
+  // TC-R1 (exec-quality 2026-11-04): send-only roads every signed transaction is ALSO posted to (never a read): the chain's own
+  // sequencer endpoint, which accepts only eth_sendRawTransaction(Conditional) — one hop less than a node that forwards to it
+  sendOnly?: string[];
+  // TC-M1: MEV-protected send roads (private builders / protect RPCs). With MEV protection on for this lane, a signed
+  // transaction goes ONLY to these (and the user's own send-only nodes), never to a public-mempool node
+  privateSend?: string[];
   // F-73 (V12): hard ceilings so a spoofed node / fee read cannot drain a wallet on fees.
   // maxGasPrice ≈ 20× the observed p99 gas price for the chain (feeFloor throws above it);
   // maxFeeWei caps the absolute gas*price a single transaction may pay. Generous on purpose.
@@ -112,6 +132,9 @@ const CHAIN_CFGS: Record<string, ChainCfg> = {
     knownHooks: [...KNOWN_LAUNCHER_HOOKS, '0x745d717620052a97a22deee2e5eba59583f3e0cc'],   // Pons V4, Long (Doppler), DART
     bridgeTokens: ['0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168'],   // WETH, USDG
     maxGasPrice: parseGwei('20'), maxFeeWei: parseEther('0.1'),   // F-73: generous placeholders — confirm against live p99 (this L2's gas is sub-gwei)
+    // measured 2026-11-04 from a browser origin (vault.motion.gift): CORS *, 111-113 ms from Spain (publicnode 44-47 ms, which
+    // forwards to it); answers only sends. First accept wins, so it costs nothing when a closer node is faster
+    sendOnly: ['https://sequencer.mainnet.chain.robinhood.com'],
   },
   bsc: {
     id: BSC.id, key: 'bsc', name: 'BNB Chain', symbol: 'BNB', rpc: BSC.rpc, rpc2: BSC.rpc2, rpcSingle: BSC.rpcSingle, explorer: BSC.explorer, wrapped: BSC.wrapped, stable: BSC.stable,
@@ -122,6 +145,27 @@ const CHAIN_CFGS: Record<string, ChainCfg> = {
     // WBNB, USDT, USDC, USD1, BTCB, ETH — what a bridge leg may pass through on the way to a quote asset
     bridgeTokens: [BSC.wrapped, BSC.stable, '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d', '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d', '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', '0x2170Ed0880ac9A755fd29B2688956BD959F933F8'],
     maxGasPrice: parseGwei('50'), maxFeeWei: parseEther('0.5'),   // F-73: generous placeholders — BSC floor is ~1 gwei, spikes a few gwei; confirm against live p99
+    // TC-M1: private builders / protect RPCs, each measured 2026-11-04 from a browser origin: CORS *, eth_chainId 0x38 in
+    // 44-62 ms p50 (publicnode 55-61 ms). 48 Club (Puissant) + BlockRazor built ~96 % of BSC blocks May–Nov 2025; bloXroute
+    // and PancakeSwap's MEV Guard reach the others. bsc.merkle.io refuses browser preflight (405) and is not listed.
+    // MEV v2 (2026-11-04): BlockRazor's /fullprivacy (straight to the builders, nothing shared with searchers; the default
+    // endpoint discloses hash, logs and state to searchers for backrun refunds). Same host, same CORS *, 61 ms p50.
+    privateSend: ['https://rpc-bsc.48.club', 'https://bsc.blockrazor.xyz/fullprivacy', 'https://bsc.rpc.blxrbdn.com', 'https://bscrpc.pancakeswap.finance'],
+  },
+  // Elysium (trade-core.patch E2; owner's yes needed): Kinetiq's Orbit L2 on HyperEVM, gas HYPE, one sequencer, no public mempool.
+  // It trades ONLY through the ELYSIUM section below (src/elysiumCore.ts: Uniswap's and ElysPump's V3 / V4 pools through the
+  // Universal Router bound to each); none of the Robinhood / BNB venue fields is ever read for it (v3Router / stable are 0x0 so
+  // a path that reached one by mistake would fail instead of trading somewhere else). Nodes: motion's Elysium relay (the lane's
+  // POST /elysium/api/rpc, a keyed provider behind it, trade methods only) — the vault never reads or broadcasts through a
+  // third-party launchpad node (a node that sees a signed transaction first could trade ahead of it: there is no mempool to
+  // race in). TODO 9 Nov: Kinetiq's official public RPC as rpc2 once published, and the explorer.
+  elysium: {
+    id: ELY.ELY_CHAIN_ID, key: 'elysium', name: 'Elysium', symbol: 'HYPE', rpc: 'https://motion.gift/elysium/api/rpc', rpc2: 'https://motion.gift/elysium/api/rpc',
+    explorer: 'https://elysium.kinetiq.xyz/explorer',
+    wrapped: ELY.ELY_WHYPE, stable: ELY.ELY_ZERO, v3Router: ELY.ELY_ZERO,
+    universalRouter: ELY.ELY_VENUES['uni-v4'].router, permit2: ELY.ELY_PERMIT2,
+    knownHooks: [], bridgeTokens: [ELY.ELY_WHYPE],
+    maxGasPrice: ELY.ELY_MAX_GAS_PRICE, maxFeeWei: ELY.ELY_MAX_FEE_WEI,   // F-73: the chain's floor is 0.1 gwei (read 2026-11-03)
   },
 };
 // Host mode: this module is running inside the vault frame (vault.html on the
@@ -144,6 +188,10 @@ const post = (msg: Record<string, unknown>) => { if (HOST && parentWin && parent
 setSolApiBase(() => (HOST && parentOrigin ? parentOrigin : location.origin));
 const urlChain = typeof location !== 'undefined' ? new URL(location.href).searchParams.get('chain') || '' : '';
 const pageChain = String(urlChain || (typeof window !== 'undefined' ? (window as unknown as { TrenchChain?: { key?: string } }).TrenchChain?.key : '') || '');
+// (trade-core.patch E3) an EVM chain this engine does not know is refused — it used to run Robinhood's whole config (nodes, WETH,
+// routers) under another chain's page; the frames that are not an EVM lane of their own (Solana, NEAR, Arc, an empty chain)
+// keep Robinhood's as before
+if (pageChain && !CHAIN_CFGS[pageChain] && !['sol', 'near', 'arc'].includes(pageChain)) throw new Error(`the vault does not trade on ${pageChain.slice(0, 24)} yet`);
 const CFG = CHAIN_CFGS[pageChain] || CHAIN_CFGS.robinhood;
 // the frame opened for the NEAR lane: same wallets, NEAR identities, Rhea DCL swaps (src/nearEngine.ts)
 const NEAR_MODE = pageChain === 'near';
@@ -184,7 +232,14 @@ function rpcUrlsFromSettings(): string[] {
 const sendUrlsFromSettings = (): string[] => [...new Set((rpcPick().send || []).filter(isRpcUrl))].slice(0, 3);
 let rpcUrls = rpcUrlsFromSettings();
 let sendOnlyUrls = sendUrlsFromSettings();
-const broadcastUrls = () => [...new Set([...sendOnlyUrls, ...readUrls()])];
+// TC-M1: with MEV protection on for this lane (and private roads known for it), the public-mempool nodes (the default read nodes
+// AND the user's read nodes) never get the signed bytes first: only the private roads do (MEV v2: the rest only as the fallback).
+// TC-R1: the chain's send-only roads (Robinhood's sequencer) ride along on every send.
+// MEV v2: the user's trades-only nodes are not known to be private (a paid QuickNode / Alchemy node forwards to the public
+// mempool): with protection on they get the bytes with the public roads (hedge / refusal / fallback), not before them
+const broadcastUrls = () => (mevOn() && CFG.privateSend?.length)
+  ? [...new Set(CFG.privateSend)]
+  : [...new Set([...sendOnlyUrls, ...readUrls(), ...(CFG.sendOnly || [])])];
 // Measured on publicnode (2026-10-13): a JSON-RPC *batch* of 4+ heavy calls
 // (quoter eth_call, estimateGas) is refused with a slow 429 (0.2-0.8 s), while
 // the same calls as parallel single requests are served in ~100 ms; the
@@ -272,36 +327,137 @@ const THROTTLED = /rate limit|too many|limit exceeded|429|unexpected token|not v
 // …of those, the ones after which nobody can say whether a node took the transaction (the request may have
 // been processed and only the answer lost). A 429 or a challenge page is a refusal: nothing was accepted.
 const LOST = /failed to fetch|timed out|timeout|aborted|network|load failed/i;
+// review: refusals every node gives alike, from the chain's state (not a node's policy such as its price floor)
+const STATE_REFUSAL = /insufficient funds|nonce too low|nonce has already been used|intrinsic gas too low|exceeds block gas limit/i;
 type SendError = Error & { txState?: TxState; hash?: `0x${string}`; nonce?: number };
 let lastBroadcastNode = '';   // the node that accepted the last signed transaction first (for the timing report)
-async function broadcast(raw: `0x${string}`, round = 0, lostBefore = false): Promise<`0x${string}`> {
-  const errors: string[] = [];
+// MEV v2: how the last signed transaction got out (timing report): 'public' (protection off / no private roads), 'private'
+// (a private road accepted it first and nothing public was asked), 'public-slow' (no private answer within MEV_HEDGE_MS),
+// 'public-refused' (every private road refused it), 'private+public-slow' (a private road won after the hedge fired)
+let lastBroadcastPath = '';
+// ── MEV v2 (mev-v2 2026-11-04): BNB private-first, the SAME signed bytes to the public node as the fallback ──
+// Measured 2026-11-04 from a browser origin (B:\tmp\mev-v2\report.txt): 48 Club (rpc-bsc / rpc), BlockRazor (default and
+// /fullprivacy), bloXroute, PancakeSwap MEV Guard and publicnode all refuse a legacy tx below 0.05 gwei ("minimum needed
+// 50000000") and take it from 0.05 gwei (a 0-BNB throwaway key: the price check answers before the funds check). The
+// 1 gwei (48 Club) / 0.1 gwei (BlockRazor) their eth_gasPrice says is a suggestion, not the floor. In 1,332 live blocks
+// (10 min) both builders included privately sent swaps at 0.05-0.094 gwei (78-80 % of them; p50 0.06), as they do public
+// ones. BNB block = 450 ms; a block is visible on the receipt node (bloXroute) 152 ms p50 / 213 ms p90 after its timestamp.
+// With protection on, a BNB transaction is never priced under MEV_MIN_GAS = that 0.05 gwei floor: today's prices (Fast
+// 0.094, Eco 0.0625) are above it, so nothing costs more; it only stops a node's low eth_gasPrice from making every road
+// refuse. Raising it to 0.1 (BlockRazor's quote) would cost +$0.0008 (Fast) / +$0.005 (Eco) per 200k-gas trade at $686.
+const MEV_MIN_GAS = 50_000_000n;
+// no private road answered in this long → the public roads get the same bytes too (the private roads answer in 55-62 ms
+// p50, 61-68 ms p90, cold 58-170 ms): a slow or hung builder never holds a click longer than this
+const MEV_HEDGE_MS = 250;
+// accepted privately, no receipt seen this long after → the same bytes go to the public node: one block (450 ms) + the
+// receipt node's p90 visibility lag (~220 ms) + margin. Same bytes = same hash, same nonce: at most one ever lands.
+const MEV_FALLBACK_MS = 700;
+// while a privately accepted tx may be unseen by the public node, the wallet's next nonce is never read lower than it + 1
+const MEV_HOLD_MS = 30_000;
+const mevPrivate = () => !SOL_MODE && !NEAR_MODE && !!CFG.privateSend?.length && mevOn();
+// the fallback roads: today's public set (the user's trades-only nodes, the user's read nodes, the default nodes, the chain's
+// send-only roads) minus the private roads already asked
+const publicSendUrls = () => { const asked = new Set(CFG.privateSend || []); return [...new Set([...sendOnlyUrls, ...readUrls(), ...(CFG.sendOnly || [])])].filter((u) => !asked.has(u)); };
+const privHold = new Map<string, { nonce: number; hash: string; at: number; ttl?: number }>();
+const holdNonce = (address: string, n: number) => { const h = privHold.get(address.toLowerCase()); return h && Date.now() - h.at < (h.ttl ?? MEV_HOLD_MS) ? Math.max(n, h.nonce + 1) : n; };
+const releaseHold = (hash: string) => { const k = hash.toLowerCase(); for (const [a, h] of privHold) if (h.hash === k) { privHold.delete(a); holdBus?.postMessage({ a, n: h.nonce, h: k, drop: true }); } };
+// review (mev-v2-review 2026-11-04): the vault frames of one browser (same origin, same chain) share their private holds, so a
+// second tab on the same wallet never signs over a nonce only a private road holds (the public node it reads cannot see it).
+// A copy lives only through the private-only window (the fallback puts the bytes on the public node by then), never 30 s:
+// a copy of a tx that then died can delay the other tab by at most this long, never strand it
+const MEV_SHARED_HOLD_MS = MEV_FALLBACK_MS + 1500;
+const holdBus = (() => {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  const b = new BroadcastChannel('motion-mev-hold.' + CFG.key);
+  b.onmessage = (e: MessageEvent) => {
+    const m = e.data as { a?: unknown; n?: unknown; h?: unknown; drop?: unknown };
+    if (!m || typeof m.a !== 'string' || typeof m.h !== 'string' || typeof m.n !== 'number' || !Number.isSafeInteger(m.n) || m.n < 0) return;
+    const a = m.a.toLowerCase(), hh = m.h.toLowerCase(), h = privHold.get(a);
+    if (m.drop) { if (h && h.hash === hh) privHold.delete(a); return; }
+    if (!h || h.nonce <= m.n) privHold.set(a, { nonce: m.n, hash: hh, at: Date.now(), ttl: MEV_SHARED_HOLD_MS });
+  };
+  (b as { unref?: () => void }).unref?.();   // (Node tests only; browsers have no unref)
+  return b;
+})();
+const includedTx = new Set<string>();   // hashes a receipt was seen for (landed): their fallback is skipped
+// one eth_sendRawTransaction to one road; F-41 (V12): the transaction's hash is keccak256(raw) — computed here, never taken
+// from the node. A node that reports a DIFFERENT hash is lying about what it accepted (a proxy that re-signed or swapped the
+// tx): reject it, never follow or settle a hash we did not compute. Every success returns `local`.
+async function postRaw(u: string, raw: `0x${string}`, local: `0x${string}`, errors: string[]): Promise<`0x${string}`> {
+  const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_sendRawTransaction', params: [raw] }), signal: AbortSignal.timeout(8000) }).then((x) => x.json());
+  if (r?.result) { if (String(r.result).toLowerCase() !== local.toLowerCase()) { errors.push('node returned a different transaction hash'); throw new Error('node returned a different transaction hash'); } return local; }
+  const msg = String(r?.error?.message || 'no result');
+  // a node that already has it (from a faster sibling, or from the first round) holds it: that is a success
+  if (/already known|known transaction|already imported/i.test(msg)) return local;
+  errors.push(msg); throw new Error(msg);
+}
+// MEV v2: a privately accepted transaction that no receipt shows MEV_FALLBACK_MS later goes to the public roads, same bytes.
+// "accepted but never included", "accepted then dropped" (revert protection), a builder that lost the slot: all end here.
+// Its nonce is held for the wallet meanwhile (holdNonce), so a fresh nonce read from the public node — which cannot see a
+// privately pending tx — never re-uses it. A definitive public refusal (the tx itself is bad) drops the hold and the cached
+// counter, so the next send re-reads the chain and can never queue behind a nonce nobody holds.
+function mevFallback(raw: `0x${string}`, hash: `0x${string}`, who?: { from: string; nonce: number }) {
+  if (who) { const k = who.from.toLowerCase(), h = privHold.get(k); if (!h || h.nonce <= who.nonce) { privHold.set(k, { nonce: who.nonce, hash: hash.toLowerCase(), at: Date.now() }); holdBus?.postMessage({ a: k, n: who.nonce, h: hash.toLowerCase() }); } }
+  const run = async (attempt: number): Promise<void> => {
+    if (includedTx.has(hash.toLowerCase())) { releaseHold(hash); return; }
+    const seen = await Promise.race([receiptClient().getTransactionReceipt({ hash }).then(() => true, () => false), new Promise<boolean>((r) => setTimeout(() => r(false), 400))]);
+    if (seen) { includedTx.add(hash.toLowerCase()); releaseHold(hash); return; }
+    const errs: string[] = [];
+    const outs = await Promise.allSettled(publicSendUrls().map((u) => postRaw(u, raw, hash, errs)));
+    // taken (or these very bytes already on chain: "nonce too low") → the hold stays until the receipt or MEV_HOLD_MS
+    if (outs.some((o) => o.status === 'fulfilled') || errs.some((e) => /nonce too low|nonce has already been used/i.test(e))) return;
+    if (attempt < 2 && errs.length > 0 && errs.every((e) => THROTTLED.test(e))) { setTimeout(() => { run(attempt + 1).catch(() => {}); }, 300 + attempt * 600); return; }
+    // review: this nonce is free again, so any later hold of this wallet (a tx signed at nonce + 1 meanwhile) sits behind a gap:
+    // drop it too, or the next send is held above the gap and the wallet queues behind a nonce nobody holds (up to MEV_HOLD_MS)
+    releaseHold(hash);
+    if (who) { const k = who.from.toLowerCase(), h = privHold.get(k); if (h && h.nonce >= who.nonce) { privHold.delete(k); holdBus?.postMessage({ a: k, n: h.nonce, h: h.hash, drop: true }); } nonces.delete(k); }
+  };
+  setTimeout(() => { run(0).catch(() => {}); }, MEV_FALLBACK_MS);
+}
+async function broadcast(raw: `0x${string}`, round = 0, lostBefore = false, who?: { from: string; nonce: number }): Promise<`0x${string}`> {
+  const errP: string[] = [], errQ: string[] = [];
   const local = keccak256(raw);   // the transaction's own hash: what a node that "already knows" it is holding
-  const attempts = broadcastUrls().map((u) => ({ u, p: (async () => {
-    const r = await fetch(u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_sendRawTransaction', params: [raw] }), signal: AbortSignal.timeout(8000) }).then((x) => x.json());
-    // F-41 (V12): the transaction's hash is keccak256(raw) — computed here, never taken from the node. A node that
-    // reports a DIFFERENT hash is lying about what it accepted (a proxy that re-signed or swapped the tx): reject it,
-    // never follow or settle a hash we did not compute. Every success returns `local`.
-    if (r?.result) { if (String(r.result).toLowerCase() !== local.toLowerCase()) { errors.push('node returned a different transaction hash'); throw new Error('node returned a different transaction hash'); } return local; }
-    const msg = String(r?.error?.message || 'no result');
-    // a node that already has it (from a faster sibling, or from the first round) holds it: that is a success
-    if (/already known|known transaction|already imported/i.test(msg)) return local;
-    errors.push(msg); throw new Error(msg);
-  })() }));
+  // MEV v2: protection on → the private roads first; the public roads (and the user's trades-only nodes) only on the
+  // hedge (no private answer in MEV_HEDGE_MS), on a refusal by every private road, or as the fallback after MEV_FALLBACK_MS
+  const priv = mevPrivate();
+  const first = broadcastUrls(), second = priv ? publicSendUrls() : [];
   // first fulfilled wins; only when every node refused does the send fail (Promise.any, spelled out for the lib target)
   return new Promise((resolve, reject) => {
-    let left = attempts.length, won = false;
-    for (const { u, p } of attempts) p.then((h) => { if (!won) { won = true; lastBroadcastNode = u.replace(/^https:\/\//, ''); } resolve(h); }, (e: Error) => { if (!errors.includes(e?.message)) errors.push(String(e?.message || e)); if (--left === 0) {
+    let left = first.length, won = false, pub = false, why = '', pubLeft = 0, done = false;
+    const win = (u: string, h: `0x${string}`, isPublic: boolean) => {
+      if (!won) {
+        won = true; if (hedge) clearTimeout(hedge); lastBroadcastNode = u.replace(/^https:\/\//, '');
+        lastBroadcastPath = !priv ? 'public' : isPublic ? 'public-' + why : pub ? 'private+public-' + why : 'private';
+        if (priv && !pub) mevFallback(raw, local, who);   // the public roads never saw it: arm the fallback
+      }
+      resolve(h);
+    };
+    const lose = (e: Error, isPublic = false) => {
+      if (done) return;
+      const m = String(e?.message || e); if (!errP.includes(m) && !errQ.includes(m)) (isPublic ? errQ : errP).push(m);
+      if (isPublic) pubLeft -= 1;
+      // review: every public road refused for a reason of the chain's STATE (no funds, nonce used, gas below intrinsic) — the
+      // private roads read the same state, so one that hangs or failed to fetch (CSP, outage) holds nothing: settle now with
+      // that verdict, never 8 s later as "unknown"
+      const definite = priv && pub && !won && pubLeft === 0 && errQ.length > 0 && errQ.every((x) => STATE_REFUSAL.test(x) && !THROTTLED.test(x) && !LOST.test(x));
+      if (--left > 0 && !definite) return;
+      if (priv && !pub && second.length) { goPublic('refused'); return; }
+      done = true;
+      if (hedge) clearTimeout(hedge);
+      const errors = [...errQ, ...errP];   // the public verdict first: it is the one the tx would get today
       const verdict = errors.find((x) => !THROTTLED.test(x)) || errors[0] || 'broadcast failed';
       const throttled = errors.length > 0 && errors.every((x) => THROTTLED.test(x));
-      const lost = lostBefore || errors.some((x) => LOST.test(x));
-      if (round < 2 && throttled) { setTimeout(() => broadcast(raw, round + 1, lost).then(resolve, reject), (round === 0 ? 250 : 900) + Math.floor(Math.random() * 250)); return; }
+      const lost = lostBefore || (!definite && errors.some((x) => LOST.test(x)));
+      if (round < 2 && throttled) { setTimeout(() => broadcast(raw, round + 1, lost, who).then(resolve, reject), (round === 0 ? 250 : 900) + Math.floor(Math.random() * 250)); return; }
       // An answer lost in flight (a timeout, a dropped socket) in either round means a node may hold the
       // transaction: round 1's 429s say nothing about round 0's lost answers. Unknown, with its hash — never
       // "refused" (which invites the press that would buy twice). A nonce verdict goes to the hash lookup instead.
       if (lost && (throttled || !/nonce|underpriced|known/i.test(verdict))) { reject(Object.assign(new Error(`Broadcast outcome unknown (${verdict.slice(0, 60)}) — check the explorer before trying again`), { txState: 'unknown' as TxState, hash: local })); return; }
       reject(Object.assign(new Error(verdict), { txState: 'signed' as TxState, hash: local }));
-    } });
+    };
+    const goPublic = (reason: string) => { if (pub || won || done) return; pub = true; why = reason; left += second.length; pubLeft = second.length; for (const u of second) postRaw(u, raw, local, errQ).then((h) => win(u, h, true), (e: Error) => lose(e, true)); };
+    const hedge = priv && second.length ? setTimeout(() => goPublic('slow'), MEV_HEDGE_MS) : null;
+    for (const u of first) postRaw(u, raw, local, errP).then((h) => win(u, h, false), (e: Error) => lose(e));
   });
 }
 // prepare (nonce, gas) → sign locally → broadcast everywhere: what writeContract does, minus the single-node send
@@ -312,14 +468,15 @@ const nonces = new Map<string, { n: number; at: number }>();
 const nonceReads = new Map<string, Promise<number>>();   // one read in flight per wallet: the prefetch at click time and the send share it
 async function nextNonce(address: `0x${string}`, fresh = false): Promise<number> {
   const k = address.toLowerCase(); const hit = nonces.get(k);
-  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.n;
+  if (!fresh && hit && Date.now() - hit.at < 30_000) return holdNonce(k, hit.n);   // review: a hold another tab shared counts too
   const inflight = nonceReads.get(k);
   if (inflight && !fresh) return inflight;
   const asked = Date.now();
   const p = publicClient.getTransactionCount({ address, blockTag: 'pending' }).then((n) => {
     // a send accepted while this read was in flight (a prewarm read racing a click) has already moved the
     // counter past what the node counted: keep the higher one, or the next send re-signs after "nonce too low"
-    const now = nonces.get(k); const v = !fresh && now && now.at >= asked ? Math.max(n, now.n) : n;
+    // MEV v2: the public node does not count a tx a private road holds: never below that tx's nonce + 1 (holdNonce)
+    const now = nonces.get(k); const v = holdNonce(k, !fresh && now && now.at >= asked ? Math.max(n, now.n) : n);
     nonces.set(k, { n: v, at: Date.now() }); return v;
   }).finally(() => { if (nonceReads.get(k) === p) nonceReads.delete(k); });
   nonceReads.set(k, p);
@@ -335,7 +492,7 @@ async function nonceSheet(addresses: `0x${string}`[]) {
     if (!Array.isArray(j)) return;
     c.forEach((a, k) => {
       const x = j.find((y: any) => y?.id === k); if (!x?.result) return;
-      const n = Number(BigInt(x.result)); const now = nonces.get(lc(a));
+      const n = holdNonce(a, Number(BigInt(x.result))); const now = nonces.get(lc(a));
       if (!(now && now.at >= asked)) nonces.set(lc(a), { n, at: Date.now() });   // a send meanwhile moved it: keep that
     });
   }));
@@ -390,7 +547,7 @@ async function signAndSend(wallet: ReturnType<typeof createWalletClient>, accoun
       const t2 = performance.now();
       clock?.note('signed');
       let hash: `0x${string}`;
-      try { hash = await broadcast(raw); } catch (e) { throw Object.assign(e as SendError, { nonce }); }
+      try { hash = await broadcast(raw, 0, false, { from: account.address, nonce }); } catch (e) { throw Object.assign(e as SendError, { nonce }); }
       clock?.mark('nonce', t1 - (fresh ? t0 : tq)); clock?.mark('sign', t2 - t1); clock?.mark('broadcast', performance.now() - t2);
       noteNonceUsed(account.address, nonce);
       clock?.note('submitted', hash);
@@ -449,7 +606,7 @@ async function landed(hash: `0x${string}`, timeoutMs = 60_000) {
   const t0 = Date.now();
   for (let i = 0; ; i += 1) {
     const r = await receiptClient().getTransactionReceipt({ hash }).catch(() => null);
-    if (r) return r;
+    if (r) { includedTx.add(hash.toLowerCase()); releaseHold(hash); return r; }   // MEV v2: no public fallback for a landed tx
     if (Date.now() - t0 > timeoutMs) throw new Error('Transaction not confirmed in time');
     await new Promise((res) => setTimeout(res, i < 25 ? 120 : i < 60 ? 400 : 1500));
   }
@@ -1103,7 +1260,9 @@ async function feeFloor(): Promise<bigint> {
 }
 async function feeFor(boost = 1): Promise<bigint> {
   const floor = await feeFloor();
-  return (floor * BigInt(Math.round(Math.max(1, boost) * 100))) / 100n;
+  const p = (floor * BigInt(Math.round(Math.max(1, boost) * 100))) / 100n;
+  // MEV v2: with BNB protection on, never under MEV_MIN_GAS (0.05 gwei, the floor every road enforces)
+  return p < MEV_MIN_GAS && mevPrivate() ? MEV_MIN_GAS : p;
 }
 // While a trader is on a page (prewarm was called in the last minute) the fee
 // stays fresh and every broadcast node gets a cheap ping every 20 s, so the TLS
@@ -1137,11 +1296,48 @@ async function unwrap(id: string, amountWei: bigint) { const { account, client }
 
 // ── settings ──
 type RpcPick = { primary?: string; secondary?: string; send?: string[] };
-type Settings = { slippage: number; gasBoost: number; turbo: boolean; rpcs?: Record<string, RpcPick>; solTip?: number; solPriority?: number; sendPool?: number };
+type Settings = { slippage: number; gasBoost: number; turbo: boolean; rpcs?: Record<string, RpcPick>; solTip?: number; solPriority?: number; sendPool?: number;
+  // TC-S1 / TC-S2 / TC-M1 (exec-quality 2026-11-04), each keyed by lane (robinhood / bsc / sol / near / elysium):
+  // slipLane = the manual slippage of that lane (absent = the global `slippage`, as before); slipAuto = the page may pass a
+  // per-order slippage from the coin's own trades, used only when it is TIGHTER than the manual one (never looser, so a hostile
+  // page can only make orders revert, never widen them); mev = MEV protection (bsc: private builders only; sol: Jito bundle only)
+  slipLane?: Record<string, number>; slipAuto?: Record<string, boolean>; mev?: Record<string, boolean> };
 const loadSettings = (): Settings => { try { return { slippage: 12, gasBoost: 1.5, turbo: false, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { slippage: 12, gasBoost: 1.5, turbo: false }; } };
 const saveSettings = (s: Partial<Settings>) => { const next = { ...loadSettings(), ...s }; next.solTip = Math.min(0.1, Math.max(0, Number(next.solTip) || 0)); next.solPriority = Math.min(10_000_000, Math.max(0, Math.floor(Number(next.solPriority) || 0))); next.slippage = Math.min(100, Math.max(0.1, Number(next.slippage) || 12)); next.gasBoost = Math.min(5, Math.max(1, Number(next.gasBoost) || 1)); { const sp = Math.floor(Number(next.sendPool)); if (sp >= 1) next.sendPool = Math.min(25, sp); else delete next.sendPool; }
+  { const lanes = ['robinhood', 'bsc', 'sol', 'near', 'elysium'];
+    const bools = (v: unknown) => { const o: Record<string, boolean> = {}; if (v && typeof v === 'object') for (const k of lanes) if (typeof (v as Record<string, unknown>)[k] === 'boolean') o[k] = (v as Record<string, boolean>)[k]; return o; };
+    const pcts = (v: unknown) => { const o: Record<string, number> = {}; if (v && typeof v === 'object') for (const k of lanes) { const n = Number((v as Record<string, unknown>)[k]); if (Number.isFinite(n) && n >= 0.1 && n <= 100) o[k] = n; } return o; };
+    next.mev = bools(next.mev); next.slipAuto = bools(next.slipAuto); next.slipLane = pcts(next.slipLane); }
   if (next.rpcs && typeof next.rpcs === 'object') for (const k of Object.keys(next.rpcs)) { const v = next.rpcs[k] || {}; next.rpcs[k] = { ...(isRpcUrl(v.primary) ? { primary: v.primary } : {}), ...(isRpcUrl(v.secondary) ? { secondary: v.secondary } : {}), ...(Array.isArray(v.send) && v.send.filter(isRpcUrl).length ? { send: [...new Set(v.send.filter(isRpcUrl))].slice(0, 3) } : {}) }; }
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); return next; };
+// TC-M1 / TC-M2 (exec-quality 2026-11-04): MEV protection per lane (bsc: private builders only; sol: Jito bundle-only). The private
+// roads answer as fast as the public node (send RTT), but inclusion is unproven; the vault's dialog asks once to turn it OFF.
+// exec-quality review 2026-11-04: OFF on every lane until the owner's landing A/B (48 Club answers eth_gasPrice 1 gwei, BlockRazor 0.1 gwei,
+// the engine signs ~0.094 gwei on BNB: a private-only send may be refused or never included). Not advertised in `features` yet.
+// MEV v2 (mev-v2 2026-11-04): BNB ON — private-first with the public fallback of the same bytes after MEV_FALLBACK_MS, the
+// hedge after MEV_HEDGE_MS and the nonce hold, so a private road that refuses, stalls or never includes costs at most
+// ~0.7 s of landing, never a stuck wallet. Solana stays OFF (TC-M2: Jito bundle-only has no fallback).
+// mev-v2-review: shipped OFF and not offered until the owner's real-send GO (report.txt §5); the flip is bsc: true here,
+// which also makes the vault advertise the switch on BNB
+const MEV_DEFAULT: Record<string, boolean> = { bsc: false, sol: false };
+// the per-lane switches this vault has; 'mev' only where it has an effect and a fallback (BNB), and only once it is the default
+const vaultFeatures = () => (MEV_DEFAULT.bsc && laneKey() === 'bsc' ? ['slipLane', 'slipAuto', 'mev'] : ['slipLane', 'slipAuto']);
+const mevOn = (s: Settings = loadSettings()) => { const v = s.mev?.[laneKey()]; return typeof v === 'boolean' ? v : MEV_DEFAULT[laneKey()] === true; };
+// TC-S1: the lane's own manual slippage (absent = the global one, as before); Elysium has its own default (review r2 N5: the
+// global 12 % saved by any settings write must not count as the user's choice there)
+const LANE_SLIP_DEFAULT: Record<string, number> = { elysium: 5 };
+const laneSlip = (s: Settings) => { const v = Number(s.slipLane?.[laneKey()]); return v > 0 ? v : LANE_SLIP_DEFAULT[laneKey()] ?? s.slippage; };
+// TC-S2: Auto. The page passes the slippage the coin's own recent trades call for (motion-ios domain/execution.ts autoSlippage,
+// the classic token.js the same rule) as opts.slippage; it is used only when Auto is on for the lane, never below the lane's
+// floor and never above the manual setting — Auto can only tighten an order, so a hostile page gains nothing by lying.
+const AUTO_FLOOR: Record<string, number> = { robinhood: 2, bsc: 1.5, sol: 3, near: 1, elysium: 3 };
+const orderSlip = (s: Settings, opts?: unknown) => {
+  const manual = laneSlip(s); if (!s.slipAuto?.[laneKey()]) return manual;
+  const a = Number(opts && typeof opts === 'object' ? (opts as { slippage?: unknown }).slippage : NaN);
+  return Number.isFinite(a) && a > 0 ? Math.min(manual, Math.max(AUTO_FLOOR[laneKey()] ?? 1, a)) : manual;
+};
+// the order's settings: this lane's slippage (Auto applied) and its effective MEV switch (solEngine reads mev.sol)
+const tradeSettings = (opts?: unknown): Settings => { const s = loadSettings(); return { ...s, slippage: orderSlip(s, opts), mev: { ...s.mev, [laneKey()]: mevOn(s) } }; };
 // the NEAR frame reads its nodes from Settings → RPC too (rpcs.near): the user's primary / fallback in front of the
 // engine's defaults, trades-only nodes for broadcasts (the EVM path's rpcPick reads CFG.key, which is not 'near')
 const applyNearRpcs = () => { const p = loadSettings().rpcs?.near || {}; return setNearRpcs([p.primary, p.secondary], p.send || []); };
@@ -1162,7 +1358,9 @@ type Route =
   // Standard: the curve through its router, or (graduated) its V4 pool over ETH → USDG → stock → coin
   | ({ type: 'standard'; stage: 'curve' | 'pool'; router: `0x${string}`; factory: `0x${string}`; curve: `0x${string}`; stock: `0x${string}`; poolKey: V4PoolKey | null; stockPool: StdHop; ethPool: StdHop; feeBps: number; creatorTaxBps: number; snipeTaxBps: number } & Bridge)
   | ({ type: 'v2'; router: `0x${string}`; quoteToken: `0x${string}`; path: `0x${string}`[] } & Bridge)
-  | ({ type: 'inf'; poolKey: InfPoolKey; pair: 'native' | 'weth' | 'other'; quoteToken: `0x${string}` } & Bridge);
+  | ({ type: 'inf'; poolKey: InfPoolKey; pair: 'native' | 'weth' | 'other'; quoteToken: `0x${string}` } & Bridge)
+  // Elysium (trade-core.patch E4): signed only by the ELYSIUM section, only in the Elysium frame
+  | (ELY.ElyRoute & Bridge);
 // ETH → … → quote, exactly as the indexer resolved it (one hop for most assets,
 // two when the stock only pairs with USDG)
 const bridgeOf = (r: Bridge, quote: string) => {
@@ -1194,6 +1392,7 @@ const wordInt = (data: string, i: number) => BigInt('0x' + data.slice(2 + 64 * i
 const rawCall = async (to: `0x${string}`, data: `0x${string}`) => (await publicClient.call({ to, data })).data || '0x';
 const reject = (why: string): never => { throw new Error(`Route rejected: ${why}`); };
 async function checkRoute(token: `0x${string}`, route: Route): Promise<void> {
+  if (CFG.key === 'elysium' || route.type === 'ely') { const why = CFG.key !== 'elysium' ? 'an Elysium route outside the Elysium frame' : ELY.elyRouteProblem(token, route); if (why) reject(why); return; }   // (trade-core.patch E5)
   const knownQuote = (q?: string) => !q || same(q, ZERO) || BRIDGE_TOKENS.has(lc(q));
   let quote: string | undefined;
   if (route.type === 'pons') {
@@ -1330,7 +1529,7 @@ function verifyRoute(token: `0x${string}`, route: Route): Promise<void> {
 const OWN_FRESH = 10_000, OWN_MAX = 60_000, OWN_TIMEOUT = 3_000;
 type OwnEntry = { at: number; p: Promise<Route | null>; v?: Route; vAt?: number; err?: string; empty?: boolean };
 const ownRoutes = new Map<string, OwnEntry>();
-const routeApi = () => (HOST && parentOrigin ? parentOrigin : location.origin) + (CFG.key === 'bsc' ? '/bsc' : '') + '/api';
+const routeApi = () => (HOST && parentOrigin ? parentOrigin : location.origin) + (CFG.key === 'bsc' ? '/bsc' : CFG.key === 'elysium' ? '/elysium' : '') + '/api';   // (trade-core.patch E6: + '/elysium')
 // (fix2 p2-speed-03, 2026-11-01) a FINISHED read that left no usable copy (motion answered "still looking" / "still measuring",
 // or nothing) is not served as fresh for OWN_FRESH: it is read again after OWN_RETRY_MS. It used to stand 10 s — the token
 // page's prewarm met a cold coin's 202, and the click a few seconds later, holding motion's now-executable proposal, was
@@ -1409,6 +1608,7 @@ const hopConfirmed = new Map<string, number>();
 const MAX_UINT256 = (1n << 256n) - 1n;
 const armed = new Set<string>();
 async function armSellPath(acct: Account, token: `0x${string}`, route: Route, attempt = 0, idx = 0) {
+  if (CFG.key === 'elysium' || route.type === 'ely') return;   // (trade-core.patch E7) Elysium sells approve exactly their amount, at sell time
   const account = accountOf(acct);
   const key = `${account.address}:${token}:${route.type}`.toLowerCase();
   if (armed.has(key)) return;
@@ -1499,6 +1699,7 @@ function tradeBalances(shared: Shared, side: 'buy' | 'sell', token: `0x${string}
   });
 }
 async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings, click: Shared = makeShared([acct.address])): Promise<`0x${string}`> {
+  if (CFG.key === 'elysium' || route.type === 'ely') return elyTradeOne(acct, side, token, size, route, s, click);   // (trade-core.patch E8)
   const account = accountOf(acct);
   // the click as this wallet sees it: shared reads, plus its own stage clock and transaction states
   const shared = click.view(account.address);
@@ -2448,6 +2649,7 @@ type Preview = {
   simulated: 'ok' | 'failed' | 'skipped'; error?: string; notes: string[];
 };
 async function previewOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings): Promise<Preview> {
+  if (CFG.key === 'elysium' || route.type === 'ely') return elyPreviewOne(acct, side, token, size, route, s);   // (trade-core.patch E8)
   const account = accountOf(acct);
   const stateOverride = overrideFor(account.address);
   const slippageBps = BigInt(Math.round(s.slippage * 100));
@@ -2736,7 +2938,7 @@ async function preview(side: 'buy' | 'sell', token: string, size: number, accoun
     const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
     const targets = list.filter((a) => ids.includes(a.id));
     if (!targets.length) throw new Error('No wallet selected');
-    const s = loadSettings(); const t0 = performance.now();
+    const s = tradeSettings(); const t0 = performance.now();
     const route = await solRoute(token, hint);
     const previews = await Promise.all(targets.map((a) => solPreviewOne(a, side, route, size, s)));
     return { ok: true, ms: Math.round(performance.now() - t0), route: 'sol-' + route.venue, slippage: s.slippage, previews };
@@ -2745,7 +2947,7 @@ async function preview(side: 'buy' | 'sell', token: string, size: number, accoun
     const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
     const targets = list.filter((a) => ids.includes(a.id));
     if (!targets.length) throw new Error('No wallet selected');
-    const s = loadSettings(); const t0 = performance.now();
+    const s = tradeSettings(); const t0 = performance.now();
     const route = await nearRoute(token, hint);
     const previews = await Promise.all(targets.map((a) => nearPreviewOne(a, side, route, size, s.slippage).catch((e) => ({ name: a.name, address: nearAccountId(a) || a.address, side, venue: 'Rhea DCL', contract: ZERO, method: '', amountIn: size, amountInLabel: '', expected: 0, min: 0, pricePerToken: 0, gas: 0, gasPriceGwei: 0, gasEth: 0, balanceEth: 0, funded: false, error: shortError(e) })))) as unknown as Preview[];
     return { ok: true, ms: Math.round(performance.now() - t0), route: 'near-dcl', slippage: s.slippage, previews };
@@ -2755,7 +2957,7 @@ async function preview(side: 'buy' | 'sell', token: string, size: number, accoun
   const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
   const targets = list.filter((a) => ids.includes(a.id));
   if (!targets.length) throw new Error('No wallet selected');
-  const s = loadSettings();
+  const s = tradeSettings();
   const t0 = performance.now();
   const route = await routeFor(addr, hint);
   const previews = await Promise.all(targets.map(async (a) => {
@@ -2887,7 +3089,7 @@ async function trade(side: 'buy' | 'sell', token: string, size: number, accountI
     // V13 VA-2: the size is checked before anything is recorded or asked (`buy(t, -1e300)` zeroed the hourly ledger)
     const n = typeof size === 'string' ? Number(size) : size;   // a numeric string from an older caller counts as its number
     const bad = tradeSizeProblem(side, n, MAX_BUY[laneKey()] ?? MAX_BUY_ETH); if (bad) throw new Error(bad);
-    await tradeLimits(side, n, loadSettings(), walletCount(accountIds)); return await tradeInner(side, token, n, accountIds, hint, opts);
+    await tradeLimits(side, n, tradeSettings(opts), walletCount(accountIds)); return await tradeInner(side, token, n, accountIds, hint, opts);
   } finally { tradesInFlight -= 1; post({ t: 'busy', v: tradesInFlight > 0 }); }
 }
 async function tradeInner(side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown, opts?: unknown) {
@@ -2897,7 +3099,7 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
     const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
     const targets = list.filter((a) => ids.includes(a.id));
     if (!targets.length) throw new Error('No wallet selected');
-    const s = loadSettings(); const t0 = performance.now();
+    const s = tradeSettings(opts); const t0 = performance.now();
     // the same per-wallet states, double-press guard and outcome as the EVM path ('trench:tx' events, keyed by the
     // wallet's Solana address); a send no node acknowledged is 'unknown' with its signature, followed, never re-sent
     const id = clickId(opts); const solOf = (a: Account) => solAddressOf(a) || a.address;
@@ -2929,32 +3131,43 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
     const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
     const targets = list.filter((a) => ids.includes(a.id));
     if (!targets.length) throw new Error('No wallet selected');
-    const s = loadSettings(); const t0 = performance.now();
-    const route = await nearRoute(token, hint);
-    const nearFollow = (hash: string) => (async () => { for (let i = 0; i < 80; i++) { await new Promise((r) => setTimeout(r, 1500)); const r = await nearReceipt(hash).catch(() => null); if (r && !r.pending) return; } })();
+    const s = tradeSettings(opts); const t0 = performance.now();
+    // (native-scenarios 2026-11-04) the same per-wallet states as the EVM and Solana lanes ('trench:tx' { id, address, state }).
+    // Without them nothing followed a NEAR order: the app's trade card sat on "Submitted" and the website's card under a
+    // "Preparing" strip, although the swap had settled seconds later. Events only — what is signed and sent is unchanged.
+    const id = clickId(opts); const nearOf = (a: Account) => nearAccountId(a) || a.address;
+    for (const a of targets) txEvent({ id, address: nearOf(a), state: 'preparing' });
+    let route: Awaited<ReturnType<typeof nearRoute>>;
+    try { route = await nearRoute(token, hint); }
+    catch (e) { const error = shortError(e); for (const a of targets) txEvent({ id, address: nearOf(a), state: 'not_started', error }); throw e; }
+    // the chain's verdict as an event. nearReceipt answers from the watcher nearTradeOne started (no RPC call while it runs),
+    // so it is asked every 400 ms for the first 8 s (a Rhea swap settles in ~2–6 s), then every 1.5 s — 120.5 s in all (it was 80 × 1.5 s = 120 s: the double-press hold is never shorter)
+    const nearFollow = (hash: string, address: string) => (async () => { for (let i = 0; i < 95; i++) { await new Promise((r) => setTimeout(r, i < 20 ? 400 : 1500)); const r = (await nearReceipt(hash).catch(() => null)) as { pending?: boolean; status?: string; error?: string } | null; if (r && !r.pending) { txEvent({ id, address, state: r.status === 'success' ? 'confirmed' : 'reverted', hash, ...(r.error ? { error: String(r.error) } : {}) }); return; } } })();
     const results: Result[] = await pooled(targets, poolSize('near'), async (a) => {
-      const address = nearAccountId(a) || a.address;
+      const address = nearOf(a);
       // one trade per wallet+token+side in flight, held across tabs and until the receipt lands (as on the EVM lanes)
       const key = `near:${side}:${lc(token)}:${address}`;
-      const busy = (): Result => ({ name: a.name, address, ok: false, error: `A ${side} of this token from this wallet is still being sent`, state: 'not_started' as TxState });
+      const busy = (): Result => { const error = `A ${side} of this token from this wallet is still being sent`; txEvent({ id, address, state: 'not_started', error }); return { name: a.name, address, ok: false, error, state: 'not_started' as TxState }; };
       return tradeGuard<Result>(key, busy, async () => {
-        try { const { hash } = await nearTradeOne(a, side, route, size, s.slippage); return { ret: { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }, landed: nearFollow(hash) }; }
+        try { const { hash } = await nearTradeOne(a, side, route, size, s.slippage); txEvent({ id, address, state: 'submitted', hash }); return { ret: { name: a.name, address, ok: true, hash, state: 'submitted' as TxState }, landed: nearFollow(hash, address) }; }
         catch (e) {
           const unknown = e instanceof NearSendUnknown && e.hash ? e.hash : '';
-          const state: TxState = unknown ? 'unknown' : 'not_started';
-          return { ret: { name: a.name, address, ok: false, error: shortError(e), state, ...(unknown ? { hash: unknown } : {}) }, landed: unknown ? nearFollow(unknown) : null };
+          const state: TxState = unknown ? 'unknown' : 'not_started'; const error = shortError(e);
+          txEvent({ id, address, state, error, ...(unknown ? { hash: unknown } : {}) });
+          return { ret: { name: a.name, address, ok: false, error, state, ...(unknown ? { hash: unknown } : {}) }, landed: unknown ? nearFollow(unknown, address) : null };
         }
       });
     });
     scheduleWatch(1200);
-    return { ok: true, ms: Math.round(performance.now() - t0), results, route: 'near-dcl', timing: null };
+    const sent = results.filter((x) => x.ok).length;
+    return { ok: true, id, ms: Math.round(performance.now() - t0), results, route: 'near-dcl', timing: null, outcome: sent === results.length ? 'all' : sent ? 'partial' : 'none' };
   }
   const addr = token.toLowerCase() as `0x${string}`;
   if (!/^0x[0-9a-f]{40}$/.test(addr)) throw new Error('Invalid token address');
   const ids = accountIds?.length ? accountIds : meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : [];
   const targets = list.filter((a) => ids.includes(a.id));
   if (!targets.length) throw new Error('No wallet selected');
-  const s = loadSettings();
+  const s = tradeSettings(opts);
   const t0 = performance.now();
   const id = clickId(opts);
   for (const a of targets) txEvent({ id, address: a.address, state: 'preparing' });
@@ -3014,7 +3227,7 @@ async function tradeInner(side: 'buy' | 'sell', token: string, size: number, acc
   // (first node to accept), approve (an unarmed sell's approvals incl. their receipts, 0 when armed),
   // total; node = the node that accepted first; wallets = count; mode.
   const t = shared.t;
-  const timing = { route: t.route ?? 0, balances: t.balances ?? 0, verify: t.verify ?? 0, quote: t.quote ?? 0, gas: t.gas ?? 0, approve: t.approve ?? 0, nonce: t.nonce ?? 0, sign: t.sign ?? 0, broadcast: t.broadcast ?? 0, total: Math.round(performance.now() - t0), wallets: targets.length, node: lastBroadcastNode, mode: s.turbo ? 'turbo' : 'fast', privy: targets.some((a) => !!a.ext) };
+  const timing = { route: t.route ?? 0, balances: t.balances ?? 0, verify: t.verify ?? 0, quote: t.quote ?? 0, gas: t.gas ?? 0, approve: t.approve ?? 0, nonce: t.nonce ?? 0, sign: t.sign ?? 0, broadcast: t.broadcast ?? 0, total: Math.round(performance.now() - t0), wallets: targets.length, node: lastBroadcastNode, path: lastBroadcastPath, mode: s.turbo ? 'turbo' : 'fast', privy: targets.some((a) => !!a.ext) };
   const sent = results.filter((x) => x.ok).length;
   return { ok: true, id, ms: timing.total, results, route: route.type, timing, outcome: sent === results.length ? 'all' : sent ? 'partial' : 'none' };
 }
@@ -3038,9 +3251,367 @@ function watchReceipt(hash: string, id: string, address: string): Promise<{ stat
   receiptWaits.set(k, p);
   return p;
 }
+// ── ELYSIUM (trade-core.patch E9; owner's yes needed; the decisions are src/elysiumCore.ts) ──
+// The Elysium frame (chain 99901, gas HYPE) trades ONLY here; Robinhood / BNB never reach this code and this code never runs on
+// them (tradeOne / previewOne / checkRoute / armSellPath send an Elysium frame or an 'ely' route here first, nothing else).
+// One click, per wallet (r2 = the independent review's fixes, B:\tmp\elysium-review\review.txt):
+//   r3: motion's second price reading is /check (every pool of the coin, the fixed 0.002 HYPE round trip, another trusted node,
+//         its age counted by the server): a BUY needs it for its pool; a SELL is refused only by a fresh reading of the very pool it
+//         sells into that disagrees (N1). The plain-wallet proof runs with validation — real base fee and gas price (N2).
+//   buy : t=0 — fee, block (its timestamp dates the deadline and the permit: L-T9), balance, nonce, the route check, motion's
+//         second price reading (M-T3), ONE probe eth_call (every
+//         canonical pool bought with the click's HYPE, 1 % of it sent to a fresh address (tax test), sold straight back, plus the
+//         1/50 reference buy; once per click) and the hinted pool's gas proof, side by side → the best pool (the hint within 2 %)
+//         → the probe guards → the price against motion's second reading → floor = simulated coin out − slippage (Elysium's
+//         default 5 %: M-T4) → the plain-wallet proof (eth_simulateV1 as the EOA, no code: buy with the floor → exact approvals
+//         → sell back: M-T2; once per click) → sign → every node.
+//   sell: t=0 — fee, block, balance, nonce, allowances (one multicall), the route check, motion's second reading, this wallet's
+//         probe (every pool sold into with the real balance and allowances, plus a 1/50 reference sell) → the best pool → the
+//         reference price against motion's (never the sell's own impact) → floor → the EXACT approvals it needs and the sell,
+//         proven together as the wallet (eth_simulateV1; the probe's own run on a node without it) → sent back to back,
+//         consecutive nonces → an approval this sell gave and did not use is reset to 0, whether the sell reverted, never
+//         landed, or never went out (L-T8).
+// Never: a standing (max) approval, turbo's unproven fixed gas, a platform fee, a router outside ELY_ROUTERS.
+const ELY_PROBE_GAS = ELY.ELY_PROBE_GAS;   // r4: 30 M (every node of the pool serves it)
+async function elyProbe(client: ReturnType<typeof createPublicClient>, from: `0x${string}`, cases: ELY.ElyProbeCase[], balance: bigint, gasPrice: bigint): Promise<ELY.ElySeen[]> {
+  // the probe's code sits at the wallet's own address for this one call (state override, nothing deployed or signed); the
+  // wallet's HYPE balance is set so the call can pay gas at the real price (a hook that hides behind a zero gas price sees the real one)
+  const parts = await Promise.all(ELY.elyProbeChunks(cases).map((cs) => client.request({ method: 'eth_call', params: [{ from, to: from, data: ELY.probeData(cs), gas: '0x' + ELY_PROBE_GAS.toString(16), gasPrice: '0x' + gasPrice.toString(16) }, 'latest', ELY.elyProbeState(from, balance)] } as any) as Promise<`0x${string}`>));   // (rel7.1 T1) under 256 KiB per call
+  const seen = parts.flatMap((ret) => ELY.probeDecode(ret));   // (rel7.1 T1) the chunks' answers, in case order
+  if (seen.length !== cases.length) throw new Error('the node answered the simulation with another number of cases');
+  return seen;
+}
+// calls as the wallet itself in one block (eth_simulateV1; the wallet stays an EOA, only its balance is set); null = no answer
+// r3 (N2): `real` = { latestTs } runs it with validation and the next block's time (the real base fee and gas price: a token cannot
+// tell it from the transaction); the observer that reads the balances gets a balance too
+async function elySimulate(client: ReturnType<typeof createPublicClient>, from: `0x${string}`, calls: ELY.ElySimCall[], balance: bigint | null, gasPrice: bigint, real?: { latestTs: number; baseFee?: bigint; block?: bigint }): Promise<ELY.ElySimResult[] | null> {
+  try {
+    const hx = (n: bigint) => '0x' + n.toString(16);
+    const over = balance != null ? { [from]: { balance: hx(balance) }, ...(real ? { [ELY.ELY_OBSERVER]: { balance: hx(10n ** 18n) } } : {}) } : null;
+    const blk = real ? ELY.elySimBlock(real.latestTs, real.baseFee) : null;
+    const res = await (client as any).request({ method: 'eth_simulateV1', params: [{ blockStateCalls: [{ ...(over ? { stateOverrides: over } : {}), ...(blk ? { blockOverrides: blk.blockOverrides } : {}), calls: calls.map((c) => ({ ...c, gasPrice: hx(gasPrice) })) }], ...(blk ? { validation: true } : {}) }, real?.block != null ? hx(real.block) : 'latest'] });   // on the block whose time it extends
+    const out = res?.[0]?.calls;
+    return Array.isArray(out) && out.length === calls.length ? out as ELY.ElySimResult[] : null;
+  } catch { return null; }
+}
+// motion's second price reading of the coin (r3: the lane's /check — every pool, the fixed 0.002 HYPE round trip, ANOTHER trusted
+// node, its age counted by the server; N1 / N4), shared by the click's wallets for a few seconds. The age the vault uses is the
+// server's ageMs plus the time since the answer arrived on THIS device's monotonic clock: no wall-clock comparison (L-T9).
+// r4 (merged review M1): `fresh` skips this memo and asks the server for a reading at most 2 s old (/check?fresh=1); a sell always asks
+// fresh. r4 (preview): the request carries the owner's preview cookie (credentials 'include' — motion's own host, the browser attaches
+// it; no page or vault code ever reads it) and the click's wallet addresses (x-ely-wallets); while Elysium trading is in PREVIEW the
+// relay accepts signed transactions only from wallets a preview session named this way (the sender is recovered from the signature).
+const elyLaneMemo = new Map<string, { t: number; p: Promise<{ v: ELY.ElyLaneReading; t: number }> }>();
+// r5 (B7): `sized` asks the other operator for the click's own size too (buy: the HYPE in; sell: the coins in, measured as the first
+// wallet named — the selling wallet); such a reading is never memoised. r5 (R3): the answer says whether buys are open to this session.
+// r7 (X4): `avoid` = operators the reading must not come from (a THIRD operator's reading of the same sell); never memoised either
+async function elyLaneCheck(token: `0x${string}`, fresh = false, wallets: string[] = [], sized: { side: 'buy' | 'sell'; size: bigint } | null = null, avoid: string[] = []): Promise<ELY.ElyLaneReading> {
+  const k = lc(token), now = performance.now(), e = elyLaneMemo.get(k);
+  let p = !fresh && !sized && !wallets.length && !avoid.length && e && now - e.t < 5_000 ? e.p : null;
+  if (!p) {
+    const headers: Record<string, string> = wallets.length ? { 'x-ely-wallets': wallets.slice(0, 8).map(lc).join(',') } : {};
+    const q = [fresh || sized ? 'fresh=1' : '', sized ? `side=${sized.side}&size=${sized.size.toString()}` : '', avoid.length ? 'avoid=' + avoid.slice(0, 3).map(encodeURIComponent).join(',') : ''].filter(Boolean).join('&');
+    p = fetch(`${routeApi()}/token/${k}/check${q ? '?' + q : ''}`, { cache: 'no-store', credentials: 'include', headers, signal: AbortSignal.timeout(OWN_TIMEOUT) }).then((r) => r.json())
+      .then((j: { ok?: boolean; checks?: ELY.ElyLaneCheck[]; ageMs?: number; independent?: boolean; sized?: ELY.ElyLaneSized[]; mayBuy?: boolean; ops?: unknown }) => ({ v: j?.ok && Array.isArray(j.checks) ? { checks: j.checks, ageMs: Number(j.ageMs), independent: j.independent === true, ...(Array.isArray(j.sized) ? { sized: j.sized } : {}), ...(typeof j.mayBuy === 'boolean' ? { mayBuy: j.mayBuy } : {}), ...(Array.isArray(j.ops) ? { ops: j.ops.filter((x): x is string => typeof x === 'string').slice(0, 3) } : {}) } : null, t: performance.now() }), () => ({ v: null, t: performance.now() }));
+    if (!sized && !avoid.length) elyLaneMemo.set(k, { t: now, p });
+    if (elyLaneMemo.size > 200) elyLaneMemo.delete(elyLaneMemo.keys().next().value as string);
+  }
+  const got = await p;
+  return got.v ? { ...got.v, ageMs: got.v.ageMs + (performance.now() - got.t) } : null;
+}
+// the vault's own reading of a pool at the lane's fixed size: its probe's 0.002 HYPE round-trip case on that candidate
+const elyOwnRef = (s?: ELY.ElySeen): ELY.ElyOwnRef => (s && s.ran && s.buyOk && s.sellOk ? { buyOut: s.coinGot, sellIn: s.coinSold, sellOut: s.nativeBack } : null);
+// the slippage of this Elysium trade: what the user set IN THIS FRAME (its own key, N5), else Elysium's default 5 % (M-T4)
+const elySlip = (s: Settings): bigint => { let v: string | null = null; try { v = localStorage.getItem(ELY.ELY_SLIP_KEY); } catch {} return v != null ? ELY.elySlippageBps(Number(v), true) : ELY.elySlippageBps(s.slippage, false); };
+const elySend = async (wallet: ReturnType<typeof createWalletClient>, account: Signer, token: `0x${string}`, tx: { to: `0x${string}`; data: `0x${string}`; value: bigint }, maxValue: bigint, gasPrice: bigint, gas: bigint, clock: Shared) => {
+  // the last look before the key: only a known router, this coin's approve to Permit2, or Permit2's approve of it to a known router
+  const bad = ELY.elyTxProblem(tx, token, maxValue); if (bad) throw new Error('Refusing to sign: ' + bad);
+  if (gasPrice > ELY.ELY_MAX_GAS_PRICE * 5n || gas * gasPrice > ELY.ELY_MAX_FEE_WEI) throw new Error('Refusing to sign: abnormal gas for Elysium');
+  return signAndSend(wallet, account, tx, gasPrice, gas, clock);
+};
+// r8 (review Y1): the sell-priority ticket — the wallet's key signs ELY.elyTicketText (~1 ms, local) and the relay registers it for
+// this client; only then do this wallet's probe and simulation use its sell share. Cached ~45 s per wallet. Any failure (a custom RPC
+// that does not know the method, a busy relay) costs only the priority: the sell goes on as an ordinary call.
+const elyTickets = new Map<string, { exp: number; p: Promise<boolean> }>();
+const elyPause = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
+function elyTicket(client: { request: (a: any) => Promise<unknown> }, account: Signer): Promise<boolean> {
+  const k = lc(account.address), nowS = Math.floor(Date.now() / 1000), hit = elyTickets.get(k);
+  if (hit && hit.exp - nowS > 15) return hit.p;
+  const exp = nowS + 60, nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
+  let origin = ''; try { origin = new URL(routeApi()).origin; } catch { return Promise.resolve(false); }
+  const p = account.signMessage({ message: ELY.elyTicketText({ origin, wallet: k, exp, nonce }) })
+    .then((sig) => client.request({ method: 'motion_elySellTicket', params: [{ wallet: k, exp, nonce, origin, sig }] }))
+    .then((r) => r === true, () => false);
+  elyTickets.set(k, { exp, p }); if (elyTickets.size > 200) elyTickets.delete(elyTickets.keys().next().value as string);
+  return p;
+}
+async function elyTradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings, click: Shared): Promise<`0x${string}`> {
+  if (CFG.key !== 'elysium' || chain.id !== ELY.ELY_CHAIN_ID) reject('an Elysium route outside the Elysium frame');
+  { const why = ELY.elyRouteProblem(token, route); if (why) reject(why); }
+  const account = accountOf(acct);
+  const shared = click.view(account.address);
+  const wallet = createWalletClient({ account, chain, transport });
+  const hv = heavyFor(Math.max(0, shared.addresses.findIndex((a) => same(a, account.address))));
+  const slippageBps = elySlip(s);
+  const r = route as unknown as ELY.ElyRoute;
+  const cands = ELY.elyCandidates(token, r);
+  const amountBuy = side === 'buy' ? parseEther(String(size)) : 0n;
+  if (side === 'buy' && (!(size > 0) || size > MAX_BUY_ETH)) throw new Error('Amount out of range');
+  const refIn = amountBuy / ELY.ELY_REF_DIVISOR > ELY.ELY_REF_MIN ? amountBuy / ELY.ELY_REF_DIVISOR : ELY.ELY_REF_MIN;
+  nextNonce(account.address).catch(() => {});
+  const tReads = performance.now();
+  const feeP = feeFor(s.gasBoost);
+  // the chain's own clock dates the deadline and the permit (L-T9): a wrong device clock can neither expire nor stretch them
+  const blockP = shared.once('ely:block', () => publicClient.getBlock());
+  const laneP = shared.once(`ely:lane:${lc(token)}:${amountBuy}`, () => elyLaneCheck(token, side === 'sell', shared.addresses, side === 'buy' ? { side: 'buy', size: amountBuy } : null));   // r4: a sell reads fresh from the start; the click's wallets ride along (preview). r5 (B7): a buy's reading includes its own size
+  const verifyP = Promise.all([verifyRoute(token, route), vouchFor(route)]);
+  verifyP.catch(() => {}); blockP.catch(() => {});
+  const tNow = async () => Number((await blockP).timestamp);
+  if (side === 'buy') {
+    // the probe once per click (from the first wallet: the price and the coin's behaviour do not depend on who asks; every
+    // wallet's own transaction is proven by its own estimate below), the hinted pool's gas proved beside it (minOut 0: the gas
+    // does not depend on the floor)
+    const first = shared.addresses[0] || account.address;
+    const deadlineP = shared.once('ely:deadline', async () => BigInt(await tNow() + ELY.ELY_DEADLINE_S));
+    const probeP = shared.once(`ely:buy:${amountBuy}`, async () => {
+      const [gp, deadline] = await Promise.all([feeP, deadlineP]);
+      return elyProbe(heavy, first, [...cands.map((c) => ELY.probeCase(c, token, { buy: amountBuy, roundTrip: true, transferBps: ELY.ELY_TAX_TEST_BPS, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: refIn, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: ELY.ELY_LANE_REF_IN, roundTrip: true, deadline }))], amountBuy + refIn + ELY.ELY_LANE_REF_IN + QUOTE_FUNDING, gp);
+    });
+    probeP.catch(() => {});
+    const [gasPrice, balances, deadline] = await Promise.all([feeP, tradeBalances(shared, 'buy', token), deadlineP]);
+    shared.mark('balances', performance.now() - tReads);
+    const bal = balances[lc(account.address)];
+    if (bal == null) throw new Error('Balance read failed');
+    if (bal < amountBuy) throw new Error(`Insufficient ${NATIVE}: ${Number(formatEther(bal)).toFixed(4)} available, ${size} needed`);
+    { const t0 = performance.now(); await verifyP; shared.mark('verify', performance.now() - t0); }
+    const tQuote = performance.now();
+    let seen: ELY.ElySeen[];
+    try { seen = await probeP; } catch (e) { throw new Error(`Could not simulate this buy on Elysium (${shortError(e).slice(0, 80)}) — nothing was sent`); }
+    const full = seen.slice(0, cands.length), refs = seen.slice(cands.length, 2 * cands.length), laneRefs = seen.slice(2 * cands.length);
+    const pick = ELY.elyPick(cands, full, 'buy');
+    if (!pick) reject('no Elysium pool of this coin would fill this buy');
+    const problem = ELY.elyBuyProblem(pick!.s, refs[pick!.i], amountBuy, refIn);
+    if (problem) throw new Error(problem);
+    // M-T3: the reference price this node gave against motion's second reading (another trusted node)
+    // r4 (M1): a refusal is decided on a FRESH reading — a stale one in a fast pump is re-read once (/check?fresh=1) first
+    { const own = elyOwnRef(laneRefs[pick!.i]);
+      let why = ELY.elyLaneProblem('buy', pick!.c.pool, own, await laneP, slippageBps);
+      if (why) why = ELY.elyLaneProblem('buy', pick!.c.pool, own, await shared.once(`ely:fresh:${lc(token)}`, () => elyLaneCheck(token, true)), slippageBps);
+      if (why) throw new Error(why); }
+    // r5 (R3): buys open to this session only where motion says so (preview); a vault reading Elysium through its own RPC included
+    { const lr = await laneP; if (lr && lr.mayBuy === false) throw new Error('Elysium buys are not open to this session on motion (preview) — nothing was sent'); }
+    // r5 (B7): the other operator's coin out at THIS size; the floor from the more conservative of the two, a large gap refuses
+    const laneSized = ELY.elyLaneSizedOut(await laneP, pick!.c.pool, 'buy', amountBuy);
+    // r6 (review Q3): no second reading at this size for this pool = not bought (fail closed, like the 0.002 HYPE reading)
+    if (laneSized == null) throw new Error('motion has no second reading of this pool at your size — not bought (try again in a moment)');
+    { const why = ELY.elySizedBuyProblem(pick!.s.coinGot, laneSized, slippageBps); if (why) throw new Error(why); }
+    const floor = ELY.elySizedFloor('buy', pick!.s.coinGot, laneSized, slippageBps);
+    // r4 (M2): the gas this buy is SIGNED with; r5 (B1): its plain-wallet sell-back runs at the CAP (the sell a holder may later sign at)
+    const buyGas = ELY.elySwapGas(pick!.s.buyGas), backGas = ELY.ELY_SWAP_GAS_CAP;
+    if (!(buyGas > 0n) || !(backGas > 0n)) throw new Error('the simulation gave no gas figure for this buy — nothing was sent');
+    const tx = { to: pick!.c.router as `0x${string}`, data: ELY.elyExecute(ELY.elyBuyEnc(pick!.c, token, amountBuy, floor), deadline), value: amountBuy };
+    // M-T2: the plain wallet buys with this very floor and sells straight back, in one simulated block (once per click)
+    const eoa = await shared.once(`ely:eoa:${amountBuy}:${pick!.c.pool}`, async () => {
+      const sellAmt = (pick!.s.coinGot * ELY.ELY_EOA_SELL_BPS) / 10_000n;
+      const ts = await tNow(), b0 = await blockP, baseFee = b0.baseFeePerGas ?? undefined;
+      const res = await elySimulate(heavy, first, ELY.elyEoaCalls({ wallet: first, c: pick!.c, token, amountIn: amountBuy, floor, sellAmt, deadline, now: ts, buyGas, sellGas: backGas }), amountBuy + QUOTE_FUNDING, gasPrice, { latestTs: ts, baseFee, block: b0.number ?? undefined });
+      return ELY.elyEoaProblem(res, { amountIn: amountBuy, floor, sellAmt, gasPrice });
+    });
+    if (eoa.problem) throw new Error(eoa.problem);
+    shared.mark('quote', performance.now() - tQuote);
+    // r4 (M2): signed at exactly the gas the plain-wallet proof ran this very call at (no separate estimate)
+    shared.mark('gas', 0);
+    return elySend(wallet, account, token, tx, amountBuy, gasPrice, buyGas, shared);
+  }
+  // ── sell ──
+  const ticketP = elyTicket(hv as any, account);   // r8 (Y1): proof of control for the sell share, before the probe goes out
+  const P2 = ELY.ELY_PERMIT2 as `0x${string}`;
+  // r8: + the WHYPE each router already holds (a WHYPE-pool sell's floor is computed from its own part only)
+  const allowP = publicClient.multicall({ allowFailure: false, contracts: [
+    { address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, P2] },
+    ...ELY.ELY_ROUTERS.map((ur) => ({ address: P2, abi: PERMIT2_ABI, functionName: 'allowance', args: [account.address, token, ur as `0x${string}`] })),
+    ...ELY.ELY_ROUTERS.map((ur) => ({ address: ELY.ELY_WHYPE as `0x${string}`, abi: ERC20_ABI, functionName: 'balanceOf', args: [ur as `0x${string}`] })),
+  ] as any }) as Promise<unknown[]>;
+  allowP.catch(() => {});
+  const [gasPrice, balances, block] = await Promise.all([feeP, tradeBalances(shared, 'sell', token), blockP]);
+  shared.mark('balances', performance.now() - tReads);
+  const bal = balances[lc(account.address)];
+  if (bal == null) throw new Error('Balance read failed');
+  const amountIn = (bal * BigInt(Math.round(Math.min(100, Math.max(0.01, size)) * 100))) / 10_000n;
+  if (amountIn <= 0n) throw new Error('Nothing to sell in this wallet');
+  const now = Number(block.timestamp), deadline = BigInt(now + ELY.ELY_DEADLINE_S);
+  const tQuote = performance.now();
+  // r5 (B7): the other operator measures this very sell (these coins, from this wallet) beside our own probe
+  const sizedP = elyLaneCheck(token, true, [account.address], { side: 'sell', size: amountIn }).catch(() => null);
+  await Promise.race([ticketP, elyPause(800)]);   // the ticket first (≤ 0.8 s; it is one local signature and one request)
+  const probeP = elyProbe(hv, account.address, [...cands.map((c) => ELY.probeCase(c, token, { sell: amountIn, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: ELY.ELY_LANE_REF_IN, roundTrip: true, deadline }))], ELY.ELY_LANE_REF_IN + QUOTE_FUNDING, gasPrice);
+  probeP.catch(() => {});
+  { const t0 = performance.now(); await verifyP; shared.mark('verify', performance.now() - t0); }
+  let seen: ELY.ElySeen[];
+  try { seen = await probeP; } catch (e) { throw new Error(`Could not simulate this sell on Elysium (${shortError(e).slice(0, 80)}) — nothing was sent`); }
+  const pick = ELY.elyPick(cands, seen.slice(0, cands.length), 'sell');
+  if (!pick) reject('no Elysium pool of this coin takes this sell');
+  const problem = ELY.elySellProblem(pick!.s, amountIn);
+  if (problem) throw new Error(problem);
+  // M-T3 / N1: refused only when motion's fresh, independent reading of THIS pool at the fixed size disagrees; a missing, stale or
+  // busy reading never stops an exit (the floor is this vault's own simulation, as on every chain)
+  // r4 (M1): only a reading ≤ 5 s old counts; one that disagrees is re-read fresh once, and if it still disagrees the user decides with
+  // both figures in front of them (one dialog per click) — never a silent refusal.
+  // r6 (review Q2): the other operator's reading of THIS sell (these coins, this wallet) is a question too when it beats our own quote
+  // by more than the bound — the floor itself is never raised (own quote × (1 − slippage)).
+  // r6 (review P1): an UNATTENDED sell (only the auto-sell rules start one: click id "autosell:…") never waits on a dialog; a sell
+  // someone clicked waits for their answer, with no timer. r7 (review X4): an unattended sell whose readings disagree measures the same
+  // sell on a THIRD operator and takes the floor from the median of the three (none: a bounded floor, ELY.elyAutosellFloor).
+  let autoFloor: bigint | null = null;
+  // r8: this sell's own HYPE back — the probe's figure less the WHYPE already in a WHYPE-pool's router (unwrapped together with ours)
+  const al = await allowP;
+  const leftover = (al[1 + ELY.ELY_ROUTERS.length + ELY.ELY_ROUTERS.indexOf(lc(pick!.c.router))] as bigint) ?? 0n;
+  const ownBack = ELY.elySellOwnBack(pick!.s.nativeBack, pick!.c.pair, leftover);
+  if (ownBack == null) throw new Error('the router holds as much WHYPE as this sell returns — not sent (try again in a moment)');
+  const less = pick!.s.nativeBack - ownBack, mine = (x: bigint | null) => (x == null ? null : x > less ? x - less : 0n);
+  { const own = elyOwnRef(seen[cands.length + pick!.i]);
+    const unattended = String(click.id || '').startsWith('autosell:');
+    let why = ELY.elyLaneProblem('sell', pick!.c.pool, own, await laneP, slippageBps);
+    if (why) why = ELY.elyLaneProblem('sell', pick!.c.pool, own, await shared.once(`ely:fresh:${lc(token)}`, () => elyLaneCheck(token, true)), slippageBps);
+    const sizedGap = ELY.elySizedSellGap(pick!.s.nativeBack, ELY.elyLaneSizedOut(await sizedP, pick!.c.pool, 'sell', amountIn), slippageBps);
+    if ((why || sizedGap) && !unattended) {
+      const gap = why ? why.replace(/^the node quoted a sell price /, '').replace(/ worse than motion's second reading of this pool$/, '') : sizedGap;
+      const minOut = Number(formatEther(ELY.elyFloor(ownBack, slippageBps))).toPrecision(6);
+      const go = await shared.once(`ely:sellask:${lc(pick!.c.pool)}`, () => ask({ title: 'Prices disagree', danger: true, ok: 'Sell anyway', cancelLabel: 'Keep the coins',
+        html: `${sub(`Your node prices this sell ${escHtml(gap)} worse than motion's second node, measured seconds ago on the same pool${sizedGap && !why ? ' at your size' : ''}.`)}${muted(`Minimum you accept: ${escHtml(minOut)} ${NATIVE} (your slippage). The price may be falling fast, or one node may be wrong.`)}` }));
+      if (!go) throw new Error('Sell cancelled — the two price readings disagreed');
+    }
+    if ((why || sizedGap) && unattended) {
+      const r2 = await sizedP, second = ELY.elyLaneSizedOut(r2, pick!.c.pool, 'sell', amountIn);
+      const r3 = r2?.ops?.length ? await elyLaneCheck(token, true, [account.address], { side: 'sell', size: amountIn }, r2.ops).catch(() => null) : null;
+      const third0 = ELY.elyLaneSizedOut(r3, pick!.c.pool, 'sell', amountIn);
+      autoFloor = ELY.elyAutosellFloor(ownBack, mine(second), mine(third0 != null && ELY.elyOpsDisjoint(r2?.ops, r3?.ops) ? third0 : null), slippageBps);
+    }
+  }
+  // r6 (Q2): a sell someone clicked: our own quote × (1 − slippage), never raised by another reading; r7 (X4): an auto-sell whose
+  // readings disagreed: the median / bounded floor above
+  const floor = autoFloor ?? ELY.elySizedFloor('sell', ownBack, null, slippageBps);
+  const router = pick!.c.router as `0x${string}`;
+  const p2 = al[1 + ELY.ELY_ROUTERS.indexOf(lc(router))] as readonly [bigint, number, number];
+  const approvals = ELY.elyApprovals({ token, router, amount: amountIn, allowance: al[0] as bigint, p2Amount: p2[0], p2Expiry: Number(p2[1]), now });
+  const sellTx = { to: router, data: ELY.elyExecute(ELY.elySellEnc(pick!.c, token, amountIn, floor), deadline), value: 0n };
+  const txs = [...approvals.map((a) => ({ to: a.to, data: a.data, value: 0n })), sellTx];
+  shared.mark('quote', performance.now() - tQuote);
+  // the chain proven as this wallet, each call on the state the one before left (one round trip). r4 (M2): every call runs at the gas
+  // it is signed with (approvals ELY_APPROVE_GAS, the sell elySwapGas of the probe's figure), with validation and the next block's time
+  // (the real base fee and gas price, N2) — a token that lets a sell through only with a high gasleft() fails HERE, not on chain
+  const tGas = performance.now();
+  const sellGas = ELY.elySwapGas(pick!.s.sellGas);
+  if (!(sellGas > 0n)) throw new Error('the simulation gave no gas figure for this sell — nothing was sent');
+  let gases: bigint[] = [...approvals.map(() => ELY.ELY_APPROVE_GAS), sellGas];
+  const hxg = (n: bigint) => ('0x' + n.toString(16)) as `0x${string}`;
+  const simAt = (g: bigint[]) => elySimulate(hv, account.address, txs.map((t, i) => ({ from: account.address, to: t.to, data: t.data, value: '0x0' as `0x${string}`, gas: hxg(g[i]) })), null, gasPrice, { latestTs: now, baseFee: block.baseFeePerGas ?? undefined, block: block.number ?? undefined });
+  let res = await simAt(gases);
+  // r5 (B1 / R5): a failure at the formula limits is simulated again at the caps; if that passes the chain is SIGNED at the caps
+  if (res && res.some((c) => c?.status !== '0x1')) {
+    const capped = [...approvals.map(() => ELY.ELY_APPROVE_GAS_CAP), ELY.ELY_SWAP_GAS_CAP];
+    const again = await simAt(capped);
+    if (again && again.every((c) => c?.status === '0x1')) { gases = capped; res = again; }
+  }
+  if (res) {
+    const bad = res.findIndex((c) => c?.status !== '0x1');
+    if (bad >= 0) throw new Error(`${bad < approvals.length ? approvals[bad].label : 'the sell'} would revert: ${String(res[bad]?.error?.message || 'execution reverted').slice(0, 120)}`);
+  }
+  // a node without eth_simulateV1: the probe ran these approvals and this sell as this wallet (at its own 40 M gas); same limits
+  shared.mark('gas', performance.now() - tGas);
+  // an approval this sell gave and did not use goes back to 0 — after a sell that reverted, never landed, or never went out (L-T8)
+  const resetLeftovers = () => { if (!approvals.length) return; (async () => {
+    const [a, p] = await publicClient.multicall({ allowFailure: false, contracts: [
+      { address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, P2] },
+      { address: P2, abi: PERMIT2_ABI, functionName: 'allowance', args: [account.address, token, router] },
+    ] as any }) as [bigint, readonly [bigint, number, number]];
+    const resets = ELY.elyResets({ token, router, amount: amountIn, allowance: a, p2Amount: p[0] });
+    const gp = await feeFor(1);
+    for (const x of resets) await elySend(wallet, account, token, { to: x.to, data: x.data, value: 0n }, 0n, gp, ELY.ELY_APPROVE_GAS, makeShared([account.address]));
+  })().catch(() => {}); };
+  let hash: `0x${string}`;
+  try {
+    for (let i = 0; i < approvals.length; i += 1) await elySend(wallet, account, token, txs[i], 0n, gasPrice, gases[i], shared);
+    hash = await elySend(wallet, account, token, sellTx, 0n, gasPrice, gases[gases.length - 1], shared);
+  } catch (e) {
+    // an approval may be out while the sell is not (refused, lost): reset behind the click; a send whose outcome is unknown may
+    // still land, so its receipt decides (the reset only ever touches an allowance of exactly this sell's size or less)
+    const err = e as SendError;
+    if (err.txState === 'unknown' && err.hash) landed(err.hash, 120_000).then((rc) => { if (rc.status !== 'success') resetLeftovers(); }, () => resetLeftovers());
+    else resetLeftovers();
+    throw e;
+  }
+  if (approvals.length) landed(hash, 120_000).then((rc) => { if (rc.status !== 'success') resetLeftovers(); }, () => resetLeftovers());
+  return hash;
+}
+// the preflight of the same click: the same probe, the same pick and guards, the same calldata; nothing signed or sent
+async function elyPreviewOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings): Promise<Preview> {
+  const account = accountOf(acct);
+  const slippageBps = elySlip(s);
+  const notes: string[] = [];
+  const [gasPrice, balance, block] = await Promise.all([feeFor(s.gasBoost), publicClient.getBalance({ address: account.address }), publicClient.getBlock(), verifyRoute(token, route)]);
+  const out: Preview = { name: acct.name, address: account.address, side, venue: 'Elysium', contract: ZERO, method: 'execute', amountIn: 0, amountInLabel: '', expected: 0, min: 0, pricePerToken: 0,
+    gas: 0, gasPriceGwei: Number(gasPrice) / 1e9, gasEth: 0, balanceEth: Number(formatEther(balance)), funded: false, simulated: 'skipped', notes };
+  const cands = ELY.elyCandidates(token, route as unknown as ELY.ElyRoute);
+  const now = Number(block.timestamp), deadline = BigInt(now + ELY.ELY_DEADLINE_S);
+  const label = (c: ELY.ElyCandidate) => `${ELY.ELY_VENUES[c.venue].label}${c.poolKey ? ` · ${c.poolKey.hooks === ZERO ? 'hookless' : 'hook ' + c.poolKey.hooks.slice(0, 10) + '…'} · fee ${(Number(c.poolKey.fee) / 10_000).toFixed(2)}%` : ` · fee ${(Number(c.fee) / 10_000).toFixed(2)}%`}`;
+  notes.push(`slippage ${(Number(slippageBps) / 100).toFixed(1)}%`);
+  try {
+    if (side === 'buy') {
+      if (!(size > 0) || size > MAX_BUY_ETH) throw new Error('Amount out of range');
+      const amountIn = parseEther(String(size)), refIn = amountIn / ELY.ELY_REF_DIVISOR > ELY.ELY_REF_MIN ? amountIn / ELY.ELY_REF_DIVISOR : ELY.ELY_REF_MIN;
+      out.amountIn = size; out.amountInLabel = `${size} ${NATIVE}`;
+      const seen = await elyProbe(publicClient, account.address, [...cands.map((c) => ELY.probeCase(c, token, { buy: amountIn, roundTrip: true, transferBps: ELY.ELY_TAX_TEST_BPS, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: refIn, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: ELY.ELY_LANE_REF_IN, roundTrip: true, deadline }))], amountIn + refIn + ELY.ELY_LANE_REF_IN + PREVIEW_BALANCE, gasPrice);
+      const full = seen.slice(0, cands.length), refs = seen.slice(cands.length, 2 * cands.length), laneRefs = seen.slice(2 * cands.length);
+      const pick = ELY.elyPick(cands, full, 'buy');
+      if (!pick) { out.simulated = 'failed'; out.error = 'no Elysium pool of this coin would fill this buy'; return out; }
+      out.venue = label(pick.c); out.contract = pick.c.router as `0x${string}`;
+      const floor = ELY.elyFloor(pick.s.coinGot, slippageBps);
+      let problem = ELY.elyBuyProblem(pick.s, refs[pick.i], amountIn, refIn)
+        || ELY.elyLaneProblem('buy', pick.c.pool, elyOwnRef(laneRefs[pick.i]), await elyLaneCheck(token), slippageBps);
+      if (!problem) { const sellAmt = (pick.s.coinGot * ELY.ELY_EOA_SELL_BPS) / 10_000n; problem = ELY.elyEoaProblem(await elySimulate(publicClient, account.address, ELY.elyEoaCalls({ wallet: account.address, c: pick.c, token, amountIn, floor, sellAmt, deadline, now, buyGas: ELY.elySwapGas(pick.s.buyGas), sellGas: ELY.ELY_SWAP_GAS_CAP }), amountIn + PREVIEW_BALANCE, gasPrice, { latestTs: now, baseFee: block.baseFeePerGas ?? undefined, block: block.number ?? undefined }), { amountIn, floor, sellAmt, gasPrice }).problem; }
+      out.expected = Number(formatUnits(pick.s.coinGot, 18)); out.min = Number(formatUnits(floor, 18)); out.pricePerToken = out.expected > 0 ? size / out.expected : 0;
+      notes.push(`sold straight back it returns ${(Number((pick.s.nativeBack * 10_000n) / amountIn) / 100).toFixed(2)}% (fees, hook, tax)`, `price impact ${(ELY.elyImpactBps(pick.s, refs[pick.i], amountIn, refIn) / 100).toFixed(2)}%`, '0% platform fees');
+      out.simulated = problem ? 'failed' : 'ok'; if (problem) out.error = problem;
+      out.gas = Number(ELY.elySwapGas(pick.s.buyGas));
+    } else {
+      const bal = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+      const amountIn = (bal * BigInt(Math.round(Math.min(100, Math.max(0.01, size)) * 100))) / 10_000n;
+      out.amountIn = Number(formatUnits(amountIn, 18)); out.amountInLabel = `${size}% = ${out.amountIn.toFixed(4)} tokens`;
+      if (amountIn <= 0n) { out.error = 'Nothing to sell in this wallet'; notes.push('fund the wallet with this token to preflight a sell'); return out; }
+      const seen = await elyProbe(publicClient, account.address, [...cands.map((c) => ELY.probeCase(c, token, { sell: amountIn, deadline })), ...cands.map((c) => ELY.probeCase(c, token, { buy: ELY.ELY_LANE_REF_IN, roundTrip: true, deadline }))], ELY.ELY_LANE_REF_IN + PREVIEW_BALANCE, gasPrice);
+      const pick = ELY.elyPick(cands, seen.slice(0, cands.length), 'sell');
+      if (!pick) { out.simulated = 'failed'; out.error = 'no Elysium pool of this coin takes this sell'; return out; }
+      out.venue = label(pick.c); out.contract = pick.c.router as `0x${string}`;
+      const problem = ELY.elySellProblem(pick.s, amountIn) || ELY.elyLaneProblem('sell', pick.c.pool, elyOwnRef(seen[cands.length + pick.i]), await elyLaneCheck(token), slippageBps);
+      out.expected = Number(formatEther(pick.s.nativeBack)); out.min = Number(formatEther(ELY.elyFloor(pick.s.nativeBack, slippageBps))); out.pricePerToken = out.amountIn > 0 ? out.expected / out.amountIn : 0;
+      const [a, p] = await publicClient.multicall({ allowFailure: false, contracts: [
+        { address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, ELY.ELY_PERMIT2] },
+        { address: ELY.ELY_PERMIT2, abi: PERMIT2_ABI, functionName: 'allowance', args: [account.address, token, pick.c.router] },
+      ] as any }) as [bigint, readonly [bigint, number, number]];
+      const ap = ELY.elyApprovals({ token, router: pick.c.router, amount: amountIn, allowance: a, p2Amount: p[0], p2Expiry: Number(p[1]), now });
+      if (ap.length) notes.push(`${ap.length} exact approval${ap.length > 1 ? 's' : ''} go out first (${ap.map((x) => x.label).join(', ')}); nothing is left approved`);
+      notes.push('0% platform fees');
+      out.simulated = problem ? 'failed' : 'ok'; if (problem) out.error = problem;
+      out.gas = Number(ELY.elySwapGas(pick.s.sellGas) + BigInt(ap.length) * ELY.ELY_APPROVE_GAS);
+    }
+  } catch (e) { out.simulated = 'failed'; out.error = shortError(e); }
+  out.gasEth = (Number(gasPrice) / 1e18) * (out.gas || 400_000);
+  out.funded = side === 'buy' ? out.balanceEth >= out.amountIn + out.gasEth : out.balanceEth >= out.gasEth;
+  if (!out.funded) notes.push(side === 'buy' ? `needs ${(out.amountIn + out.gasEth).toFixed(5)} ${NATIVE} in the wallet` : `needs ${out.gasEth.toFixed(5)} ${NATIVE} for gas`);
+  return out;
+}
+// ── /ELYSIUM ──
 // viem puts the revert reason on the second line ("…reverted with the following reason:\nAS"): keep it, and spell out
 // the terse Uniswap V3 codes a trader would otherwise stare at
-const REASONS: Record<string, string> = { AS: 'AS — the V3 leg got no input amount', STF: 'STF — token transfer failed (tax or blocked transfer?)', 'Too little received': 'Too little received — slippage', SPL: 'SPL — price limit hit', IIA: 'IIA — insufficient input amount' };
+const REASONS: Record<string, string> = { AS: 'AS — the V3 leg got no input amount', STF: 'STF — token transfer failed (tax or blocked transfer?)', 'Too little received': 'Too little received — slippage', SPL: 'SPL — price limit hit', IIA: 'IIA — insufficient input amount',
+  // TC-T1 (exec-quality 2026-11-04): a V2 pool's floor is the pool's quote less the slippage, and that quote does not count the
+  // coin's own fee-on-transfer tax — a sell (or buy) whose tax is at or above the slippage ends here
+  'PancakeRouter: INSUFFICIENT_OUTPUT_AMOUNT': "INSUFFICIENT_OUTPUT_AMOUNT — the coin's tax may be above your slippage",
+  'UniswapV2Router: INSUFFICIENT_OUTPUT_AMOUNT': "INSUFFICIENT_OUTPUT_AMOUNT — the coin's tax may be above your slippage",
+  'Pancake: K': 'Pancake: K — the pool refused: the coin takes a tax or blocks transfers',
+  'UniswapV2: K': 'UniswapV2: K — the pool refused: the coin takes a tax or blocks transfers',
+  'TransferHelper: TRANSFER_FROM_FAILED': 'TRANSFER_FROM_FAILED — the coin refused the transfer (blocked, paused, sell limit)' };
 const shortError = (e: unknown) => {
   const m = e instanceof Error ? e.message : String(e);
   const lines = m.split('\n').map((x) => x.trim()).filter(Boolean);
@@ -3149,6 +3720,8 @@ type MoveSpec = { fromIds: string[]; toIds?: string[]; toAddresses?: string[]; a
 const MOVE_LANE = SOL_MODE ? 'sol' : NEAR_MODE ? 'near' : CFG.key;
 const MOVE_EVM = !SOL_MODE && !NEAR_MODE;
 const moveLanePublic = (k: string) => (k === 'bsc' ? 'bnb' : k);   // the name the app and the site pass as spec.chain
+// Elysium moves (release #6): the mover's own words name the frame's coin there (HYPE); Robinhood / BNB keep 'ETH' byte for byte
+const MOVE_UNIT = CFG.key === 'elysium' ? NATIVE : 'ETH';
 const JOBS_KEY = 'trenches.jobs.v2.' + MOVE_LANE;
 const RUNNER_LOCK = 'trenches-jobs-runner.v2.' + MOVE_LANE;
 let ETH_GAS = 21_000n;
@@ -3266,11 +3839,21 @@ async function planMove(spec: MoveSpec) {
   if (!sources.length) errors.push('Pick at least one source wallet');
   if (!dests.length) errors.push('Pick at least one destination');
   const hops = Math.max(0, Math.min(MAX_HOPS, Math.floor(spec.hops || 0)));
-  if (hops && spec.asset.kind !== 'eth') errors.push('Stealth routing moves ETH only — a token would need every hop funded with gas first');
+  // (security audit 2026-11-04, SEC-1) the token's decimals and symbol are the CHAIN's, never the page's: the legs send raw
+  // units while the outside-send dialog (confirmOutside) prints the total with these decimals, so a page that called a
+  // 6-decimal stablecoin 30-decimal made "Send outside your vault" read "0 USDC in total" while the whole balance went out
+  let asset: Asset = { kind: 'eth' };
+  if (spec?.asset?.kind === 'erc20') {
+    const t = lc(String(spec.asset.address || ''));
+    if (!/^0x[0-9a-f]{40}$/.test(t)) throw new Error('Invalid token address');
+    const [d, sym] = await Promise.all([tokenDecimals(t as `0x${string}`), tokenSymbolOf(t).catch(() => '')]);
+    if (!Number.isInteger(d) || d < 0 || d > 36) throw new Error('This token does not state its decimals');
+    asset = { kind: 'erc20', address: t as `0x${string}`, symbol: sym || 'tokens', decimals: d };
+  } else if (spec?.asset?.kind !== 'eth') throw new Error('Unknown asset');
+  if (hops && asset.kind !== 'eth') errors.push(`Stealth routing moves ${MOVE_UNIT} only — a token would need every hop funded with gas first`);
   for (const s of sources) if (dests.some((d) => d.address.toLowerCase() === s.address.toLowerCase())) errors.push(`${s.name} is on both sides`);
   const gasPrice = await feeFor(1);
-  const legGas = gasCostWei(gasPrice, spec.asset);
-  const asset = spec.asset;
+  const legGas = gasCostWei(gasPrice, asset);
   const nDest = Math.max(1, dests.length);
   const legs: Leg[] = [];
   const perSource: { id: string; name: string; address: `0x${string}`; balance: number; ethBalance: number; sends: number; gasEth: number; error?: string }[] = [];
@@ -3292,8 +3875,8 @@ async function planMove(spec: MoveSpec) {
     const need = asset.kind === 'eth' ? total + gasOut + hopGas * legsOut : total;
     const row = { id: s.id, name: s.name, address: s.address, balance: humanOf(bal, asset), ethBalance: Number(formatEther(ethBal)), sends: humanOf(total, asset), gasEth: Number(formatEther(gasOut + hopGas * legsOut)), error: undefined as string | undefined };
     if (each <= 0n) row.error = 'nothing to send';
-    else if (bal < need) row.error = `needs ${humanOf(need, asset).toFixed(asset.kind === 'eth' ? 5 : 2)} ${asset.kind === 'eth' ? 'ETH' : asset.symbol}, has ${row.balance.toFixed(asset.kind === 'eth' ? 5 : 2)}`;
-    else if (asset.kind !== 'eth' && ethBal < gasOut) row.error = `needs ${Number(formatEther(gasOut)).toFixed(5)} ETH for gas`;
+    else if (bal < need) row.error = `needs ${humanOf(need, asset).toFixed(asset.kind === 'eth' ? 5 : 2)} ${asset.kind === 'eth' ? MOVE_UNIT : asset.symbol}, has ${row.balance.toFixed(asset.kind === 'eth' ? 5 : 2)}`;
+    else if (asset.kind !== 'eth' && ethBal < gasOut) row.error = `needs ${Number(formatEther(gasOut)).toFixed(5)} ${MOVE_UNIT} for gas`;
     perSource.push(row);
     if (row.error) continue;
     for (const d of dests) {
@@ -3428,14 +4011,14 @@ async function sendLeg(job: Job, leg: Leg) {
       if (!HOST && !leg.hop && !confirmedJobs.has(job.id) && !isOwn(leg.to)) throw new Error('an outside leg of a job this tab did not confirm — start the move again');
       const account = accountOf(acct);
       const gasPrice = await feeFor(1);
-      const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' });
+      const nonce = holdNonce(account.address, await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' }));   // MEV v2
       let raw: `0x${string}`;
       if (leg.asset.kind === 'eth') {
         await syncEthGas(account.address, leg.to as `0x${string}`);
         const bal = await publicClient.getBalance({ address: account.address });
         const value = leg.amount === 'max' ? bal - gasPrice * ETH_GAS : BigInt(leg.amount);
         if (value <= 0n) throw new Error('nothing left after gas');
-        if (bal < value + gasPrice * ETH_GAS) throw new Error(`insufficient ETH: has ${Number(formatEther(bal)).toFixed(5)}, needs ${Number(formatEther(value + gasPrice * ETH_GAS)).toFixed(5)}`);
+        if (bal < value + gasPrice * ETH_GAS) throw new Error(`insufficient ${MOVE_UNIT}: has ${Number(formatEther(bal)).toFixed(5)}, needs ${Number(formatEther(value + gasPrice * ETH_GAS)).toFixed(5)}`);
         leg.human = Number(formatEther(value));
         raw = await account.signTransaction({ to: leg.to, value, gas: ETH_GAS, gasPrice, nonce, account, chainId: chain.id, type: 'legacy' } as any);
       } else {
@@ -3452,9 +4035,11 @@ async function sendLeg(job: Job, leg: Leg) {
       leg.raw = raw; leg.nonce = nonce; leg.hash = keccak256(raw); leg.status = 'signed'; leg.sentAt = Date.now(); bumpRev(leg); saveJobs();
       noteNonceUsed(account.address, nonce);   // the trade lanes' counter steps past this nonce
       try {
-        await broadcast(raw);                  // returns the local hash; a node hash != local is an error
+        await broadcast(raw, 0, false, { from: account.address, nonce });   // returns the local hash; a node hash != local is an error
         leg.status = 'sent'; bumpRev(leg); saveJobs();
       } catch (e) {
+        // Elysium (release #6): the relay's own refusal before any node saw these bytes — a clean, retryable failure (elyNothingSent)
+        if (elyNothingSent(e)) { delete leg.raw; delete leg.hash; delete leg.nonce; leg.status = 'failed'; leg.error = shortError(e); leg.doneAt = Date.now(); running.delete(leg.id); nonces.delete(lc(account.address)); bumpRev(leg); saveJobs(); scheduleWatch(50); tickJob(job); return; }
         leg.status = 'unknown'; leg.error = shortError(e); bumpRev(leg); saveJobs();   // F-58/F-69: after persist → unknown, never failed
       }
       await settleLeg(job, leg);
@@ -3494,10 +4079,35 @@ async function nodeSays(url: string, address: `0x${string}`, hash: `0x${string}`
 // A lookup error on either side is not a proof — the leg keeps polling, so a live tx is never declared gone and re-sent.
 async function provenDropped(leg: Leg): Promise<boolean> {
   if (leg.nonce == null || !leg.hash) return false;
+  if (CFG.key === 'elysium') return elyProvenDropped(leg);
   const urls = DEFAULT_RPCS.filter(isRpcUrl);
   const votes = await Promise.all(urls.map((u) => nodeSays(u, leg.from, leg.hash!, leg.nonce!)));
   return votes.filter((v) => v.higher === true && v.notFound === true).length >= 2;
 }
+// ── Elysium moves (release #6) ──
+// Elysium's two default nodes are ONE road: motion's relay (CFG elysium rpc = rpc2). Two votes of it at the same moment would be
+// one answer counted twice (the relay even shares identical reads in flight). The relay itself reads every operator — a nonce only
+// when two operators agree, a lookup over every node (null only when none has the tx) — so here a drop is proven by TWO readings
+// of it ELY_DROP_RECHECK_MS apart, both "the nonce has passed" AND "no node knows this hash" (a tx in Nitro's delayed inbox is not
+// known yet, but then its nonce has not passed either). Anything else keeps the leg polling: never declared gone and re-sent.
+const ELY_DROP_RECHECK_MS = 20_000;
+async function elyProvenDropped(leg: Leg): Promise<boolean> {
+  const url = [...new Set(DEFAULT_RPCS.filter(isRpcUrl))][0]; if (!url) return false;
+  const a = await nodeSays(url, leg.from, leg.hash!, leg.nonce!);
+  if (!(a.higher === true && a.notFound === true)) return false;
+  await new Promise((r) => setTimeout(r, ELY_DROP_RECHECK_MS));
+  const b = await nodeSays(url, leg.from, leg.hash!, leg.nonce!);
+  return b.higher === true && b.notFound === true;
+}
+// The relay's refusals BEFORE any node saw the bytes (the trading switch, a nonce only one operator stated, funds two operators agree
+// are short: server/elysium-relay.mjs sendOne) end "nothing was sent". When the relay is this frame's only road (no node of the
+// user's own in the send list) and every road refused without a lost answer (broadcast's txState 'signed'), those bytes reached no
+// node: the leg fails cleanly and may be retried — never an "unknown" that re-broadcasts refused bytes every three minutes.
+const elyNothingSent = (e: unknown): boolean => {
+  if (CFG.key !== 'elysium') return false;
+  const err = e as SendError; const roads = broadcastUrls();
+  return err?.txState === 'signed' && /nothing was sent/i.test(String(err?.message || '')) && roads.length === 1 && roads[0] === RPC;
+};
 async function settleLeg(job: Job, leg: Leg) {
   try {
     const r = await publicClient.waitForTransactionReceipt({ hash: leg.hash!, timeout: 180_000, pollingInterval: 1000 });
@@ -3586,7 +4196,10 @@ function copyText(text: string) {
 }
 let dialogsOpen = 0;
 type AskChoice = { id: string; label: string; primary?: boolean; danger?: boolean };
-type AskOpts = { title: string; html: string; ok: string; danger?: boolean; guard?: boolean; cancel?: boolean; cancelLabel?: string; size?: 'sm' | 'md' | 'lg'; copy?: string; plain?: boolean; foot?: string; choices?: AskChoice[]; validate?: (root: HTMLElement, choice: string) => Promise<string | null> | string | null; stay?: (root: HTMLElement, btn: HTMLButtonElement) => boolean; mount?: (root: HTMLElement) => void; keep?: boolean;
+type AskOpts = { title: string; html: string; ok: string; danger?: boolean; guard?: boolean;
+  // SEC-5: the dialog hands out a key or sends value out of the vault's control — the typed number in every browser (askChoice);
+  // SEC-5b: also the rare identity / node dialogs (Set up this device, A different account signed in, Change network nodes, Start a new vault)
+  funds?: boolean; cancel?: boolean; cancelLabel?: string; size?: 'sm' | 'md' | 'lg'; copy?: string; plain?: boolean; foot?: string; choices?: AskChoice[]; validate?: (root: HTMLElement, choice: string) => Promise<string | null> | string | null; stay?: (root: HTMLElement, btn: HTMLButtonElement) => boolean; mount?: (root: HTMLElement) => void; keep?: boolean;
   // run synchronously inside the trusted OK click, before anything is awaited (a WebAuthn ceremony needs the live gesture)
   gesture?: () => void;
   // a numbered flow: "Step 2 of 4" and a thin progress bar above the title (src/passkeyCopy.ts pkStepHtml, in the page's language)
@@ -3599,12 +4212,74 @@ function ask(o: AskOpts): Promise<boolean> { return askChoice(o).then((v) => v =
 // MIN_DWELL_MS after it was drawn. In Chromium the dialog now counts as hidden until the observer's first reading says visible (a
 // click in the first ~100 ms used to pass before any reading had arrived).
 const IO_V2 = typeof IntersectionObserverEntry !== 'undefined' && 'isVisible' in IntersectionObserverEntry.prototype;
+// (security audit 2026-11-04, SEC-2) where the observer exists, a click counts only once the dialog has been reported visible
+// WITHOUT a break for this long. It used to count the moment the dialog turned visible — and a click that came while it was
+// still reported hidden was held until a "visible" reading arrived, then taken: a page that kept the frame at opacity 0 over
+// a decoy and flipped it to 1 between the two clicks of a double-click (no rect change, so Chrome's own input drop for moved
+// frames does not apply) had its "Send everything" clicked. The same 600 ms the other browsers already wait (MIN_DWELL_MS).
+const MIN_VISIBLE_MS = 600;
+// SEC-5 (security batch 2, 2026-11-04): IntersectionObserver v2 does not see a CSS mask, a clip-path, an overflow:hidden crop or a
+// CSS zoom the page puts on this frame (measured in Chrome 156: isVisible stays true). Two answers, neither costs an honest user
+// time: (1) the dialogs that hand out a key or send value out of the vault's control ask for the frame-drawn number in Chromium
+// too (AskOpts.funds; trade dialogs keep the one click — speed); (2) every dialog checks what the frame CAN see — the observer's
+// own intersection (clipped by every ancestor up to the top-level viewport: a clip-path or crop shrinks it, measured), each
+// confirm button wholly inside this frame's viewport, the devicePixelRatio (CSS zoom 0.12 on the frame reads 0.12 here), the hit
+// target under the click point — over the same 600 ms window. A mask leaves no trace inside the frame: that is what (1) is for.
+const GEO_THRESHOLDS = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.98, 1];
+const GEO_KEEP = 0.98;      // share of the dialog / button the top-level viewport must show (sub-pixel slack)
+const GEO_MIN_DPR = 0.7;    // below it the frame is drawn at < 70 % (CSS zoom, or a browser zoomed far out on a 1x screen)
+const GEO_CUT = 'The vault dialog is cut off or partly hidden — show the whole dialog and click again.';
+const GEO_OFF = 'The vault\'s button is not fully on screen — bring the whole dialog into view and click again.';
+const GEO_SMALL = 'The vault dialog is drawn too small to read — zoom the page back in and click again.';
+const GEO_MISS = 'The click did not land on the vault\'s button — click it again.';
+type GeoSlot = { read: boolean; bad: string; since: number; io: string; ir: DOMRectReadOnly | null };
+const geoSlot = (): GeoSlot => ({ read: false, bad: '', since: -Infinity, io: '', ir: null });
+const geoButtons = (dlg: HTMLElement): HTMLElement[] => { try { return [...(dlg.querySelectorAll?.('[data-ok]') || [])] as HTMLElement[]; } catch { return []; } };
+const geoView = () => { const w = typeof window !== 'undefined' ? window : null; return { vw: Number(w?.innerWidth), vh: Number(w?.innerHeight), dpr: Number(w?.devicePixelRatio) }; };
+// one observer reading of the dialog (button=false) or of a confirm button: '' or why it does not count as shown
+function geoEntryProblem(en: IntersectionObserverEntry, button: boolean): string {
+  const b = en.boundingClientRect, r = en.intersectionRect, { vw, vh } = geoView();
+  if (!b || !r || !(vw > 0) || !(vh > 0) || !(b.width > 0) || !(b.height > 0)) return '';
+  const inside = Math.max(0, Math.min(b.right, vw) - Math.max(b.left, 0)) * Math.max(0, Math.min(b.bottom, vh) - Math.max(b.top, 0));
+  if (button && inside < b.width * b.height * GEO_KEEP) return GEO_OFF;
+  return r.width * r.height < inside * GEO_KEEP - 2 ? GEO_CUT : '';
+}
+// what is looked at every 150 ms (no observer reading comes for these): the zoom, and a button pushed out of this frame's viewport
+function geoNow(btn: HTMLElement | null): string {
+  const { vw, vh, dpr } = geoView();
+  if (dpr > 0 && dpr < GEO_MIN_DPR) return GEO_SMALL;
+  const r = btn?.getBoundingClientRect?.();
+  if (r && vw > 0 && vh > 0 && r.width > 0 && (r.left < -1 || r.top < -1 || r.right > vw + 1 || r.bottom > vh + 1)) return GEO_OFF;
+  return '';
+}
+function geoUpdate(s: GeoSlot, why: string, openedAt: number) {
+  if (why && !s.bad) s.since = Infinity;
+  if (!why && (s.bad || !s.read)) s.since = s.read ? performance.now() : openedAt;   // a first reading that is fine counts from the opening
+  s.bad = why; s.read = true;
+}
+// the click on a confirm button, against the readings taken BEFORE it: '' or why it does not count
+function clickProblem(e: MouseEvent, btn: HTMLElement, slots: GeoSlot[]): string {
+  for (const s of slots) { if (!s.read) continue; if (s.bad) return s.bad; if (performance.now() - s.since < MIN_VISIBLE_MS) return 'Read the dialog first, then click again.'; }
+  // a pointer click (detail ≥ 1; Enter / Space on the focused button is detail 0): the point is on this button, inside the part of
+  // it the top-level viewport shows, and the button is what the frame itself hit-tests there
+  if (e.detail > 0 && Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+    const ir = slots[slots.length - 1]?.ir;
+    if (ir && ir.width > 0 && (e.clientX < ir.left - 1 || e.clientX > ir.right + 1 || e.clientY < ir.top - 1 || e.clientY > ir.bottom + 1)) return GEO_MISS;
+    const hit = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(e.clientX, e.clientY) : undefined;
+    if (hit !== undefined && !(hit && btn.contains(hit))) return GEO_MISS;
+  }
+  return '';
+}
 // the same dialog with several confirm buttons (the recovery screen): each one is a trusted click on a visible dialog; resolves to its id, or null
 function askChoice(o: AskOpts): Promise<string | null> {
   return new Promise((resolve) => {
     const wrap = document.createElement('div'); wrap.className = 'dlg-wrap';
     const code = needsChallenge(HOST, IO_V2, !!(o.danger || o.guard)) ? challengeCode(crypto.getRandomValues(new Uint8Array(2))) : '';
-    const challenge = code ? `<label class="dlg-f-row dk-code">Type <b translate="no">${code}</b> to confirm<input type="text" id="dk-code" inputmode="numeric" autocomplete="off" spellcheck="false" maxlength="6" /></label>` : '';
+    // SEC-5: a dialog that hands out a key or sends value out of the vault's control asks for the number in EVERY browser — in
+    // Chromium too, where the observer cannot see a mask / clip / zoom the page puts on the frame (a decoy has no number to show)
+    const fcode = !code && HOST && o.funds ? challengeCode(crypto.getRandomValues(new Uint8Array(2))) : '';
+    const shown = code || fcode;
+    const challenge = shown ? `<label class="dlg-f-row dk-code">Type <b translate="no">${shown}</b> to confirm<input type="text" id="dk-code" inputmode="numeric" autocomplete="off" spellcheck="false" maxlength="6" /></label>` : '';
     const buttons = o.choices?.length
       ? o.choices.map((c) => `<button class="dlg-btn${c.primary ? ' primary' : ''}${c.danger ? ' danger' : ''}" data-ok="${escHtml(c.id)}">${escHtml(c.label)}</button>`).join('')
       : `<button class="dlg-btn primary${o.danger ? ' danger' : ''}" data-ok>${escHtml(o.ok)}</button>`;
@@ -3615,10 +4290,26 @@ function askChoice(o: AskOpts): Promise<string | null> {
     if (o.keep) readStorageAccess();   // known before the click, so the click itself only has to call (no await in the gesture)
     const err = wrap.querySelector('.dlg-err') as HTMLElement;
     let visible = !(HOST && IO_V2), io: IntersectionObserver | null = null;
+    let visibleSince = visible ? -Infinity : Infinity;   // SEC-2: when the current unbroken "visible" stretch began
     let openedAt = Infinity;   // set once the dialog is in the document (below)
+    // SEC-5 frame-level geometry (no wait for an honest user: the same 600 ms window as SEC-2, from the first reading): what the
+    // observer's own intersection says the TOP-LEVEL viewport shows of the dialog and of each confirm button (a clip-path or an
+    // overflow:hidden box around the frame shrinks it), the buttons inside this frame's viewport (a frame too small for its
+    // dialog), and this frame's devicePixelRatio (a CSS zoom on the frame shows here: zoom 0.12 → 0.12)
+    const geoDlg = geoSlot(), geoBtn = new Map<unknown, GeoSlot>();
+    let geoTick: ReturnType<typeof setInterval> | undefined;
+    const geoRead = (en: IntersectionObserverEntry) => {
+      const isBtn = en.target != null && en.target !== dlg;
+      const s = isBtn ? (geoBtn.get(en.target) || (geoBtn.set(en.target, geoSlot()), geoBtn.get(en.target)!)) : geoDlg;
+      s.io = geoEntryProblem(en, isBtn); s.ir = isBtn ? en.intersectionRect : null;
+      geoUpdate(s, s.io || geoNow(isBtn ? en.target as HTMLElement : null), openedAt);
+      // the readings come only when a threshold is crossed: zoom and the frame's own size are looked at every 150 ms too (while open)
+      if (!geoTick) geoTick = setInterval(geoAgain, 150);
+    };
+    const geoAgain = () => { if (geoDlg.read) geoUpdate(geoDlg, geoDlg.io || geoNow(null), openedAt); for (const [b, s] of geoBtn) geoUpdate(s, s.io || geoNow(b as HTMLElement), openedAt); };
     dialogsOpen += 1; post({ t: 'dialog', open: true });
     const close = (v: string | null) => {
-      wrap.remove(); document.removeEventListener('keydown', onKey); io?.disconnect();
+      wrap.remove(); document.removeEventListener('keydown', onKey); io?.disconnect(); clearInterval(geoTick);
       dialogsOpen -= 1;
       // two dialogs in a row (confirm, then the key) keep the frame on screen: hiding it in between would leave the second one invisible to the observer for a moment
       setTimeout(() => { if (!dialogsOpen) post({ t: 'dialog', open: false }); }, 80);
@@ -3637,10 +4328,16 @@ function askChoice(o: AskOpts): Promise<string | null> {
         // a click in its first 600 ms (one the user types into cannot be confirmed blind anyway; Chromium checks visibility)
         if (HOST && !IO_V2 && !dlg.querySelector('input, textarea') && tooSoon(openedAt, performance.now())) { fail('Read the dialog first, then click again.'); return; }
         if (code && !challengeOk((dlg.querySelector('#dk-code') as HTMLInputElement | null)?.value, code)) { fail(`Type ${code} in the box to confirm.`); return; }
+        if (fcode && !challengeOk((dlg.querySelector('#dk-code') as HTMLInputElement | null)?.value, fcode)) { fail(`Type ${fcode} in the box to confirm.`); return; }
+        // SEC-5: the click must land on this button (from inside the frame: the hit target at the click point), and the dialog
+        // must have been shown whole, unclipped and readable for the same 600 ms (decided on readings before this click)
+        if (HOST) { const why = clickProblem(e, okBtn, [geoDlg, geoBtn.get(okBtn) || geoSlot()]); if (why) { fail(why); return; } }
+        // SEC-2: decided on what the observer said BEFORE this click (never a reading that arrives after it), before the gesture
+        if (HOST && IO_V2 && !visible) { fail('The vault dialog is covered or off screen — bring it into view and click again.'); return; }
+        if (HOST && IO_V2 && performance.now() - visibleSince < MIN_VISIBLE_MS) { fail('Read the dialog first, then click again.'); return; }
         // an account dialog (keep): ask to keep this frame's storage — synchronously, while the gesture is live (see keepStorage)
         if (o.keep) keepStorage();
         if (o.gesture) { try { o.gesture(); } catch {} }
-        for (let i = 0; HOST && !visible && i < 8; i += 1) await new Promise((r) => setTimeout(r, 100));   // the observer reports with a delay: give it a reading or two
         if (HOST && !visible) { fail('The vault dialog is covered or off screen — bring it into view and click again.'); return; }
         if (o.validate) { const m = await o.validate(dlg, choice); if (m) { fail(m); return; } }
         if (o.stay && o.stay(dlg, okBtn)) return;   // e.g. the key was just revealed in place; the same button now closes
@@ -3657,7 +4354,13 @@ function askChoice(o: AskOpts): Promise<string | null> {
     document.addEventListener('keydown', onKey);
     document.body.appendChild(wrap); openedAt = performance.now();
     if (HOST && 'IntersectionObserver' in window) {
-      try { io = new IntersectionObserver((es) => { for (const en of es) if ('isVisible' in en) visible = (en as IntersectionObserverEntry & { isVisible: boolean }).isVisible; }, { threshold: [0, 0.5, 1], trackVisibility: true, delay: 100 } as IntersectionObserverInit); io.observe(dlg); } catch {}
+      try { io = new IntersectionObserver((es) => {
+        for (const en of es) {
+          // SEC-5: the same readings carry the geometry (v1: every browser with the observer) — the dialog and each confirm button
+          if (en?.intersectionRect) geoRead(en);
+          if ((en.target == null || en.target === dlg) && 'isVisible' in en) { const v = (en as IntersectionObserverEntry & { isVisible: boolean }).isVisible; if (v && !visible) visibleSince = performance.now(); if (!v) visibleSince = Infinity; visible = v; }
+        }
+      }, { threshold: GEO_THRESHOLDS, trackVisibility: true, delay: 100 } as IntersectionObserverInit); io.observe(dlg); for (const b of geoButtons(dlg)) io.observe(b); } catch {}
     }
   });
 }
@@ -3944,7 +4647,7 @@ async function recoverDialog() {
     if (!choice) return { ok: false, cancelled: true, ...summary() };
     if (choice === 'file') return restoreDialog();
     if (choice === 'account') { await startFresh(); post({ t: 'ev', name: 'trench:vaultrecover', detail: { via: 'account' } }); return { ok: true, via: 'account', ...summary() }; }
-    if (!(await ask({ title: 'Start a new empty vault?', danger: true, ok: 'Start a new vault', html: `${sub(`The ${plural(n, 'wallet')} above stay stored but unreadable in this browser until you restore them from your account or a backup file.`)}${muted('Nothing is deleted.')}` }))) return { ok: false, cancelled: true, ...summary() };
+    if (!(await ask({ title: 'Start a new empty vault?', danger: true, funds: true, ok: 'Start a new vault', html: `${sub(`The ${plural(n, 'wallet')} above stay stored but unreadable in this browser until you restore them from your account or a backup file.`)}${muted('Nothing is deleted.')}` }))) return { ok: false, cancelled: true, ...summary() };
     const r = await startFresh();
     return { ok: true, via: 'fresh', aside: r.aside, ...summary() };
   }
@@ -4118,7 +4821,7 @@ const adoptServer = (j: CheckReply) => {
 // the one way another account's policy (and its codes) gets in: a trusted click inside this frame
 async function rebind() {
   const p = pendingPolicy; if (!p) return false;
-  const ok = await ask({ title: 'A different account signed in', danger: true, ok: 'Use this account', html: `${sub(`The two-factor rules here were set by the account that signed in last. This account ${p.enabled ? 'has its own codes' : 'asks for no codes at all'}; they count here only after this click.`)}${muted('Continue only if you signed in yourself.')}` });
+  const ok = await ask({ title: 'A different account signed in', danger: true, funds: true, ok: 'Use this account', html: `${sub(`The two-factor rules here were set by the account that signed in last. This account ${p.enabled ? 'has its own codes' : 'asks for no codes at all'}; they count here only after this click.`)}${muted('Continue only if you signed in yourself.')}` });
   if (!ok || pendingPolicy !== p) return false;
   serverPolicy = p; pendingPolicy = null;
   try { localStorage.setItem(TWOFA_KEY, JSON.stringify(serverPolicy)); } catch {}
@@ -4233,12 +4936,28 @@ async function unbackedOk(tos: string[]): Promise<void> {
   const L = UNBACKED_SEND[uiLang()];
   if (!(await ask({ title: L.title, danger: true, ok: L.ok, cancelLabel: L.cancel, html: `${sub(escHtml(L.sub(hit.name)))}<div class="dk-list">${addrRow(hit.name, hit.address)}</div>${muted(escHtml(L.note))}` }))) throw new Error('Cancelled');
 }
+// SEC-6 (security batch 2): "your login wallet" is said only of the account's MAIN as this vault verified it itself — its own
+// signature over MAIN_MSG (a main new to this vault is first attached through the vault's "Set up this device" click), a seed
+// that is not an unproven legacy copy ('rk1'). An address the page attached (linkExternal accepts any list a script names) is
+// just an address: the outside dialog, its danger and its words. Returns the name to show, or null.
+const verifiedLogin = (rcpt: string): { name: string } | null => {
+  const m = meta.main ? lc(meta.main) : '';
+  if (!m || !/^0x[0-9a-f]{40}$/.test(m) || !same(m, rcpt) || !seedOf(m) || meta.seedSrc?.[m] === 'rk1') return null;
+  const row = allAccounts().find((x) => x.ext && same(x.address, m));
+  return { name: row?.name || 'Main' };
+};
 // the outside path for a destination named by wallet id (distribute / consolidate / sweep): gate, then the address in a dialog
-async function outsideOk(to: Account, what: string, auth?: Auth) {
+// (security batch 2, NEAR-2) `addr` is where the funds really go: the wallet's identity on this frame's lane (laneAddr)
+async function outsideOk(to: Account, what: string, auth?: Auth, addr: string = to.address) {
   await gate('withdraw', auth);
-  const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${what} to ${escHtml(to.name)}. ${to.ext ? 'Its key is held by your login provider, not by this vault.' : 'It isn\'t one of your wallets.'}`)}${destBox(to.address)}${muted('Check every character. This can\'t be undone.')}` });
+  const ok = await ask({ title: 'Send outside your vault', danger: true, funds: true, ok: 'Send', html: `${sub(`${what} to ${escHtml(to.name)}. ${to.ext && verifiedLogin(to.address) ? 'It is your login wallet: its key is held by your login provider, not by this vault.' : to.ext ? 'The page lists it as a login wallet; the vault has not verified that. Its key is not in this vault.' : 'It isn\'t one of your wallets.'}`)}${destBox(addr)}${muted('Check every character. This can\'t be undone.')}` });
   if (!ok) throw new Error('Cancelled');
 }
+// NEAR-2 (security batch 2, 2026-11-04): a wallet named by id is, on the NEAR and Solana frames, its NEAR account / Solana
+// address — distribute and consolidate used to check, show and send to its EVM 0x address (and say "ETH" while NEAR left).
+// A wallet without an identity on this lane (a Privy login wallet: EVM only) is refused, never sent to its 0x address.
+const laneAddr = (a: Account) => (SOL_MODE ? solAddressOf(a) : NEAR_MODE ? nearAccountId(a) : a.address) || '';
+const laneDest = (a: Account) => { const x = laneAddr(a); if (!x) throw new Error(`${a.name || 'That wallet'} has no ${laneUnit()} address on this lane`); return x; };
 // a NEAR implicit account's own ed25519 signature over a text (hex), from the same derived key as its transactions
 const nearSignText = (evmKeyHex: string, text: string) => Array.from(ed25519.sign(new TextEncoder().encode(text), nearKeys(evmKeyHex).seed), (b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -4346,7 +5065,7 @@ function policy() {
       { method: 'bridgeSend', does: 'sends on another EVM chain', needs: ['transfer'], outside: ['click', 'withdraw'] },
       { method: 'bridgeDeposit', does: 'pays a Relay bridge quote to its recipient', needs: ['click', 'transfer'], outside: ['click', 'withdraw'] },
       { method: 'relaySwap', does: 'pays a Relay swap quote (an exact approve to Relay depository, then the deposit; or one simulated Solana transaction) to its recipient', needs: ['click', 'transfer'], outside: ['click', 'withdraw'] },
-      { method: 'remove', does: 'erases a wallet key', needs: ['click'], funded: ['remove'] },
+      { method: 'remove', does: 'erases a wallet key', needs: ['click', 'remove'] },
       { method: 'importDialog', does: 'adds wallets from a key or recovery phrase typed into the engine dialog (EVM, Solana, NEAR; the key never leaves the frame)', needs: ['click'] },
       { method: 'buy/sell', does: 'signs a verified route for a token trade', needs: [] },
       { method: 'wrap/unwrap', does: 'wraps native coin in the same wallet', needs: [] },
@@ -4355,10 +5074,13 @@ function policy() {
       { method: 'limit.cancel', does: 'returns everything in an order wallet to its main wallet and burns the swap\'s nonce', needs: ['click'] },
       { method: 'limit.sweep', does: 'returns what is left in an order wallet that can no longer fill to its main wallet', needs: [] },
       { method: 'float.configure', does: 'turns on the USD balance for every wallet of the account in one dialog: a standing permission per wallet to move money between that wallet and its own reserve (caps per wallet: per day, fees, per chain, total, slippage; 30 days); switching it on converts each wallet\'s native above what stays ready into its reserve\'s dollars, at the amounts the dialog states; a wallet added later joins with the same caps and converts by the routine sweep; the switch is also recorded in the account backup (sealed under the seed, signed by one of its wallets) and the account\'s other devices follow it without a dialog', needs: ['click', 'transfer'] },
-      { method: 'float.ensure', does: 'tops up / sweeps / rebalances between this wallet and its own reserve, within the permission\'s caps; for a buy click its reserves cannot cover, also from this wallet\'s own native on another chain of the permission (one Relay deposit by this wallet, landing in this wallet on the click\'s chain, at most $100 per move); never to any other address', needs: [] },
+      { method: 'float.ensure', does: 'tops up / sweeps / rebalances between this wallet and its own reserve, within the permission\'s caps; for a buy click its reserves cannot cover, also from this wallet\'s own native on another chain of the permission (one Relay deposit by this wallet, landing in this wallet on the click\'s chain, at most $100 per move); for an Elysium buy none of this wallet\'s reserves covers, ONE reserve of another wallet of this vault whose USD balance is on for that chain may pay it to this wallet (allowed once per account in the vault\'s dialog); never to any other address', needs: [] },
       { method: 'float.sweep', does: 'moves a float surplus back to the reserve (not while a trade runs or within 10 s of a trade or ticket touch)', needs: [] },
       { method: 'float.off', does: 'converts every wallet\'s reserve dollars back to each chain\'s native in that wallet (one dialog states the amounts per wallet), then withdraws the switch and every wallet\'s permission; nothing to convert = no dialog; the revocation is recorded in the account backup and every other device of the account turns off on its next sync', needs: ['click', 'transfer'] },
       { method: 'float.buy', does: 'buys a coin for the selected wallets straight from each wallet\'s own reserve: the reserve signs ONE transaction that spends its USDC and pays the coin into that wallet (Solana; a Jupiter route checked and simulated like every buy); only while the USD balance is on for that wallet; the same buy limits and double-press guard as a buy', needs: [] },
+      { method: 'float.earn', does: 'Earn on the USD balance (Robinhood, USDG): on = one dialog (risks, the liquid buffer, the account cap), after which each wallet\'s reserve keeps a liquid buffer and deposits only the rest into ONE pinned ERC-4626 vault (Morpho Steakhouse USDG), receiver and owner always that reserve; a buy larger than the buffer first withdraws from the vault to the same reserve; off = everything comes back to the reserve; never to any other address', needs: ['click', 'transfer'] },
+      { method: 'float.convert', does: 'turns $X of one wallet\'s USD balance on THIS frame\'s chain into that chain\'s own coin (ETH on Robinhood, BNB on BNB, SOL on Solana), paid into that wallet and kept there (out of the dollar figure, never swept back): the existing top-up from the wallet\'s own reserve (one transaction, the float\'s own pool, the oracle price check); only while the USD balance is on for that wallet and chain; the switch\'s day / fee limits, at most the per-chain limit per conversion, one move of that wallet and chain at a time', needs: [] },
+      { method: 'float.withdraw', does: 'sends $X (or all) of one wallet\'s USD balance on THIS frame\'s chain as the stablecoin itself (USDG / USDC), in ONE transfer signed by the wallet\'s own reserve, to that wallet or to an address; an address the vault holds no key for takes Send\'s own consent (the withdraw 2FA gate and the vault dialog with the address in full); never more than the reserve holds; a repeat of its idempotency key never sends twice', needs: ['transfer'] },
       { method: 'float.status/jobs', does: 'reads the USD balance (cached): one wallet, or every wallet of the account and their total (scope account)', needs: [] },
     ],
   };
@@ -4379,7 +5101,7 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
   const finalOf = (l: Leg) => { let x = l; for (let i = 0; i < MAX_HOPS + 1 && nextOf.get(x.id); i += 1) x = nextOf.get(x.id)!; return x; };
   const total = plan.legs.filter((l) => !l.after && outside.includes(lc(finalOf(l).to))).reduce((t, l) => t + (l.amount === 'max' ? 0 : humanOf(BigInt(l.amount), plan.asset)), 0);
   const ok = await ask({
-    title: 'Send outside your vault', danger: true, ok: `Send ${asset}`,
+    title: 'Send outside your vault', danger: true, funds: true, ok: `Send ${asset}`,
     html: `${sub(`${escHtml(Number(total.toFixed(8)))} ${escHtml(asset)} in total${plan.hops ? ` through ${plan.hops} hop wallet${plan.hops === 1 ? '' : 's'}` : ''} to ${outside.length === 1 ? 'this address' : `these ${outside.length} addresses`}. ${outside.length === 1 ? 'It isn\'t' : 'They aren\'t'} your wallets.`)}${outside.map((a) => destBox(a)).join('')}${muted('Check every character. This can\'t be undone.')}`,
   });
   if (!ok) throw new Error('Cancelled');
@@ -4400,7 +5122,7 @@ async function confirmOutside(plan: Plan, auth?: Auth) {
 //   bridgeSend(id, chain, to, amt, auth)      native on another EVM chain        'transfer' | outside: click + 'withdraw'
 //   bridgeDeposit(id, quote, auth)            Relay quote to its recipient       click + 'transfer' | outside: click + 'withdraw'
 //   relaySwap(id, quote, auth)                Relay swap quote to its recipient  click + 'transfer' | outside: click + 'withdraw'
-//   remove(id, auth)                          key erased                         click | funded: + 'remove'
+//   remove(id, auth)                          key erased                         click + 'remove'
 //   buy / sell / wrap / unwrap                trades on routes verified on chain (minOut, known venues); no gate — see trade()
 //   signNote(address, message)                two fixed note formats only; never arbitrary messages, never typed data, never calldata
 // Nothing here signs arbitrary calldata or an arbitrary message. restore(),
@@ -4639,7 +5361,7 @@ const floatGasPrice = async () => {
 };
 // R signs on its own lane (the cross-tab lock on its address) and its own nonce, read from the float's client; the bytes go
 // to the float's nodes only. A send whose answer was lost is UNKNOWN with its hash — the runner reconciles, never re-sends.
-async function floatSendR(walletId: string, tx: EvmTx, gas: bigint): Promise<`0x${string}`> {
+async function floatSendR(walletId: string, tx: EvmTx, gas: bigint, signed?: (nonce: number) => void): Promise<`0x${string}`> {
   const r = reserveOf(floatAccount(walletId)); const account = privateKeyToAccount(r.key);
   return laneLock(account.address, async () => {
     const [chainNonce, floor] = await Promise.all([floatRpc((pc) => pc.getTransactionCount({ address: account.address, blockTag: 'pending' })), floatGasPrice()]);
@@ -4649,6 +5371,8 @@ async function floatSendR(walletId: string, tx: EvmTx, gas: bigint): Promise<`0x
     const nonce = heldR && Date.now() - heldR.at < BRIDGE_HOLD_MS && heldR.nonce >= chainNonce ? heldR.nonce + 1 : chainNonce;
     if (CFG.maxFeeWei && gas * floor > CFG.maxFeeWei) throw new Error('Refusing to sign: abnormal gas');
     const raw = await account.signTransaction({ to: tx.to, data: tx.data, value: tx.value, gas, gasPrice: floor, nonce, chainId: chain.id, type: 'legacy' } as never);
+    // (Earn r6: the caller may want the exact nonce this transaction carries — earnSendR only; the float's own sends pass nothing)
+    try { signed?.(nonce); } catch { /* the caller's bookkeeping never stops a send */ }
     const local = keccak256(raw);
     try { const h = await floatRpc((pc) => pc.request({ method: 'eth_sendRawTransaction', params: [raw] }) as Promise<string>); if (String(h).toLowerCase() !== local.toLowerCase()) throw new Error('node returned a different transaction hash'); return local; }
     catch (e) { const m = String((e as Error)?.message || e); if (/already known|known transaction/i.test(m)) return local; if (LOST.test(m)) throw Object.assign(new FloatUnknown(`Reserve send outcome unknown (${m.slice(0, 60)})`), { hash: local }); throw e; }
@@ -4938,8 +5662,11 @@ async function floatSheetSol(ws: { w: string; r: string }[]) {
   }));
   return { w: ws.map((_, i) => vals[3 * i]), r: ws.map((_, i) => vals[3 * i + 1]), stable: ws.map((_, i) => vals[3 * i + 2]) };
 }
+// Earn (src/earnEngine.ts): created after the engine object (its block below); the float asks for it only at run time
+let earnApi: ReturnType<typeof createEarn> | undefined;
 const floatWalletCache = new Map<string, FloatWallet>();
 const float = createFloat({
+  get earn() { return earnApi; },
   chain: floatLane,
   hurry: floatFastly,
   solver: {
@@ -5031,12 +5758,26 @@ const float = createFloat({
     // to THIS wallet's own R (derived here, never an argument), in one transferChecked with R's account created if missing; W signs
     // and pays, through the same held-wallet send as the sweep. R pays W only that fee, when W has no SOL, capped at SOL_FWD.fundMax
     forward: (walletId, units) => floatQuiet(() => { const { w, r } = solAcctsOf(walletId); if (units <= 0n) throw new Error('Nothing to forward'); return solFloatSend(w, solFloatTokenPayIxs(w.address, FLOAT_CFG.sol.stable.address, r.address, units, FLOAT_CFG.sol.stable.decimals), SOL_FWD.units, SOL_FWD.micro); }),
+    // (release 9) float.withdraw: R's USDC of the pinned mint to `to` — the address floatEngine checked and the user confirmed in
+    // Send's own consent (withdrawOk below), in one transferChecked with its account created if missing; R signs and pays
+    withdraw: (walletId, to, units) => floatQuiet(() => { const { r } = solAcctsOf(walletId); if (units <= 0n) throw new Error('Nothing to withdraw'); if (!SOL_ADDR.test(String(to))) throw new Error('Invalid address'); return solFloatSend(r, solFloatTokenPayIxs(r.address, FLOAT_CFG.sol.stable.address, String(to), units, FLOAT_CFG.sol.stable.decimals), SOL_FWD.units, SOL_FWD.micro); }),
     fundW: (walletId, lamports) => floatQuiet(() => { const { w, r } = solAcctsOf(walletId); if (lamports <= 0n || lamports > SOL_FWD.fundMax) throw new Error('Refusing: abnormal funding'); return solFloatSend(r, [solFloatPayIx(r.address, w.address, lamports)], SOL_FWD.fundUnits, SOL_FWD.fundMicro); }),
   },
   ask: (o) => ask(o),
   // the switch-on's two confirm buttons (2026-11-01): turning on and converting are separate trusted clicks of the same dialog
   choose: (o) => askChoice(o),
   gate: () => gate('transfer'),
+  // (release 9) float.withdraw: Send's own consent (as transferToken): an address this vault holds no key for = the 'withdraw'
+  // gate + "Send outside your vault" with the address in full; one of the vault's own wallets = the 'transfer' gate (+ unbacked check)
+  withdrawOk: async (o) => {
+    const what = `<b>${escHtml(o.amount)} ${escHtml(o.symbol)}</b>`;
+    if (!isOwn(o.to)) {
+      await gate('withdraw', o.twofa ? { twofa: o.twofa } : undefined);
+      const ok = await ask({ title: 'Send outside your vault', danger: true, funds: true, ok: 'Send', html: `${sub(`${what} from ${escHtml(o.walletName)}'s USD balance on ${escHtml(o.chainName)} to this address. It isn't one of your wallets.`)}${destBox(o.to)}<div class="dk-list">${addrRow(`${o.symbol} contract`, o.token)}</div>${muted('Check every character. This can\'t be undone.')}` });
+      if (!ok) throw Object.assign(new Error('Cancelled'), { name: 'Cancelled' });
+    } else { await gate('transfer', o.twofa ? { twofa: o.twofa } : undefined); await unbackedOk([o.to]); }
+  },
+
   html: { esc: escHtml, sub, muted },
   now: () => Date.now(),
   store: {
@@ -5102,7 +5843,7 @@ async function usdBuy(o: unknown) {
     if (!targets.length) throw new Error('No wallet selected');
     // the switch must be on for every wallet of the click, and the float's price stated (before anything is read or asked)
     const ready = targets.map((x) => ({ x, ...float.directFor(x.id) }));
-    const s = loadSettings(); const t0 = performance.now();
+    const s = tradeSettings(); const t0 = performance.now();   // exec-quality review: the lane's slippage, as the page shows it
     const solEq = Number((BigInt(Math.round(a.usd * 1e6)) * 1_000_000_000n) / ready[0].price6) / 1e9;   // per wallet, for the limits
     const bad = tradeSizeProblem('buy', solEq, MAX_BUY[laneKey()] ?? MAX_BUY_ETH); if (bad) throw new Error(bad);
     const ledgerAt = Date.now();
@@ -5192,7 +5933,7 @@ async function usdBuyEvm(a: ReturnType<typeof usdBuyArgs>) {
     const targets = list.filter((x) => ids.includes(x.id));
     if (!targets.length) throw new Error('No wallet selected');
     const ready = targets.map((x) => ({ x, ...float.directFor(x.id) }));
-    const s = loadSettings(); const t0 = performance.now();
+    const s = tradeSettings(); const t0 = performance.now();   // exec-quality review: the lane's slippage, as the page shows it
     const nativeEq = Number((BigInt(Math.round(a.usd * 1e6)) * 10n ** 18n) / ready[0].price6) / 1e18;   // per wallet, for the limits
     const bad = tradeSizeProblem('buy', nativeEq, MAX_BUY[laneKey()] ?? MAX_BUY_ETH); if (bad) throw new Error(bad);
     const ledgerAt = Date.now();
@@ -5288,7 +6029,8 @@ const engine = {
     if (!isOwn(to)) {
       // the only way out of the vault for native coin: the 'withdraw' gate, then a trusted click on the real address
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: amountEth === 'max' ? 'Send everything' : `Send ${amountEth} ${NATIVE}`, html: `${sub(`${amountEth === 'max' ? 'The whole balance' : escHtml(amountEth) + ' ' + NATIVE} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
+      // NEAR-2: the coin of this frame's lane (NATIVE is the EVM config's symbol: 'ETH' on the NEAR frame)
+      const ok = await ask({ title: 'Send outside your vault', danger: true, funds: true, ok: amountEth === 'max' ? 'Send everything' : `Send ${amountEth} ${laneUnit()}`, html: `${sub(`${amountEth === 'max' ? 'The whole balance' : escHtml(amountEth) + ' ' + laneUnit()} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else { await gate('transfer', auth); await unbackedOk([to]); }
     sending();
@@ -5306,7 +6048,7 @@ const engine = {
     const what = `${amount === 'max' ? 'all of its' : escHtml(amount)} <b>${escHtml(sym || (String(token).slice(0, 6) + '…' + String(token).slice(-4)))}</b>`;
     if (!isOwn(to)) {
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${what} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}<div class="dk-list">${addrRow(`${sym || 'Token'} contract`, token)}</div>${muted('Check every character. This can\'t be undone.')}` });
+      const ok = await ask({ title: 'Send outside your vault', danger: true, funds: true, ok: 'Send', html: `${sub(`${what} from ${escHtml(from.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}<div class="dk-list">${addrRow(`${sym || 'Token'} contract`, token)}</div>${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else { await gate('transfer', auth); await unbackedOk([to]); }
     if (SOL_MODE) { sending(); const r = await solTokenTransfer(from as unknown as SolAcct, String(token), String(to), amount); return { ok: true, hash: r.hash, units: r.units, decimals: r.decimals }; }
@@ -5326,8 +6068,9 @@ const engine = {
     return { ok: true, hash: await signAndSend(client, account, { to: t, data }, gasPrice, gas), units: units.toString(), decimals: dec };
   }),
   // destinations are wallet ids resolved here, never addresses: these two cannot send outside the vault
-  distribute: async (fromId: string, toIds: string[], amountEth: number, auth?: Auth) => { const list = requireUnlocked(); { const ext = toIds.map((id) => list.find((x) => x.id === id)).filter((t) => t && !isOwn(t.address)) as Account[]; if (ext.length) { for (const t of ext) await outsideOk(t, `Send <b>${escHtml(amountEth)} ${NATIVE}</b>`, auth); } else await gate('transfer', auth); } await unbackedOk(toIds.map((id) => list.find((x) => x.id === id)?.address || '')); const results = []; for (const id of toIds) { const t = list.find((x) => x.id === id); if (!t) continue; try { results.push({ id, address: t.address, ok: true, hash: await sendEth(fromId, t.address, parseEther(String(amountEth))) }); } catch (e) { results.push({ id, address: t.address, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
-  consolidate: async (fromIds: string[], toId: string, auth?: Auth) => { const list = requireUnlocked(); const to = list.find((x) => x.id === toId); if (!to) throw new Error('Unknown target'); if (!isOwn(to.address)) await outsideOk(to, `Sweep <b>${fromIds.filter((x) => x !== toId).length}</b> wallet(s)`, auth); else { await gate('transfer', auth); await unbackedOk([to.address]); } const results = []; for (const id of fromIds) { if (id === toId) continue; try { results.push({ id, ok: true, hash: await sendEth(id, to.address, 'max') }); } catch (e) { results.push({ id, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
+  // NEAR-2: every destination is the wallet's identity on this lane (laneDest), checked, shown and sent to as that, in this lane's coin
+  distribute: async (fromId: string, toIds: string[], amountEth: number, auth?: Auth) => { const list = requireUnlocked(); const tgts = toIds.map((id) => list.find((x) => x.id === id)).filter(Boolean) as Account[]; const dest = new Map(tgts.map((t) => [t.id, laneDest(t)])); { const ext = tgts.filter((t) => !isOwn(dest.get(t.id)!)); if (ext.length) { for (const t of ext) await outsideOk(t, `Send <b>${escHtml(amountEth)} ${laneUnit()}</b>`, auth, dest.get(t.id)); } else await gate('transfer', auth); } await unbackedOk(tgts.map((t) => dest.get(t.id)!)); const results = []; for (const id of toIds) { const t = list.find((x) => x.id === id); if (!t) continue; try { results.push({ id, address: t.address, ok: true, hash: await sendEth(fromId, dest.get(t.id)! as `0x${string}`, parseEther(String(amountEth))) }); } catch (e) { results.push({ id, address: t.address, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
+  consolidate: async (fromIds: string[], toId: string, auth?: Auth) => { const list = requireUnlocked(); const to = list.find((x) => x.id === toId); if (!to) throw new Error('Unknown target'); const toAddr = laneDest(to); if (!isOwn(toAddr)) await outsideOk(to, `Sweep <b>${fromIds.filter((x) => x !== toId).length}</b> wallet(s)`, auth, toAddr); else { await gate('transfer', auth); await unbackedOk([toAddr]); } const results = []; for (const id of fromIds) { if (id === toId) continue; try { results.push({ id, ok: true, hash: await sendEth(id, toAddr as `0x${string}`, 'max') }); } catch (e) { results.push({ id, ok: false, error: shortError(e) }); } } return { ok: true, results }; },
   // WETH / WBNB on the EVM frames. The Solana and NEAR frames have no wrap here: this used to fall through to the EVM
   // client (a SOL-frame wrap() would have wrapped ETH on Robinhood).
   wrap: async (id: string, amountEth: number) => { if (SOL_MODE || NEAR_MODE) throw new Error(SOL_MODE ? 'Trades on Solana pay in SOL — there is nothing to wrap' : 'Wrapping is not available on NEAR here'); return { ok: true, hash: await wrap(id, parseEther(String(amountEth))) }; },
@@ -5453,7 +6196,14 @@ const engine = {
     // (buildProfile under its own seed: the entry opens, profile.fp matches) and would attach that main with no click —
     // and mainProfile(main) then seals every key of this vault under that seed. Same for expectFp and the profile: page
     // data. An empty frame has no anchor of its own to tell the account's main from a foreign one; only this click does.
-    if (!seedOf(m) && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, html: `${sub('Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
+    // Owner in chat 2026-11-04: «да делай» — no typed code on a FRESH account's first attach (no expectFp from the page, no seed
+    // of any kind in this vault, no local wallet other than login / hop rows): the click still decides, but one click. The
+    // trade-off SEC-5b took the code for, accepted here: a decoy click through a masked frame (Chromium, IOv2 still says
+    // "visible") can attach a page script's own main. On a fresh vault there is nothing for it to take now (no keys, no salt),
+    // but the wallets created after it are derived and backed up under that main's seed. A restore (expectFp set, a seed
+    // here, or local wallets) keeps the typed code.
+    const fresh = !src?.expectFp && !Object.keys(seeds).length && !allAccounts().some((a) => !a.ext && !a.hop);
+    if (!seedOf(m) && !(await ask({ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, funds: !fresh, html: `${sub(fresh ? 'Your trading wallets are created under your account.' : 'Your trading wallets are restored here, and new ones are created under your account.')}${signedIn(m)}${muted('Continue only with the wallet you signed in with.')}` }))) throw new Error('Cancelled');
     const seed = await seedOfSignature(String(src?.signature || ''));
     const fp = await fingerprint(seed);
     // the account's profile names the fingerprint of the seed it was built with: a different signature is refused before anything is kept
@@ -6052,17 +6802,16 @@ const engine = {
     // F-52 (V12): a funded wallet's remove gate must not be skipped by a failed RPC read. A failed balance read
     // (catch → null) counts as held, as does a wallet whose nonce is > 0 (it has transacted, so it has/had funds) —
     // only a wallet proven empty AND never-used skips the gate.
-    { const addr = lc(list[i].address); let held = (ethCache[addr] || 0) > 0 || Object.values(tokenCache).some((m) => (m[addr] || 0) > 0);
-      if (!held && !SOL_MODE && !NEAR_MODE) {
-        const bal = await publicClient.getBalance({ address: list[i].address }).catch(() => null);
-        const nonce = await publicClient.getTransactionCount({ address: list[i].address, blockTag: 'latest' }).catch(() => null);
-        if (bal === null || bal > 0n || nonce === null || nonce > 0) held = true;
-      }
-      if (held) await gate('remove', auth); }
+    // (security audit 2026-11-04, SEC-3 = F-9 not fully fixed) the funded test looked the balance up under the EVM address, so
+    // on the Solana / NEAR frames (caches keyed by the Solana / NEAR address, no live read) a wallet holding SOL counted as
+    // empty, and on an EVM frame only THIS chain counted. The key also controls the other EVM chain, its Solana / NEAR
+    // identities, its USD-balance reserve and its limit-order and perps wallets — no frame can prove all of those empty, so
+    // erasing a keyed wallet always passes the 'remove' gate (a no-op for an account without 2FA).
+    await gate('remove', auth);
     // the words say what really happens to the account backup (2026-10-28): the server's union keeps a removed wallet's
     // sealed entry, so one the backup holds stays restorable; one it does not hold (no account, an 'rk1' device) is gone
     { const R = REMOVE_DIALOG[uiLang()]; const kept = inBackup(list[i]) && !unboundOf(meta.main || '').some((w) => same(w.address, list[i].address));
-      if (!(await ask({ title: R.title(list[i].name), danger: true, ok: R.ok, cancelLabel: R.cancel, html: `${sub(escHtml(kept ? R.kept : R.lost))}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted(escHtml(kept ? R.keptNote : R.lostNote))}` }))) throw new Error('Cancelled'); } if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); perps.forget(list[i].lt?.a).catch(() => {}); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
+      if (!(await ask({ title: R.title(list[i].name), danger: true, funds: true, ok: R.ok, cancelLabel: R.cancel, html: `${sub(escHtml(kept ? R.kept : R.lost))}<div class="dk-list">${addrRow(list[i].name, list[i].address)}</div>${muted(escHtml(kept ? R.keptNote : R.lostNote))}` }))) throw new Error('Cancelled'); } if (list[i].hop && (await publicClient.getBalance({ address: list[i].address }).catch(() => 0n)) > 0n) throw new Error('This hop wallet still holds ETH — sweep it first'); removedIds.add(id); meta.removedAddrs = [...(meta.removedAddrs || []).filter((x) => x !== lc(list[i].address)), lc(list[i].address)].slice(-500); perps.forget(list[i].lt?.a).catch(() => {}); list.splice(i, 1); meta.selectedAccountIds = meta.selectedAccountIds.filter((x) => x !== id); if (meta.activeAccountId === id) meta.activeAccountId = list[0]?.id || null; await persist(); return { ok: true, ...summary() }; },
   setActive: async (id: string) => { requireUnlocked(); meta.activeAccountId = id; await persist(); return { ok: true, ...summary() }; },
   setSelected: async (ids: string[]) => { const list = requireUnlocked(); meta.selectedAccountIds = [...ids.filter((id) => list.some((a) => a.id === id)), ...meta.selectedAccountIds.filter((id) => parked.some((a) => a.id === id))]; await persist(); return { ok: true, ...summary() }; },
   // the key is shown in the engine's own dialog and never returned to the caller
@@ -6073,7 +6822,7 @@ const engine = {
     // on the NEAR lane the wallet is its NEAR identity: the ed25519 secret in NEAR wallet format
     const shownAddr = SOL_MODE ? solAddressOf(a) || a.address : NEAR_MODE ? nearAccountId(a) || a.address : a.address;
     await ask({
-      title: SOL_MODE ? 'Solana private key' : NEAR_MODE ? 'NEAR secret key' : 'Private key', ok: NEAR_MODE ? 'Show secret key' : 'Show private key', guard: true, cancel: false, plain: true, size: 'sm', foot: PK_WARN,
+      title: SOL_MODE ? 'Solana private key' : NEAR_MODE ? 'NEAR secret key' : 'Private key', ok: NEAR_MODE ? 'Show secret key' : 'Show private key', funds: true, guard: true, cancel: false, plain: true, size: 'sm', foot: PK_WARN,
       html: `<div class="pk"><label>${SOL_MODE ? 'Solana address' : NEAR_MODE ? 'NEAR account' : 'Wallet address'}</label>${pkBox(shownAddr.slice(0, 26) + '…' + shownAddr.slice(-4), { copy: shownAddr, title: 'Copy address' })}<label>${SOL_MODE ? 'Private key (base58: imports into Phantom, Solflare, Backpack)' : NEAR_MODE ? 'Secret key (ed25519: imports into any NEAR wallet)' : 'Private key'}</label>${pkBox((SOL_MODE ? '' : NEAR_MODE ? 'ed25519:' : '0x') + '•'.repeat(64), { key: true, title: 'Copy private key' })}</div>`,
       stay: (root, btn) => reveal(root, btn, SOL_MODE ? solSecretKey(a.key) : NEAR_MODE ? nearSecretKey(a.key) : a.key),
     });
@@ -6084,7 +6833,7 @@ const engine = {
     await gate('export', auth);
     const lines = list.map((a) => `${a.name},${nativeChainOf(a.key) ? nativeSecret(a.key) : a.key}`).join('\n');
     await ask({
-      title: `Private keys (${list.length})`, ok: 'Show private keys', guard: true, cancel: false, plain: true, size: 'sm', foot: PK_WARN,
+      title: `Private keys (${list.length})`, ok: 'Show private keys', funds: true, guard: true, cancel: false, plain: true, size: 'sm', foot: PK_WARN,
       html: `<div class="pk"><label>Wallets</label>${list.map((a) => pkBox(`${a.name} · ${a.address}`, { copy: a.address, title: 'Copy address' })).join('')}<label>Private keys <small>name,key, one per line: imports back into any motion vault</small></label>${pkBox(list.map((a) => `${a.name},0x` + '•'.repeat(64)).join('\n'), { key: true, title: 'Copy all keys' })}</div>`,
       stay: (root, btn) => reveal(root, btn, lines),
     });
@@ -6101,7 +6850,8 @@ const engine = {
       try { const r = await nearRoute(token, hint); return { ok: true, route: 'near-dcl:' + r.quoteSymbol }; } catch { return { ok: false }; }
     }
     keepHot(); feeFloor().catch(() => {}); { const list = unlocked || []; const ids = meta.selectedAccountIds.length ? meta.selectedAccountIds : meta.activeAccountId ? [meta.activeAccountId] : []; for (const a of list.filter((x) => ids.includes(x.id)).slice(0, 8)) nextNonce(a.address).catch(() => {}); } const addr = lc(token); if (!/^0x[0-9a-f]{40}$/.test(addr)) return { ok: false }; const r = await routeFor(addr, hint); await verifyRoute(addr as `0x${string}`, r); return { ok: true, route: r.type }; },
-  settingsGet: async () => ({ ok: true, settings: { ...loadSettings(), buyCap: buyCap(), slipOk: slipCeiling(loadLimits().slipOk) } }),
+  // TC-S1 / TC-M1: `slippage` is THIS lane's manual figure; `features` tells a page which per-lane switches this vault has
+  settingsGet: async () => { const st = loadSettings(); return { ok: true, settings: { ...st, slippage: CFG.key === 'elysium' ? Number(elySlip(st)) / 100 : laneSlip(st), mev: { ...st.mev, [laneKey()]: mevOn(st) }, features: vaultFeatures(), buyCap: buyCap(), slipOk: slipCeiling(loadLimits().slipOk) } }; },   // (trade-core.patch E11: r4 L2, on rel3's per-lane settings)
   settingsSet: async (s: Partial<Settings> & { buyCap?: unknown; slipOk?: unknown }) => {
     // the ceilings live apart from the settings a page writes: lowering the cap is free, raising it is a trusted click
     if (s && typeof s === 'object' && 'buyCap' in s) {
@@ -6128,7 +6878,7 @@ const engine = {
         if (JSON.stringify(want) !== JSON.stringify(have)) {
           const hostOf = (u: string) => { try { return new URL(u).host; } catch { return u; } };
           const listed = Object.keys(want).flatMap((k) => [want[k].primary, want[k].secondary, ...(want[k].send || [])].filter(isRpcUrl).map(hostOf));
-          const ok = await ask({ title: 'Change network nodes', danger: true, ok: 'Use these nodes', html: `${sub('Trades will be read and broadcast through custom nodes instead of the built-in ones. A malicious node can misreport balances and front-run a trade — change them only to nodes you trust.')}${listed.length ? muted('Nodes: ' + escHtml(listed.join(', '))) : muted('All custom nodes will be cleared.')}` });
+          const ok = await ask({ title: 'Change network nodes', danger: true, funds: true, ok: 'Use these nodes', html: `${sub('Trades will be read and broadcast through custom nodes instead of the built-in ones. A malicious node can misreport balances and front-run a trade — change them only to nodes you trust.')}${listed.length ? muted('Nodes: ' + escHtml(listed.join(', '))) : muted('All custom nodes will be cleared.')}` });
           if (!ok) delete s.rpcs;
         }
       }
@@ -6155,10 +6905,25 @@ const engine = {
         }
       }
     }
-    if (s && typeof s === 'object') { delete s.buyCap; delete s.slipOk; }
-    const settings = saveSettings(s); if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, settings, rpcs: n.rpcs, send: n.send }; } const rebuilt = rebuildClients(); if (rebuilt) verifyCache.clear(); return { ok: true, settings, rpcs: rpcUrls, send: broadcastUrls() }; },
+    if (CFG.key === 'elysium' && s && typeof s === 'object' && 'slippage' in s) { try { localStorage.setItem(ELY.ELY_SLIP_KEY, String(Math.min(100, Math.max(0.1, Number(s.slippage) || 5)))); } catch {} delete s.slippage; }   // (trade-core.patch E10: N5, r4 L2)
+    // TC-S1 / TC-S2 / TC-M1: per-lane switches, written for THIS frame's lane only and merged into what the other lanes keep.
+    // Turning MEV protection OFF sends this lane's trades to public nodes again: a trusted click, like raising the slippage.
+    if (s && typeof s === 'object') {
+      const lane = laneKey(), stored = loadSettings();
+      if ('slippage' in s) s.slipLane = { ...stored.slipLane, [lane]: Math.min(100, Math.max(0.1, Number(s.slippage) || laneSlip(stored))) };
+      else if ('slipLane' in s) delete s.slipLane;   // only through `slippage`, which passed its ceiling check above
+      if ('slipAuto' in s) { const v = (s.slipAuto as Record<string, unknown> | undefined)?.[lane]; if (typeof v === 'boolean') s.slipAuto = { ...stored.slipAuto, [lane]: v }; else delete s.slipAuto; }
+      if ('mev' in s) {
+        const v = (s.mev as Record<string, unknown> | undefined)?.[lane];
+        if (typeof v !== 'boolean') delete s.mev;
+        else if (!v && mevOn(stored) && !(await ask({ title: 'Turn off MEV protection', danger: true, ok: 'Turn off', html: `${sub('Trades on this network will go to public nodes at once: visible to bots before they land, so a front-runner can take up to your slippage.')}${muted('With protection on, a trade goes to private builders first and to public nodes only if it has not landed within about a second. You can turn it back on at any time.')}` }))) delete s.mev;
+        else s.mev = { ...stored.mev, [lane]: v };
+      }
+    }
+    if (s && typeof s === 'object') { delete s.buyCap; delete s.slipOk; delete (s as { features?: unknown }).features; }
+    const settings = saveSettings(s); const shown = { ...settings, slippage: CFG.key === 'elysium' ? Number(elySlip(settings)) / 100 : laneSlip(settings),   /* (trade-core.patch E11) */ mev: { ...settings.mev, [laneKey()]: mevOn(settings) }, features: vaultFeatures() }; if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, settings: shown, rpcs: n.rpcs, send: n.send }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, settings: shown, rpcs: n.rpcs, send: n.send }; } const rebuilt = rebuildClients(); if (rebuilt) verifyCache.clear(); return { ok: true, settings: shown, rpcs: rpcUrls, send: broadcastUrls() }; },
   // which endpoints this frame signs and broadcasts through, right now
-  rpcInfo: async () => { if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, chain: 'near', urls: n.rpcs, send: n.send, defaults: NEAR_DEFAULT_RPCS }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, chain: 'sol', urls: n.rpcs, send: n.send, defaults: n.rpcs.slice(-2) }; } return { ok: true, chain: CFG.key, urls: rpcUrls, send: broadcastUrls(), defaults: DEFAULT_RPCS }; },
+  rpcInfo: async () => { if (NEAR_MODE) { const n = applyNearRpcs(); return { ok: true, chain: 'near', urls: n.rpcs, send: n.send, defaults: NEAR_DEFAULT_RPCS }; } if (SOL_MODE) { const n = applySolRpcs(); return { ok: true, chain: 'sol', urls: n.rpcs, send: n.send, defaults: n.rpcs.slice(-2) }; } return { ok: true, chain: CFG.key, urls: rpcUrls, send: broadcastUrls(), ...(mevPrivate() ? { fallback: publicSendUrls(), fallbackMs: MEV_FALLBACK_MS } : {}), defaults: DEFAULT_RPCS }; },
   busy: () => tradesInFlight > 0,
   // backup file out, backup file in, and where the vault stands (for the "back up now" notice)
   backup: async (auth?: Auth) => { requireUnlocked(); await gate('backup', auth); return backupDialog(); },
@@ -6228,7 +6993,7 @@ const engine = {
   // limit orders v1: limit.<method>({ … }) — one object each, shapes checked in src/limitCore.ts (limitArgs)
   limit: limitApi,
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
-  float: { status: float.status, configure: float.configure, ensure: float.ensure, sweep: float.sweep, off: float.off, jobs: float.jobs, buy: (o: unknown) => clickRun(() => usdBuy(o)) },
+  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => clickRun(() => usdBuy(o)), convert: float.convert, withdraw: float.withdraw },
   buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('buy', token, amount, accountIds, hint, opts)),
   sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
@@ -6305,9 +7070,10 @@ const engine = {
     const arriving = bound.outFormatted ? ` and about ${escHtml(bound.outFormatted)} arriving on ${escHtml(dest)}` : '';
     if (!ownTo) {
       await gate('withdraw', auth);
-      // the login wallet (Privy) is the user's own, but its key is not in this vault: say so instead of "not one of your wallets"
-      const login = list.find((x) => x.ext && same(x.address, rcpt));
-      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside your vault', danger: !login, ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(fromName)} to ${escHtml(dest)}${arriving}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted('Check every character. A bridge can\'t be undone.')}` });
+      // the login wallet is the user's own, but its key is not in this vault: say so instead of "not one of your wallets" — only
+      // when the vault verified it (SEC-6: a page-attached entry proves nothing), and it stays a danger dialog either way
+      const login = verifiedLogin(rcpt);
+      const ok = await ask({ title: login ? 'Bridge to your login wallet' : 'Bridge outside your vault', danger: true, funds: true, ok: 'Bridge', html: `${sub(`${escHtml(amt)} ${escHtml(sym)} from ${escHtml(a.name)} on ${escHtml(fromName)} to ${escHtml(dest)}${arriving}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted('Check every character. A bridge can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else {
       // between the vault's own wallets: the 'transfer' gate, then a trusted click on the engine's dialog (the page's click cannot count here)
@@ -6353,8 +7119,8 @@ const engine = {
     const ownTo = ownAccounts().find((x) => same(x.address, rcpt) || solAddressOf(x) === rcpt);
     if (!ownTo) {
       await gate('withdraw', auth);
-      const login = list.find((x) => x.ext && same(x.address, rcpt));
-      const ok = await ask({ title: login ? 'Swap to your login wallet' : 'Swap outside your vault', danger: !login, ok: 'Swap', html: `${sub(`${what}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted(`${steps} Check every character. A swap can't be undone.`)}` });
+      const login = verifiedLogin(rcpt);   // SEC-6: as in bridgeDeposit
+      const ok = await ask({ title: login ? 'Swap to your login wallet' : 'Swap outside your vault', danger: true, funds: true, ok: 'Swap', html: `${sub(`${what}, landing at this address.${login ? ` It is your login wallet ${escHtml(login.name)}: yours, but its key is held by the login provider, so this counts as a withdrawal.` : ' It isn\'t one of your wallets.'}`)}${destBox(rcpt)}${muted(`${steps} Check every character. A swap can't be undone.`)}` });
       if (!ok) throw new Error('Cancelled');
     } else {
       await gate('transfer', auth);
@@ -6377,10 +7143,130 @@ const engine = {
     if (!/^0x[0-9a-fA-F]{40}$/.test(String(to))) throw new Error('Invalid address');
     if (!isOwn(to)) {
       await gate('withdraw', auth);
-      const ok = await ask({ title: 'Send outside your vault', danger: true, ok: 'Send', html: `${sub(`${amount === 'max' ? 'The whole balance' : escHtml(amount) + ' ' + c.symbol} on ${c.name} from ${escHtml(a.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
+      const ok = await ask({ title: 'Send outside your vault', danger: true, funds: true, ok: 'Send', html: `${sub(`${amount === 'max' ? 'The whole balance' : escHtml(amount) + ' ' + c.symbol} on ${c.name} from ${escHtml(a.name)} to this address. It isn't one of your wallets.`)}${destBox(to)}${muted('Check every character. This can\'t be undone.')}` });
       if (!ok) throw new Error('Cancelled');
     } else await gate('transfer', auth);
     return { ok: true, hash: await bridgeSend(a, Number(chainId), to, amount) };
+  },
+  // (2026-11-03) Add HYPE / USDC on Elysium from this wallet, through motion's bridge (the block above elysiumSignFromW).
+  // { walletId, pay: 'native' | 'stable', amount (in the paid coin), asset: 'HYPE' | 'USDC', phase?: 'quote' } — 'quote' only
+  // prices it (nothing signed, no dialog); otherwise the vault's own dialog shows what leaves, what arrives where, and the 6-day
+  // way back, and only a click there signs. Returns { state, srcHash, dstHash, quoteId, out } or throws (SolverRefused = nothing
+  // of yours moved; name 'TransferUnknown' + unknown = the transfer may be out: follow elysiumFundStatus, never resend).
+  elysiumFund: async (o: { walletId: string; pay: 'native' | 'stable'; amount: number; asset: 'HYPE' | 'USDC'; phase?: 'quote' }, auth?: Auth) => {
+    if ((o as { from?: unknown } | null)?.from === 'hyperevm') return elysiumFundFromHyperEvm(o, auth);   // (release 6) from HyperEVM, any EVM frame
+    if (NEAR_MODE || !(SOL_MODE || CFG.key === 'robinhood' || CFG.key === 'bsc')) throw new Error('Elysium funding starts from a Robinhood, BNB or Solana wallet');
+    const list = requireUnlocked(); const a = list.find((x) => x.id === o?.walletId); if (!a || a.ext || a.hop) throw new Error('Unknown wallet');
+    if (!/^0x[0-9a-fA-F]{64}$/.test(a.key) || nativeChainOf(a.key)) throw new Error('This wallet cannot sign on EVM chains');
+    const pay = o.pay === 'native' ? 'native' : o.pay === 'stable' ? 'stable' : null;
+    const asset = o.asset === 'USDC' ? 'stable' : o.asset === 'HYPE' ? 'native' : null;
+    if (!pay || !asset || !(typeof o.amount === 'number' && o.amount > 0 && Number.isFinite(o.amount))) throw new Error('Invalid amount');
+    const src = (SOL_MODE ? 'sol' : CFG.key) as 'robinhood' | 'bsc' | 'sol', sc = mbCfg(src), W = a.address as `0x${string}`;
+    // the payer: W on this chain (its Solana address on a Solana frame); the recipient: W's EVM address = its Elysium address
+    const payer = SOL_MODE ? solAddressOf(a) : W;
+    if (!/^0x[0-9a-fA-F]{40}$/.test(W) || (SOL_MODE && !payer)) throw new Error('This wallet has no EVM address for Elysium');
+    const amountIn = pay === 'native' ? (SOL_MODE ? parseUnits(String(o.amount), 9) : parseEther(String(o.amount))) : (SOL_MODE ? parseUnits(String(o.amount), sc.stable.decimals) : toUnits(o.amount, sc.stable.decimals));
+    const bridge = createSolverBridge({
+      base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, i), now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY,
+      signEvmTransfer: async () => { throw new Error('signed in the wallet lane'); }, signSolTransfer: async () => { throw new Error('no Solana source'); },
+    });
+    const h = await bridge.health();
+    if (!h.on || !h.chains.includes(src) || !h.chains.includes('elysium') || !h.deposits[src]) throw new SolverRefused('motion\'s bridge does not serve Elysium right now');
+    if (asset === 'stable' && !(h.elysium?.assets || []).includes('stable')) throw new SolverRefused('USDC on Elysium is not offered yet — HYPE is');
+    if (h.elysium?.paused) throw new SolverRefused('Elysium funding is paused: ' + String((h.elysium.why || [])[0] || 'the official bridge changed').slice(0, 120) + ' — moving funds back stays open');
+    const [bal, stableBal, srcOracle6, oracle6] = await Promise.all([
+      SOL_MODE ? solFloatRpc<any>('getBalance', [payer, { commitment: 'confirmed' }]).then((r) => BigInt(r?.value ?? 0)) : publicClient.getBalance({ address: W }),
+      pay !== 'stable' ? Promise.resolve(0n) : SOL_MODE
+        ? solFloatRpc<any>('getTokenAccountBalance', [solFloatAta(payer, sc.stable.address), { commitment: 'confirmed' }]).then((r) => BigInt(r?.value?.amount ?? 0), () => 0n)
+        : publicClient.readContract({ address: sc.stable.address as `0x${string}`, abi: ERC20_ABI, functionName: 'balanceOf', args: [W] }) as Promise<bigint>,
+      pay !== 'native' ? Promise.resolve(0n) : SOL_MODE ? solFloatPrice6(sc.oracle.pool, sc.stable.address) : elysiumPrice6(publicClient as never, src as 'robinhood' | 'bsc'),
+      asset === 'native' ? elysiumPrice6(elysiumOraclePc(), 'elysium') : Promise.resolve(1_000_000n),
+    ]);
+    // (review L-F7) the Inbox aliases a refund address that is a contract (or a delegated EOA) on HyperEVM: plain wallets only
+    const code = await elysiumOraclePc().getCode({ address: W }).catch(() => null);
+    if (code === null) throw new SolverRefused('HyperEVM could not be read — try again in a moment');
+    if (code && code !== '0x') throw new SolverRefused('This wallet has code on HyperEVM (a contract or a delegation) — Elysium funding pays plain wallets only');
+    if (pay === 'native' ? bal < amountIn : stableBal < amountIn) throw new SolverRefused('More than this wallet holds');
+    if (SOL_MODE && bal < (pay === 'native' ? amountIn : 0n) + 1_000_000n) throw new SolverRefused('Leave about 0.001 SOL in this wallet for fees');
+    const got = await bridge.quote({ from: src, to: 'elysium', amountIn, depositor: payer, recipient: W, oracle6, maxSlipBps: 150, deposits: h.deposits, pay, asset, srcOracle6 });
+    const outText = asset === 'stable' ? `${formatUnits(got.out, 6)} USDC` : `${formatEther(got.out)} HYPE`;
+    const inText = pay === 'native' ? `${formatUnits(amountIn, sc.nativeDecimals)} ${sc.native}` : `${formatUnits(amountIn, sc.stable.decimals)} ${sc.stable.symbol}`;
+    if (o.phase === 'quote') return { ok: true, phase: 'quote', out: got.out.toString(), outText, inText, usd6: got.usd6.toString(), etaMs: got.etaMs, back: ELYSIUM_BACK, docs: ELYSIUM_DOCS };
+    await gate('transfer', auth);
+    const ok = await ask({ title: 'Add funds on Elysium', ok: `Pay ${inText}`, html: `${sub(`${escHtml(inText)} from ${escHtml(a.name)} on ${escHtml(SOL_MODE ? 'Solana' : CFG.name)} to motion's bridge. ${escHtml(outText)} arrives at the same address on Elysium, usually within seconds; if it cannot be paid, your ${escHtml(pay === 'native' ? sc.native : sc.stable.symbol)} comes back.`)}${destBox(W)}${muted(escHtml(ELYSIUM_BACK))}${muted(escHtml(ELYSIUM_RISK))}` });
+    if (!ok) throw new Error('Cancelled');
+    const held: { nonce?: number } = {};
+    const fill = createSolverBridge({
+      base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, i), now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY,
+      signEvmTransfer: (x) => elysiumSignFromW({ walletId: a.id, token: x.token, to: x.to, amount: x.amount }, held),
+      signSolTransfer: (x) => elysiumSignSolFromW({ walletId: a.id, mint: x.mint, to: x.to, amount: x.amount, decimals: x.decimals, memo: x.memo }),
+    });
+    return laneLock(SOL_MODE ? payer : W, async () => {
+      try {
+        const r = await fill.fill(got.quote, got.sig, a.id, { early: true });
+        if (held.nonce !== undefined && !SOL_MODE) noteNonceUsed(W, held.nonce);
+        return { ok: r.ok, state: r.state, srcHash: r.srcHash, dstHash: r.dstHash || null, quoteId: got.quote.id, out: got.out.toString(), outText, back: ELYSIUM_BACK, docs: ELYSIUM_DOCS };
+      } catch (e) {
+        if (e instanceof SolverRefused) throw e;                                     // sent:false — nothing of yours moved
+        if (!SOL_MODE) nonces.delete(W.toLowerCase());                              // the bytes may be out: re-read the count
+        if (e instanceof SolverUnknown) throw Object.assign(new Error('Status unknown — your transfer to motion\'s bridge may be out; follow it, do not pay again'), { name: 'TransferUnknown', unknown: true, quoteId: got.quote.id, srcHash: e.srcHash });
+        throw e;
+      }
+    });
+  },
+  // (2026-11-04) the way back: Elysium → the SAME address on HyperEVM. { walletId, asset: 'HYPE' | 'USDC', amount } — the vault asks
+  // motion's server for the nonce / price / balances (a read; a wrong answer can only make the transaction fail), builds the ONE
+  // call (elysiumExitCore exitCall: withdrawEth(W) / router.outboundTransfer(USDC, W, …)), checks it (exitProblem: it pays the
+  // signer only), asks in its own dialog (about 6 days, then motion claims it on HyperEVM for you — or anyone can), and signs it
+  // for chain 99901. The server only broadcasts bytes that pass the same check. Returns { hash } or throws.
+  elysiumExit: async (o: { walletId: string; asset: 'HYPE' | 'USDC'; amount: number | 'max' }, auth?: Auth) => {
+    if (NEAR_MODE) throw new Error('Open an EVM or Solana wallet to move funds back from Elysium');
+    const list = requireUnlocked(); const a = list.find((x) => x.id === o?.walletId); if (!a || a.ext || a.hop) throw new Error('Unknown wallet');
+    if (!/^0x[0-9a-fA-F]{64}$/.test(a.key) || nativeChainOf(a.key)) throw new Error('This wallet cannot sign on EVM chains');
+    const asset = o.asset === 'USDC' ? 'USDC' : o.asset === 'HYPE' ? 'HYPE' : null;
+    if (!asset || !(o.amount === 'max' || (typeof o.amount === 'number' && o.amount > 0 && Number.isFinite(o.amount)))) throw new Error('Invalid amount');
+    const account = privateKeyToAccount(a.key as `0x${string}`);
+    const W = account.address;
+    const base = (HOST && parentOrigin ? parentOrigin : location.origin) + '/api/bridge/motion';
+    const get = async (path: string) => { const r = await fetch(base + path, { cache: 'no-store' }); const j = await r.json().catch(() => null); if (!r.ok || !j?.ok) throw new Error(String(j?.error || 'motion\'s bridge did not answer').slice(0, 120)); return j; };
+    const dec = asset === 'HYPE' ? 18 : 6;
+    const first = await get(`/elysium/prep?address=${W}`);
+    const have = BigInt(first.balances?.[asset] ?? '0');
+    let units = o.amount === 'max' ? have : parseUnits(String(o.amount), dec);
+    const prep = await get(`/elysium/prep?address=${W}&asset=${asset}&amount=${units > 0n ? units : 1n}`);
+    if (Number(prep.chainId) !== 99901) throw new Error('motion\'s bridge answered for another chain');
+    const price0 = BigInt(prep.gasPrice || '0'), price = (price0 > 0n ? price0 : 100_000_000n) * 2n;
+    if (price > 5_000_000_000n) throw new Error('Elysium gas is far above normal right now — try again later');
+    const gas = (() => { const g = BigInt(prep.gas || '0'); const x = g > 0n ? (g * 13n) / 10n : 300_000n; return x < 100_000n ? 100_000n : x; })();
+    if (gas > 1_500_000n) throw new Error('Refusing to sign: abnormal gas for a way back');
+    const fee = gas * price;
+    const hype = BigInt(prep.balances?.HYPE ?? '0');
+    if (asset === 'HYPE' && o.amount === 'max') units = hype - fee;
+    if (!(units > 0n)) throw new Error('Nothing to move after gas');
+    if (asset === 'HYPE' ? units + fee > hype : units > BigInt(prep.balances?.USDC ?? '0')) throw new Error('More than this wallet holds on Elysium');
+    if (hype < fee) throw new Error(`Needs ${formatEther(fee)} HYPE on Elysium for gas`);
+    const tx = elyExitCall(asset, W, units);
+    const why = elyExitProblem({ ...tx, chainId: 99901 }, W); if (why) throw new Error('Refusing to sign: ' + why);
+    await gate('transfer', auth);
+    const text = `${asset === 'HYPE' ? formatEther(units) : formatUnits(units, 6)} ${asset}`;
+    const ok = await ask({ title: 'Move funds back from Elysium', ok: `Move ${text}`, html: `${sub(`${escHtml(text)} from ${escHtml(a.name)} on Elysium to the same address on HyperEVM, through the official bridge.`)}${destBox(W)}${muted(escHtml(`It can be claimed after about ${ELY_EXIT_DAYS} days (rollup challenge period, per Kinetiq's docs); motion then claims it on HyperEVM for you, and anyone can.`))}${muted(escHtml(ELYSIUM_RISK))}` });
+    if (!ok) throw new Error('Cancelled');
+    const raw = await account.signTransaction({ ...tx, gas, gasPrice: price, nonce: Number(prep.nonce), chainId: 99901, type: 'legacy' } as never);
+    const r = await fetch(base + '/elysium/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ raw }) });
+    const j = await r.json().catch(() => null);
+    if (r.status === 400 || r.status === 429 || r.status === 503) throw new Error('Not sent: ' + String(j?.error || r.status).slice(0, 120));
+    if (!r.ok || !j?.ok) throw Object.assign(new Error('Status unknown — the way back may be out; check it under "Moving back" before trying again (' + String(j?.error || r.status).slice(0, 80) + ')'), { name: 'TransferUnknown', unknown: true, hash: keccak256(raw) });
+    return { ok: true, hash: keccak256(raw), asset, amount: units.toString(), days: ELY_EXIT_DAYS };
+  },
+  // (2026-11-04) the route choice into Elysium: float (motion's bridge, the fast path within its float) or official (Relay → HyperEVM →
+  // W's own Inbox.depositEth, no float limit). src/elysiumRoute.ts; the page contract is B:\tmp\ely-route\notes.txt.
+  elysiumRoute: (o: { walletId: string; pay: 'native' | 'stable'; amount: number; route?: 'auto' | 'float' | 'official'; phase?: 'quote' }, auth?: Auth) => elysiumRoute(o, auth),
+  elysiumRouteStatus: async (jobId: string) => elyRoute.status(String(jobId)),
+  elysiumRouteResume: (jobId: string) => elyRoute.resume(String(jobId)),
+  elysiumRouteJobs: async () => elyRoute.jobs().map((j) => elyRoute.status(j.id)),
+  elysiumFundStatus: async (quoteId: string) => {
+    const bridge = createSolverBridge({ base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, i), now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY, signEvmTransfer: async () => { throw new Error('read only'); }, signSolTransfer: async () => { throw new Error('read only'); } });
+    return bridge.status(String(quoteId));
   },
   bridgeReceipt: async (chainId: number, hash: string) => (Number(chainId) === RELAY_SOL_CHAIN ? solReceipt(hash) : bridgeReceipt(Number(chainId), hash)),
   // a fresh hop wallet for a two-leg bridge: funds land here on the destination chain, then move on
@@ -6389,6 +7275,440 @@ const engine = {
   balances: async (addresses: string[]) => (SOL_MODE ? solBalancesFor(addresses) : NEAR_MODE ? nearBalancesFor(addresses) : (await evmBalanceSheet(addresses as `0x${string}`[], []))?.eth ?? {}),
   tokenBalances: async (token: string, addresses: string[]) => (SOL_MODE ? solTokenBalancesFor(token, addresses) : NEAR_MODE ? nearTokenBalancesFor(token, addresses) : (await evmBalanceSheet(addresses as `0x${string}`[], [{ address: token as `0x${string}`, decimals: await tokenDecimals(token as `0x${string}`).catch(() => 18) }]))?.tokens[token.toLowerCase()] ?? {}),
 };
+// EXT-1 (security batch 2): the extension's legacy-wallet move used to carry raw private keys side panel → ext-panel.html (a
+// motion.gift document) → bridge.js → engine.import: any script served in that document read them. Now the side panel posts them
+// STRAIGHT to this frame (window.frames of its ext-panel child, targetOrigin https://vault.motion.gift): the motion.gift document
+// between them never holds a key. Accepted only from the TOP-LEVEL window (the side panel itself, not a page or a frame that
+// framed this one) at a pinned extension origin (the ids ext-panel.js pins); only the import (its own dialog and trusted click,
+// as for any import); the answer only to that window and origin, and never a key in it.
+const EXT_IMPORT_ORIGINS = ['chrome-extension://nojealomoobhcodabdhmlajjfejeboec', 'chrome-extension://goofdckiogaipbkbngogffceglocmkpj'];
+async function onExtImport(e: MessageEvent, run: (items: { name?: string; privateKey: string }[]) => Promise<{ results?: unknown }>): Promise<boolean> {
+  const d = e.data as { t?: unknown; id?: unknown; items?: unknown } | null;
+  if (!d || typeof d !== 'object' || d.t !== 'extImport') return false;
+  if (!e.source || e.source !== window.top || window.top === window || !EXT_IMPORT_ORIGINS.includes(e.origin)) return false;
+  const id = String(d.id ?? '').slice(0, 64);
+  const answer = (msg: Record<string, unknown>) => { try { (e.source as Window).postMessage({ t: 'extImportRet', id, ...msg }, e.origin); } catch { /* the panel closed */ } };
+  try {
+    const items = (Array.isArray(d.items) ? d.items : []).slice(0, 100).map((x) => ({ name: typeof (x as { name?: unknown })?.name === 'string' ? String((x as { name: string }).name).slice(0, 60) : undefined, privateKey: String((x as { privateKey?: unknown })?.privateKey ?? '') }));
+    if (!items.length) throw new Error('Nothing to import');
+    const r = await run(items);
+    answer({ ok: true, v: { results: Array.isArray(r?.results) ? (r.results as { ok?: unknown; name?: unknown; error?: unknown }[]).map((x) => ({ ok: !!x?.ok, name: String(x?.name ?? ''), ...(x?.error ? { error: String(x.error).slice(0, 160) } : {}) })) : [] } });
+  } catch (err) { answer({ ok: false, e: String((err as Error)?.message || err).slice(0, 200) }); }
+  return true;
+}
+// ── (2026-11-03) "Add HYPE / USDC on Elysium": motion's bridge pays on Elysium (B:\tmp\elysium-funding\plan.txt option c) ──
+// The trading wallet W pays motion's solver on THIS frame's chain (Robinhood / BNB: its native coin or its stablecoin, ONE plain
+// transfer to the solver's published deposit address, signed here and handed over raw), and the solver pays W's SAME address on
+// Elysium with ONE createRetryableTicket (HYPE) or ONE gateway deposit (USDC) on HyperEVM, every refund address = W. The quote is
+// checked here against the pinned solver key, the route, the payer, the recipient (W itself — never another address), the amount
+// and OUR OWN prices (this chain's native from its own pool, HYPE from the HyperEVM WHYPE/USDC pool) before a byte is signed.
+// (2026-11-04, review L-F6) the official HyperEVM node only: no third-party node in the vault's own price path (down = no quote)
+const ELYSIUM_HYPEREVM_RPCS = ['https://rpc.hyperliquid.xyz/evm'];
+let elysiumPc: ReturnType<typeof createPublicClient> | null = null;
+function elysiumOraclePc(): ReturnType<typeof createPublicClient> {
+  if (!elysiumPc) {
+    const ch = defineChain({ id: 999, name: 'HyperEVM', nativeCurrency: { name: 'HYPE', symbol: 'HYPE', decimals: 18 }, rpcUrls: { default: { http: [ELYSIUM_HYPEREVM_RPCS[0]] } } });
+    elysiumPc = createPublicClient({ chain: ch, transport: fallback(ELYSIUM_HYPEREVM_RPCS.map((u) => http(u))) }) as ReturnType<typeof createPublicClient>;
+  }
+  return elysiumPc;
+}
+const SLOT0_ABI = [{ type: 'function', name: 'slot0', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint160' }, { type: 'int24' }, { type: 'uint16' }, { type: 'uint16' }, { type: 'uint16' }, { type: 'uint8' }, { type: 'bool' }] }] as const;
+async function elysiumPrice6(pc: ReturnType<typeof createPublicClient>, key: 'robinhood' | 'bsc' | 'elysium'): Promise<bigint> {
+  const c = mbCfg(key);
+  const r = await pc.readContract({ address: c.oracle.pool as `0x${string}`, abi: SLOT0_ABI, functionName: 'slot0' }) as readonly unknown[];
+  const p = mbPrice6(BigInt(r[0] as bigint), c.oracle, c.nativeDecimals);
+  if (!(p > 0n)) throw new Error('no price for ' + key);
+  return p;
+}
+// the one source transfer, from W, signed in W's send lane with a fresh nonce; the solver broadcasts it. Kept here until the
+// fill answers so the counter moves only when the bytes are out (sent → counted; refused with sent:false → nothing used;
+// no clear answer → the next send of W re-reads the chain's pending count).
+async function elysiumSignFromW(a: { walletId: string; token: string; to: string; amount: bigint }, held: { nonce?: number }): Promise<{ raw: string; hash: string }> {
+  const { account } = walletFor(a.walletId);
+  const native = String(a.token).toLowerCase() === MB_NATIVE;
+  const tx = native ? { to: a.to as `0x${string}`, value: a.amount, data: '0x' as `0x${string}` }
+    : { to: a.token as `0x${string}`, value: 0n, data: bridgeTransferData(a.to, a.amount) as `0x${string}` };
+  const [nonce, gasPrice, est] = await Promise.all([nextNonce(account.address, true), feeFor(1), publicClient.estimateGas({ account: account.address, ...tx }).catch(() => (native ? 60_000n : 150_000n))]);
+  const gas = (est * 13n) / 10n;
+  if (gas > (native ? 100_000n : 400_000n)) throw new Error('Refusing to sign: abnormal gas for a plain transfer');
+  if (CFG.maxFeeWei && gas * gasPrice > CFG.maxFeeWei) throw new Error('Refusing to sign: abnormal gas');
+  const raw = await account.signTransaction({ ...tx, gas, gasPrice, nonce, chainId: chain.id, type: 'legacy' } as never);
+  held.nonce = nonce;
+  return { raw, hash: keccak256(raw) };
+}
+
+// (2026-11-04) the Solana side of "Add funds on Elysium": W's own Solana key signs ONE native SOL transfer (System Program) or ONE
+// USDC transferChecked to the solver's deposit address, with the quote id as memo and a small compute budget — nothing else
+async function elysiumSignSolFromW(a: { walletId: string; mint: string; to: string; amount: bigint; decimals: number; memo: string }): Promise<{ raw: string; sig: string }> {
+  const { w } = solAcctsOf(a.walletId);
+  const k = solKeys(w.key as string);
+  const ixs = a.mint === MB_NATIVE_SOL
+    ? solBridgeNativeIxs({ owner: w.address, to: a.to, amount: a.amount, memo: a.memo, units: 1_000, micro: BigInt(SOL_BRIDGE.micro) })
+    : solBridgeTransferIxs({ owner: w.address, src: solFloatAta(w.address, a.mint), dst: solFloatAta(a.to, a.mint), mint: a.mint, amount: a.amount, decimals: a.decimals, memo: a.memo, units: SOL_BRIDGE.units, micro: BigInt(SOL_BRIDGE.micro) });
+  const bh = await solBlockhashInfo();
+  const { tx, sig } = solSignMessage(solCompile(w.address, ixs, bh.blockhash), k.seed);
+  if (tx.length > 1232) throw new Error('Transaction too large');
+  return { raw: btoa(String.fromCharCode(...tx)), sig: solB58e(sig) };
+}
+// (release 6) "Move HYPE from HyperEVM to Elysium" (src/elysiumHyperFund.ts): W's OWN key signs ONE plain HYPE transfer on HyperEVM (chain 999)
+// to motion's published HyperEVM deposit address, for a quote checked against the pinned solver key, the route, W as payer AND recipient,
+// and at most motion's 0.1 % fee at OUR HyperEVM price; the solver pays W's same address on Elysium. Any EVM frame (the key is the same),
+// never NEAR / Solana. The reads, the nonce and the gas price come from the official HyperEVM node (elysiumOraclePc); the vault broadcasts
+// nothing (the solver does). One HyperEVM move per wallet at a time (the lock); the frame's own send lane is never held.
+function elysiumFundFromHyperEvm(o: unknown, auth?: Auth): Promise<Record<string, unknown>> {
+  if (NEAR_MODE || SOL_MODE) return Promise.reject(new Error('Open an EVM wallet to move HYPE from HyperEVM to Elysium'));
+  const pc = elysiumOraclePc();
+  return createElyHyperFund({
+    now: () => Date.now(),
+    wallet: (id) => {
+      const a = requireUnlocked().find((x) => x.id === id); if (!a || a.ext || a.hop) throw new Error('Unknown wallet');
+      if (!/^0x[0-9a-fA-F]{64}$/.test(a.key) || nativeChainOf(a.key)) throw new Error('This wallet cannot sign on EVM chains');
+      const account = privateKeyToAccount(a.key as `0x${string}`);
+      return { id: a.id, name: a.name, w: account.address, sign: (tx) => account.signTransaction(tx as never) as Promise<`0x${string}`> };
+    },
+    reads: {
+      balance: (w) => pc.getBalance({ address: w }),
+      code: async (w) => { const c = await pc.getCode({ address: w }); return c && c !== '0x' ? c : '0x'; },
+      price6: () => elysiumPrice6(pc, 'elysium'),
+      nonce: (w) => pc.getTransactionCount({ address: w, blockTag: 'pending' }),
+      gasPrice: () => pc.getGasPrice(),
+    },
+    bridge: (signEvm) => createSolverBridge({
+      base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, { ...(i || {}), credentials: 'omit' }), now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY,
+      signEvmTransfer: signEvm, signSolTransfer: async () => { throw new Error('no Solana source here'); },
+    }),
+    gate: () => gate('transfer', auth),
+    ask: (d) => ask(d), esc: escHtml, destBox,
+    lock: <T,>(key: string, fn: () => Promise<T>) => { const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined; return lk?.request ? lk.request('trench-' + key, () => fn()) as Promise<T> : inLane(key, fn) as Promise<T>; },
+    risk: ELYSIUM_RISK,
+  }).fund(o);
+}
+const ELYSIUM_DOCS = 'https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-to-elysium';
+// (2026-11-04, the independent review's disclosure) beside the 6-day line, in the vault's own dialogs
+const ELYSIUM_RISK = 'Elysium\'s bridge can be upgraded by Kinetiq\'s 4-of-11 multisig without a delay.';
+const ELYSIUM_BACK = 'Moving funds back from Elysium to HyperEVM takes about 6 days (rollup challenge period, per Kinetiq\'s docs).';
+// ── (2026-11-04) the route choice into Elysium + the "official" route (src/elysiumRoute.ts; B:\tmp\ely-route\notes.txt) ──
+// float = motion's bridge (elysiumFund above, unchanged: the fast path while the float can fill the amount); official = Relay → W's
+// OWN address on HyperEVM (native HYPE, motion's 0.1 % as Relay's app fee) → W's OWN Inbox.depositEth() → W on Elysium. No float.
+// Robinhood / BNB / Solana frames; nothing here runs on a click (the trade path never reaches it).
+const elyRouteSrc = (): ElyRouteSrc => { if (NEAR_MODE || !(SOL_MODE || CFG.key === 'robinhood' || CFG.key === 'bsc')) throw new Error('Elysium funding starts from a Robinhood, BNB or Solana wallet'); return (SOL_MODE ? 'sol' : CFG.key) as ElyRouteSrc; };
+const elyRouteAcct = (id: string) => {
+  const a = requireUnlocked().find((x) => x.id === id); if (!a || a.ext || a.hop) throw new Error('Unknown wallet');
+  if (!/^0x[0-9a-fA-F]{64}$/.test(a.key) || nativeChainOf(a.key)) throw new Error('This wallet cannot sign on EVM chains');
+  return a;
+};
+const elyRoutePc = () => (CFG.key === 'elysium' ? publicClient : bridgeOtherPc(CHAIN_CFGS.elysium));
+async function elyRouteInUsd6(coin: ElyRouteCoin, amount: bigint): Promise<bigint> {
+  const src = elyRouteSrc(), s = ELY_ROUTE_SRC[src];
+  if (coin === 'stable') return s.stableDecimals >= 6 ? amount / 10n ** BigInt(s.stableDecimals - 6) : amount * 10n ** BigInt(6 - s.stableDecimals);
+  const p6 = src === 'sol' ? await solFloatPrice6(mbCfg('sol').oracle.pool, mbCfg('sol').stable.address) : await elysiumPrice6(publicClient as never, src);
+  return (amount * p6) / 10n ** BigInt(s.nativeDecimals);
+}
+const elyRoute = createElyRoute({
+  now: () => Date.now(), wait: floatWait,
+  store: { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } },
+  lock: <T,>(key: string, fn: () => Promise<T>) => { const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined; return lk?.request ? lk.request('trench-' + key, () => fn()) as Promise<T> : inLane(key, fn) as Promise<T>; },
+  src: elyRouteSrc,
+  wallet: (id) => {
+    const a = elyRouteAcct(id), account = privateKeyToAccount(a.key as `0x${string}`);
+    const payer = SOL_MODE ? solAddressOf(a) : account.address; if (!payer) throw new Error('This wallet has no address on this network');
+    return { id: a.id, name: a.name, w: account.address, payer, signHyper: (tx) => account.signTransaction(tx as never) as Promise<`0x${string}`> };
+  },
+  reads: {
+    srcBalance: async (payer, coin) => {
+      const s = ELY_ROUTE_SRC[elyRouteSrc()];
+      if (SOL_MODE) return coin === 'native' ? solFloatRpc<any>('getBalance', [payer, { commitment: 'confirmed' }]).then((r) => BigInt(r?.value ?? 0))
+        : solFloatRpc<any>('getTokenAccountBalance', [solFloatAta(payer, s.stable), { commitment: 'confirmed' }]).then((r) => BigInt(r?.value?.amount ?? 0), () => 0n);
+      return coin === 'native' ? publicClient.getBalance({ address: payer as `0x${string}` }) : publicClient.readContract({ address: s.stable as `0x${string}`, abi: ERC20_ABI, functionName: 'balanceOf', args: [payer as `0x${string}`] }) as Promise<bigint>;
+    },
+    inUsd6: elyRouteInUsd6,
+    hypePrice6: () => elysiumPrice6(elysiumOraclePc(), 'elysium'),
+    hyperBalance: (w) => elysiumOraclePc().getBalance({ address: w }),
+    hyperCode: async (w) => { const c = await elysiumOraclePc().getCode({ address: w }); return c && c !== '0x' ? c : '0x'; },
+    hyperNonce: (w) => elysiumOraclePc().getTransactionCount({ address: w, blockTag: 'pending' }),
+    hyperGasPrice: () => elysiumOraclePc().getGasPrice(),
+    hyperEstimate: (tx) => elysiumOraclePc().estimateGas({ account: tx.from, to: tx.to, value: tx.value, data: tx.data }),
+    hyperReceipt: async (hash) => { const r = await elysiumOraclePc().getTransactionReceipt({ hash }).catch(() => null); return r ? { status: r.status, logs: r.logs as never } : null; },
+    elyBalance: (w) => elyRoutePc().getBalance({ address: w }),
+    elyTx: async (hash) => { const t = await elyRoutePc().getTransaction({ hash }).catch(() => null); return t ? { blockNumber: t.blockNumber ?? null } : null; },
+  },
+  relay: {
+    quote: async (body) => (await relayQuote(body)).j,                     // keyless from api.relay.link only (a key refusal is a refusal)
+    status: async (id) => (await relayStatus(id))?.status ?? null,
+  },
+  // the source deposit: relaySwap's own senders (the bytes elyRelayProblem checked), the same as a cross-chain swap
+  sendRelay: async (walletId, body, b) => {
+    const a = elyRouteAcct(walletId);
+    const bound = { originChainId: body.originChainId, destinationChainId: body.destinationChainId, originCurrency: body.originCurrency, destinationCurrency: body.destinationCurrency, amount: body.amount, recipient: body.recipient,
+      requestId: b.requestId, source: 'relay', user: body.user, out: b.out.toString(), outFormatted: formatEther(b.out), outSymbol: 'HYPE', inSymbol: '', inFormatted: '', inDecimals: 0, steps: [], ...(b.evm ? { evm: b.evm } : {}), ...(b.sol ? { sol: b.sol } : {}) } as SwapBound;
+    return SOL_MODE ? solSwapSend(a as never, bound) : (await evmSwapSend(a, bound)).hash;
+  },
+  sendHyper: async (raw) => { await elysiumOraclePc().sendRawTransaction({ serializedTransaction: raw }); },
+  gate: () => gate('transfer'),
+  ask: (o) => ask(o), esc: escHtml, destBox,
+  back: ELYSIUM_BACK, risk: ELYSIUM_RISK,
+  fmtIn: (coin, amount) => { const s = ELY_ROUTE_SRC[elyRouteSrc()]; return coin === 'native' ? `${formatUnits(amount, s.nativeDecimals)} ${s.nativeSymbol}` : `${formatUnits(amount, s.stableDecimals)} ${s.stableSymbol}`; },
+  emit: (detail) => document.dispatchEvent(new CustomEvent('trench:elysium-route', { detail })),
+});
+// engine.elysiumRoute { walletId, pay: 'native' | 'stable', amount (a number, in the source coin), route?: 'auto' | 'float' | 'official', phase?: 'quote' }
+// quote → { ok, phase: 'quote', route: 'float' | 'official' | null, usd, routes: { float, official } } (each: available, why, out, outText,
+// etaMs, fees, feeText); go → the chosen route's answer (float: elysiumFund's own, unchanged, + route: 'float'; official: elysiumRoute.ts view).
+async function elysiumRoute(o: { walletId: string; pay: 'native' | 'stable'; amount: number; route?: 'auto' | 'float' | 'official'; phase?: 'quote' }, auth?: Auth): Promise<Record<string, unknown>> {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('Bad arguments: one plain object');
+  for (const k of Object.keys(o)) if (!['walletId', 'pay', 'amount', 'route', 'phase', 'lang'].includes(k)) throw new Error(`Bad arguments: unknown field ${k}`);
+  const coin: ElyRouteCoin | null = o.pay === 'native' ? 'native' : o.pay === 'stable' ? 'stable' : null;
+  if (!coin || !(typeof o.amount === 'number' && o.amount > 0 && Number.isFinite(o.amount))) throw new Error('Invalid amount');
+  if (!(o.route == null || o.route === 'auto' || o.route === 'float' || o.route === 'official')) throw new Error('Bad arguments: route');
+  if (o.phase != null && o.phase !== 'quote') throw new Error('Bad arguments: phase');
+  const force = o.route === 'float' || o.route === 'official' ? o.route : null;
+  const src = elyRouteSrc(), s = ELY_ROUTE_SRC[src];
+  const amount = parseUnits(String(o.amount), coin === 'native' ? s.nativeDecimals : s.stableDecimals);
+  const solver = createSolverBridge({ base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, { ...(i || {}), credentials: 'omit', signal: AbortSignal.timeout(8000) }), now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY, signEvmTransfer: async () => { throw new Error('read only'); }, signSolTransfer: async () => { throw new Error('read only'); } });
+  const [h, inUsd6] = await Promise.all([solver.health().catch(() => null), elyRouteInUsd6(coin, amount)]);
+  const usd = Number(inUsd6) / 1e6;
+  const pick = pickElyRoute({ usd, src, coin, health: h as ElyFloatHealth, force });
+  const floatArgs = { walletId: o.walletId, pay: coin, amount: o.amount, asset: 'HYPE' as const };
+  const why = (e: unknown) => String((e as Error)?.message || e).slice(0, 160);
+  if (o.phase === 'quote') {
+    // both quotes in parallel, each only when its route can take this amount; a failed quote = that route unavailable, with why
+    const [fq, oq] = await Promise.all([
+      pick.float.ok && force !== 'official' ? engine.elysiumFund({ ...floatArgs, phase: 'quote' }, auth).then((r) => ({ ok: true as const, r: r as Record<string, unknown> }), (e) => ({ ok: false as const, why: why(e) })) : Promise.resolve({ ok: false as const, why: pick.float.why || 'not asked' }),
+      pick.official.ok && force !== 'float' ? elyRoute.quote({ walletId: o.walletId, coin, amount }).then((r) => ({ ok: true as const, r: r.view }), (e) => ({ ok: false as const, why: why(e) })) : Promise.resolve({ ok: false as const, why: pick.official.why || 'not asked' }),
+    ]);
+    const floatView = fq.ok ? { available: true, why: '', route: 'float', out: String(fq.r.out), outText: fq.r.outText, etaMs: Number(fq.r.etaMs) || 5_000, fees: { motion: { bps: ELY_ROUTE.fee.bps, usd: Math.max(0.01, usd * 0.001) } }, feeText: 'motion 0.1 %', maxFillUsd: pick.float.maxFillUsd }
+      : { available: false, why: fq.why, route: 'float', maxFillUsd: pick.float.maxFillUsd };
+    const offView = oq.ok ? { available: true, why: '', ...oq.r } : { available: false, why: oq.why, route: 'official' };
+    const route = force ? (force === 'float' ? (fq.ok ? 'float' : null) : (oq.ok ? 'official' : null)) : fq.ok ? 'float' : oq.ok ? 'official' : null;
+    return { ok: !!route, phase: 'quote', route, usd, routes: { float: floatView, official: offView }, back: ELYSIUM_BACK, docs: ELYSIUM_DOCS };
+  }
+  if (!pick.route) throw new SolverRefused(force === 'float' ? pick.float.why : force === 'official' ? pick.official.why : (pick.official.why || pick.float.why || 'No route into Elysium for this amount'));
+  if (pick.route === 'float') return { route: 'float', ...(await engine.elysiumFund(floatArgs, auth)) };
+  return elyRoute.go({ walletId: o.walletId, coin, amount, gate: () => gate('transfer', auth) });
+}
+// ── (2026-11-04) a buy on Elysium paid from the USD balance (src/elysiumUsdEngine.ts; B:\tmp\elysium-usd) ──
+// The Elysium frame's float.ensure { chain: 'elysium', reason: 'click' | 'notice' | 'jobs', … } lands here (engine.float.ensure
+// routes it); every other chain's ensure is float.ensure exactly as before. What may be signed: ONE stablecoin transfer from the
+// wallet's OWN reserve R (Robinhood / BNB: bridgeSignEvmTransfer, the same signer every cold top-up uses, on that chain's own
+// nodes; Solana: bridgeSignSolTransfer) to motion's published deposit address, for a quote checked against the pinned solver key
+// that pays HYPE to W's same address on Elysium. Only while the wallet's USD-balance permission is live (float.liveFor); the first
+// move of an account shows the exit-time notice in this frame's own dialog ("I understand", stored per account).
+// (release 8) when W's own reserves cannot pay, ONE reserve of another wallet of this vault whose permission is live on that
+// chain may (the same signers, walletId = that wallet: its own R signs), still paying HYPE only to W; the account allows that
+// once in this frame's dialog. Earn's ready part (earn.status, cached, read only) is only named in a refusal.
+const elyUsd = createElyUsd({
+  now: () => Date.now(), wait: floatWait,
+  store: { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } },
+  // one move per wallet across this browser's tabs (a second tab's click waits for the first, then follows its job)
+  lock: <T,>(key: string, fn: () => Promise<T>) => { const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined; return lk?.request ? lk.request('trench-' + key, () => fn()) as Promise<T> : inLane(key, fn) as Promise<T>; },
+  ask: (o) => ask(o), esc: escHtml,
+  account: () => (meta.main && /^0x[0-9a-fA-F]{40}$/.test(meta.main) ? meta.main : null),
+  wallet: (id) => { const a = floatAccount(id); const r = reserveOf(a); return { id: a.id, name: a.name, w: a.address as `0x${string}`, r: { evm: r.evm, sol: r.sol } }; },
+  permission: (id) => float.liveFor(id),
+  // (release 8) the account's wallets that can hold a USD balance (the float switch's own list: no Privy, hop or chain-only key)
+  wallets: () => requireUnlocked().filter((a) => !a.archived && !a.hop && !a.ext && !nativeChainOf(a.key) && /^0x[0-9a-fA-F]{64}$/.test(a.key)).map((a) => a.id),
+  // (release 8) Earn's ready part on that wallet's reserve there (floatEngine's earnReadyUsd rule), for the refusal's text only
+  earnReady: (id, c) => {
+    const ew = earnWallets().find((x) => x.id === id); const er = ew ? earn.status(ew, c) : null;
+    if (!er || !(er.usd > 0) || er.cls === 'hard' || er.landing || er.verifying || (er as { foreign?: boolean }).foreign) return null;
+    const u = Math.min(Number(er.redeemable) || 0, er.usd); return u > 0 ? BigInt(Math.round(u * 1e6)) : null;
+  },
+  reads: {
+    // this frame's own nodes in the Elysium frame; from another lane (the deposit screen there) motion's Elysium relay, a balance read only
+    wHype: (w) => (CFG.key === 'elysium' ? publicClient.getBalance({ address: w }) : bridgeOtherPc(CHAIN_CFGS.elysium).getBalance({ address: w })),
+    price6: () => elysiumPrice6(elysiumOraclePc(), 'elysium'),
+    reserve: (c, owner) => (c === 'sol' ? bridgeSolReserveOn(owner) : bridgeReserveOn(c, FLOAT_CFG[c].stable.address, owner as `0x${string}`)),
+    code: async (w) => { const c = await elysiumOraclePc().getCode({ address: w }); return c && c !== '0x' ? c : '0x'; },
+  },
+  bridge: createSolverBridge({
+    base: () => (HOST && parentOrigin ? parentOrigin : location.origin), fetch: (u, i) => fetch(u, { ...(i || {}), credentials: 'omit', signal: AbortSignal.timeout(8000) }),
+    now: () => Date.now(), pinnedKey: () => MOTION_SOLVER_KEY,
+    signEvmTransfer: bridgeSignEvmTransfer as never, signSolTransfer: bridgeSignSolTransfer as never, release: bridgeRelease as never,
+  }),
+  emit: (detail) => document.dispatchEvent(new CustomEvent('trench:float', { detail })),
+});
+// a click (a buy's top-up) only in the Elysium frame; the deposit screen, the notice and the job view from any lane but NEAR
+function floatEnsure(o: unknown): Promise<unknown> {
+  if (!(o && typeof o === 'object' && (o as { chain?: unknown }).chain === 'elysium')) return float.ensure(o);
+  if (NEAR_MODE || ((o as { reason?: unknown }).reason === 'click' && (CFG.key !== 'elysium' || SOL_MODE))) return Promise.reject(new Error('Open the Elysium lane for a buy on Elysium'));
+  return elyUsd.ensure(o);
+}
+// ── Earn on the USD balance (src/earnEngine.ts, src/earnCore.ts, src/earnAave.ts, src/earnKamino.ts; 2026-11-03, NOT released) ──
+// Every lane's frame runs Earn for its own chain: Robinhood (Morpho), BNB (Aave v3), Solana (Kamino). R signs only what that
+// chain's allow-list allows — earnCore.earnTxProblem (EVM) / earnKamino.kaminoIxsProblem (Solana) is asked AGAIN here, right
+// before R's signer, whatever earnEngine checked. Reads go through the float's own client (the 1 request/s bucket in the
+// background, the click path's floatNow for a waiting click), behind a running trade at the source; EVM reads batched in one
+// Multicall3 aggregate3.
+async function earnSendR(walletId: string, tx: EarnTx, gas: bigint, signed?: (nonce: number) => void): Promise<`0x${string}`> {
+  const v = SOL_MODE || NEAR_MODE ? null : earnVenueOf(CFG.key);
+  if (!v || (v.kind !== 'erc4626' && v.kind !== 'aave3')) throw new Error('Refusing to sign: Earn is not on this chain');
+  const r = reserveOf(floatAccount(walletId));
+  const bad = earnTxProblem(tx, { r: r.evm, chainId: chain.id, cfg: v });
+  if (bad) throw new Error('Refusing to sign: ' + bad);
+  if (!(gas > 0n) || gas > EARN.gasMax) throw new Error('Refusing to sign: abnormal gas');
+  return floatSendR(walletId, tx as EvmTx, gas, signed);
+}
+async function earnMulti(calls: { to: `0x${string}`; data: `0x${string}` }[], now?: boolean): Promise<(`0x${string}` | null)[]> {
+  const run = now ? floatNow : floatRpc;
+  const ret = await run((pc) => pc.call({ to: MULTICALL3, data: encodeFunctionData({ abi: multicall3Abi, functionName: 'aggregate3', args: [calls.map((c) => ({ target: c.to, allowFailure: true, callData: c.data }))] }) }));
+  const res = decodeFunctionResult({ abi: multicall3Abi, functionName: 'aggregate3', data: ret.data || '0x' }) as readonly { success: boolean; returnData: `0x${string}` }[];
+  if (res.length !== calls.length) throw new Error('multicall: wrong answer length');
+  return res.map((x) => (x.success ? x.returnData : null));
+}
+// Solana: the instructions in the engine's own shape (keys as metas); R's account for the simulation's copy and the send
+const earnIx = (k: KIx) => ({ program: k.program, keys: k.keys.map(([pubkey, signer, writable]) => ({ pubkey, signer, writable })), data: k.data });
+// review L2: the oracle accounts of refresh_reserve come from the signer's OWN read of the reserve (kept 60 s), never from the
+// instructions it checks; a reserve it cannot parse (a klend layout change) falls back to the set this build pins (KAMINO_SOL)
+let earnSolOracleMemo: { at: number; v: ReserveRead['oracles'] } | null = null;
+async function earnSolOracles(): Promise<ReserveRead['oracles']> {
+  if (earnSolOracleMemo && Date.now() - earnSolOracleMemo.at < 60_000) return earnSolOracleMemo.v;
+  const got = (await solAccounts([KAMINO_SOL.reserve]).catch(() => [undefined])) as ({ owner: string; data: Uint8Array } | null | undefined)[];
+  const acc = got[0];
+  const rr = acc ? readReserve(acc.data ?? null, acc.owner ?? null, KAMINO_SOL) : null;
+  if (rr && !('why' in rr)) { earnSolOracleMemo = { at: Date.now(), v: rr.oracles }; return rr.oracles; }
+  return kPinnedOracles(KAMINO_SOL);
+}
+async function earnSolCheck(walletId: string, ixs: KIx[]): Promise<{ r: SolAcct }> {
+  if (!SOL_MODE) throw new Error('Refusing to sign: Earn on Solana runs in the Solana frame');
+  const { r } = solAcctsOf(walletId);
+  const last = ixs[ixs.length - 1];
+  // every account is rebuilt here (the reserve's pinned accounts, R's own token accounts, the signer's own oracle read) and
+  // compared byte for byte
+  const oracles = await earnSolOracles();
+  const bad = !last ? 'nothing to sign' : kaminoIxsProblem(ixs, { r: r.address, rUsdc: solFloatAta(r.address, KAMINO_SOL.mint), rCtoken: solFloatAta(r.address, KAMINO_SOL.cMint), oracles, perTxMax6: EARN.perTxMax6 });
+  if (bad) throw new Error('Refusing to sign: ' + bad);
+  return { r: r as SolAcct };
+}
+async function earnSolSimulate(walletId: string, ixs: KIx[], watch: string[]): Promise<{ err: unknown; post: (Uint8Array | null)[] }> {
+  const { r } = await earnSolCheck(walletId, ixs);
+  // unsigned (sigVerify off, the node replaces the blockhash): nothing here can be sent
+  const msg = solCompile(r.address, [...solBudget(KAMINO_UNITS, KAMINO_MICRO), ...ixs.map(earnIx)] as never, SOL_P.system);
+  const tx = new Uint8Array(1 + 64 + msg.length); tx[0] = 1; tx.set(msg, 65);
+  const v = await solSimulateAccounts(tx, watch);
+  return { err: v.err, post: v.accounts.map((x) => (x ? x.data : null)) };
+}
+async function earnSolSend(walletId: string, ixs: KIx[]): Promise<string> {
+  const { r } = await earnSolCheck(walletId, ixs);
+  return solFloatSend(r, ixs.map(earnIx) as never, KAMINO_UNITS, KAMINO_MICRO);
+}
+const earnWalletCache = new Map<string, EarnWallet>();
+const earnWallets = (): EarnWallet[] => {
+  const out: EarnWallet[] = [];
+  for (const a of requireUnlocked()) {
+    if (a.archived || a.hop || a.ext || nativeChainOf(a.key) || !/^0x[0-9a-fA-F]{64}$/.test(a.key)) continue;
+    const ck = a.id + '|' + a.address.toLowerCase();
+    let ew = earnWalletCache.get(ck); if (!ew) { const rr = reserveOf(a); ew = { id: a.id, name: a.name, r: { evm: rr.evm, sol: rr.sol } }; earnWalletCache.set(ck, ew); }
+    out.push({ ...ew, name: a.name });
+  }
+  return out;
+};
+let earnMonitorMemo: { at: number; v: unknown } | null = null;
+const earn = createEarn({
+  chain: floatLane,
+  chainId: () => chain.id,
+  wallets: earnWallets,
+  ...(SOL_MODE || NEAR_MODE ? {} : { evm: {
+    call: async (tx, now) => (await (now ? floatNow : floatRpc)((pc) => pc.call({ account: tx.from, to: tx.to, data: tx.data }))).data || '0x',
+    multi: earnMulti,
+    codeHash: async (a) => { const code = await floatRpc((pc) => pc.getCode({ address: a })); return code && code !== '0x' ? keccak256(code) : '0x'; },
+    storageAt: async (a, slot) => (await floatRpc((pc) => pc.getStorageAt({ address: a, slot }))) || '0x',
+    balance: (a, now) => (now ? floatNow : floatRpc)((pc) => pc.getBalance({ address: a })),
+    gasPrice: async (now) => { const f = await floatFees(now ? floatNow : floatRpc); const floor = ((f.baseFee > f.gasPrice ? f.baseFee : f.gasPrice) * 125n) / 100n; if (CFG.maxGasPrice && floor > CFG.maxGasPrice) throw new Error('Gas price is far above normal for this chain — refusing'); return floor; },
+    estimate: (tx, now) => (now ? floatNow : floatRpc)((pc) => pc.estimateGas({ account: tx.from, to: tx.to, data: tx.data, value: tx.value })),
+    send: earnSendR,
+    // waits up to `ms` for the receipt with its logs (the outcome checks read the transaction's own events)
+    receipt: async (hash, ms, now) => {
+      const t0 = Date.now(); const run = now ? floatNow : floatRpc;
+      for (;;) {
+        const r = await run((pc) => pc.getTransactionReceipt({ hash })).catch(() => null);
+        if (r) return { status: r.status, logs: r.logs.map((l) => ({ address: l.address, topics: l.topics as readonly string[], data: l.data })), blockHash: r.blockHash, blockNumber: r.blockNumber };
+        if (Date.now() - t0 >= ms) return null;
+        await floatWait(now ? 250 : 400);
+      }
+    },
+    // r4 (re-review M3-1): one read — the receipt, 'missing' when the node ANSWERED it does not know it, null when no node answered
+    // (the float's transport tries its other nodes first); and a block's hash (a reorg is positive only when that block changed)
+    receiptCheck: async (hash, now) => {
+      try { const r = await (now ? floatNow : floatRpc)((pc) => pc.getTransactionReceipt({ hash })); return { status: r.status, logs: r.logs.map((l) => ({ address: l.address, topics: l.topics as readonly string[], data: l.data })), blockHash: r.blockHash, blockNumber: r.blockNumber }; }
+      catch (x) { return /TransactionReceiptNotFound/.test(String((x as Error)?.name || '')) ? 'missing' : null; }
+    },
+    blockHash: async (n) => { const b = await floatRpc((pc) => pc.getBlock({ blockNumber: n })).catch(() => null); return b?.hash ?? null; },
+    // r5 (re-review X2): R's confirmed nonce
+    nonce: (a) => floatRpc((pc) => pc.getTransactionCount({ address: a, blockTag: 'latest' })),
+    // review H2: the venue's events naming R (exact topics) and the head — background only, through the float's bucket
+    logs: async (q) => {
+      const hx = (n: bigint) => '0x' + n.toString(16);
+      const res = (await floatRpc((pc) => pc.request({ method: 'eth_getLogs', params: [{ address: q.address, topics: q.topics, fromBlock: hx(q.fromBlock), toBlock: hx(q.toBlock) }] } as never))) as unknown;
+      if (!Array.isArray(res)) throw new Error('eth_getLogs: bad answer');
+      return res.map((l: { transactionHash?: unknown; topics?: unknown; data?: unknown }) => { if (typeof l?.transactionHash !== 'string') throw new Error('eth_getLogs: a log without its transaction'); return { tx: l.transactionHash, topics: Array.isArray(l.topics) ? (l.topics as string[]) : [], ...(typeof l.data === 'string' ? { data: l.data } : {}) }; });
+    },
+    head: () => floatRpc((pc) => pc.getBlockNumber()),
+  } }),
+  ...(SOL_MODE ? { sol: {
+    accounts: (addrs, now) => (now ? floatNowQuiet : floatQuiet)(() => solAccounts(addrs)) as never,
+    // the program's last deploy slot: 8 bytes of its ProgramData (never the program's bytes)
+    deploySlot: (pd) => floatQuiet(async () => { const r = await solFloatRpc<any>('getAccountInfo', [pd, { encoding: 'base64', dataSlice: { offset: 4, length: 8 } }]); const d = r?.value?.data?.[0]; if (!d) return null; const b = Uint8Array.from(atob(d), (ch) => ch.charCodeAt(0)); return b.length === 8 ? new DataView(b.buffer).getBigUint64(0, true) : null; }),
+    ata: (owner, mint) => solFloatAta(owner, mint),
+    simulate: (walletId, ixs, watch, now) => (now ? floatNowQuiet : floatQuiet)(() => earnSolSimulate(walletId, ixs, watch)),
+    send: (walletId, ixs) => floatQuiet(() => earnSolSend(walletId, ixs)),
+    status: (sig, now) => (now ? floatNowQuiet : floatQuiet)(async () => { const [st] = await solSigStatusesBoth([sig]); return !st ? null : st.err ? 'failed' : st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized' ? 'confirmed' : null; }),
+    // r3 (re-review N1): who signed a transaction — the first header.numRequiredSignatures account keys (background only)
+    signers: (sig) => floatQuiet(async () => {
+      const t = await solFloatRpc<any>('getTransaction', [sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }]);
+      const m = t?.transaction?.message; const n = Number(m?.header?.numRequiredSignatures);
+      if (!m || !Array.isArray(m.accountKeys) || !(n > 0)) return null;
+      return m.accountKeys.slice(0, n).map((k: unknown) => String(k));
+    }),
+    // review H2: what touched R's cToken account, newest first (background only)
+    signatures: (addr, until, before) => floatQuiet(async () => {
+      const r = await solFloatRpc<any>('getSignaturesForAddress', [addr, { limit: 100, commitment: 'confirmed', ...(until ? { until } : {}), ...(before ? { before } : {}) }]);
+      if (!Array.isArray(r)) throw new Error('getSignaturesForAddress: bad answer');
+      return r.filter((x: any) => typeof x?.signature === 'string').map((x: any) => ({ sig: String(x.signature), err: x.err != null, at: typeof x.blockTime === 'number' ? x.blockTime : null }));
+    }),
+  } } : {}),
+  // the server's read-only monitor: a chain it flags goes risk-off (it can never turn Earn on); kept 60 s
+  monitor: async () => {
+    if (earnMonitorMemo && Date.now() - earnMonitorMemo.at < 60_000) return earnMonitorMemo.v as never;
+    const base = HOST && parentOrigin ? parentOrigin : location.origin;
+    const j = await fetch(base + '/api/earn/status', { credentials: 'omit', signal: AbortSignal.timeout(5000) }).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+    const chains = j && typeof j === 'object' && j.chains && typeof j.chains === 'object' ? j.chains as Record<string, { pause?: unknown; hold?: unknown; apyBps?: unknown }> : null;
+    const v = chains ? Object.fromEntries(['robinhood', 'bsc', 'sol'].filter((c) => chains[c]).map((c) => [c, { ...(typeof chains[c].pause === 'string' && chains[c].pause ? { pause: String(chains[c].pause).slice(0, 120) } : {}), ...(typeof chains[c].hold === 'string' && chains[c].hold ? { hold: String(chains[c].hold).slice(0, 120) } : {}), ...(typeof chains[c].apyBps === 'number' && Number.isFinite(chains[c].apyBps) ? { apyBps: Math.round(chains[c].apyBps as number) } : {}) }])) : null;
+    earnMonitorMemo = { at: Date.now(), v };
+    return v as never;
+  },
+  // one Earn step per wallet × chain across this vault's tabs. review H4: held until the step itself settles — never let go
+  // early (earnEngine bounds a step: past EARN.stepMs it sends nothing more; its receipt / status waits are bounded). waitMs
+  // bounds only the WAIT for the lock; a step's own error is the step's (not "lock not taken")
+  lock: async <T,>(key: string, fn: () => Promise<T>, opts?: { waitMs?: number }): Promise<T | null> => {
+    const lk = typeof navigator !== 'undefined' ? navigator.locks : undefined; if (!lk?.request) return fn();
+    if (!opts?.waitMs) return lk.request(key, { ifAvailable: true }, (l) => (l ? fn() : null)) as Promise<T | null>;
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), opts.waitMs);
+    let got = false;
+    try { return await (lk.request(key, { signal: ac.signal }, () => { got = true; clearTimeout(t); return fn(); }) as Promise<T | null>); }
+    catch (x) { if (got) throw x; return null; } finally { clearTimeout(t); }
+  },
+  // the server's geo answer (Earn is off for the United States): anything but { on: true } — an error, a timeout, an older
+  // server without the route — is a no
+  // (earn-ship, 2026-11-04: the owner gate) this ONE request carries the motion site's cookies (credentials 'include'): while
+  // Earn is in the owner's preview the server says on only to a browser holding the owner's preview cookie, and it may add a
+  // per-account cap (capUsd, which can only lower the account's own). The server answers it with the vault origin alone in
+  // Access-Control-Allow-Origin (+ Allow-Credentials); anything else fails the fetch here = a no. The answer carries no key,
+  // nothing is sent but the GET.
+  geo: async () => { const base = HOST && parentOrigin ? parentOrigin : location.origin; const j = await fetch(base + '/api/earn/access', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(5000) }).then((x) => (x.ok ? x.json() : null)).catch(() => null); return !!j && j.on === true ? { on: true, capUsd: typeof j.capUsd === 'number' && Number.isFinite(j.capUsd) ? j.capUsd : null } : false; },
+  ask: (o) => ask(o),
+  gate: () => gate('transfer'),
+  esc: escHtml,
+  now: () => Date.now(),
+  store: {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+    del: (k) => { try { localStorage.removeItem(k); } catch {} },
+  },
+  emit: (detail) => document.dispatchEvent(new CustomEvent('trench:float', { detail })),
+  wait: floatWait,
+  busy: () => tradeRunning() || inClickWindow({ ...floatClock, clickAt: clicksRunning > 0 ? Date.now() + 1 : floatClock.clickAt }, Date.now()),
+  tradeLive: () => tradeRunning(),
+});
+earnApi = earn;
 if (HOST) {
   // Vault frame. The parent page calls methods by name over postMessage; the
   // answer goes back to the same window and origin. Anything from another
@@ -6428,6 +7748,8 @@ if (HOST) {
       reply({ ok: false, e: x?.message || String(err), n: typeof x?.name === 'string' ? x.name.slice(0, 40) : '', ...(x?.unknown ? { u: true } : {}), ...(x?.idempotent ? { i: true } : {}) });
     }
   });
+  // EXT-1: the extension side panel's direct, key-carrying import (onExtImport above); every other message is the parent's
+  window.addEventListener('message', (e) => { void onExtImport(e, async (items) => { await ready; return engine.import(items); }).catch(() => {}); });
   for (const name of ['trench:balances', 'trench:jobs', 'trench:tx', 'trench:perps', 'trench:float']) document.addEventListener(name, (e) => post({ t: 'ev', name, detail: (e as CustomEvent).detail }));
   // limit orders v1: { key, walletId, orderId?, step: plan | fund | approve | sign | post | cancel | sweep, state, … } — never a key or signed bytes
   document.addEventListener('trench:limit', (e) => post({ t: 'ev', name: 'trench:limit', detail: (e as CustomEvent).detail }));

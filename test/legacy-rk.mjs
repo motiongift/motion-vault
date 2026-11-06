@@ -139,7 +139,8 @@ test('legacy-rk wiring: the backup state names the local-only wallets; mainStatu
 });
 
 test('legacy-rk wiring: every transfer between own wallets asks once more before it lands in a local-only wallet', () => {
-  assert.equal((src.match(/await unbackedOk\(/g) || []).length, 5, 'transfer, transferToken, distribute, consolidate, move');
+  // + 1 (release 9): float.withdraw to one of the vault's own wallets (webEngine withdrawOk), the same check as transferToken
+  assert.equal((src.match(/await unbackedOk\(/g) || []).length, 6, 'transfer, transferToken, distribute, consolidate, move, float.withdraw');
   for (const name of ['transfer', 'transferToken']) assert.match(method(name), /else \{ await gate\('transfer', auth\); await unbackedOk\(\[to\]\); \}/, name);
   assert.match(src, /async function unbackedOk\(tos: string\[\]\): Promise<void> \{\n  const m = meta\.main \? lc\(meta\.main\) : ''; if \(!m \|\| meta\.seedSrc\?\.\[m\] !== 'rk1'\) return;/, 'a no-op everywhere but an rk1 device');
   // never in the trade path (TRADE-CORE.md §5: no step between a click and the send)

@@ -28,7 +28,9 @@ const STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n;   // 0.00125 NEAR: one N
 const GAS_RESERVE = 50n * 10n ** 21n;                        // 0.05 NEAR always left for gas
 
 export type NearAcct = { id: string; name: string; address: string; key?: string; ext?: string };
-export type NearRoute = { token: string; pool: string; quote: string; quoteDecimals: number; decimals: number; bridgePool: string | null; symbol: string; quoteSymbol: string; price: number; nearUsd: number };
+export type NearRoute = { token: string; pool: string; quote: string; quoteDecimals: number; decimals: number; bridgePool: string | null; symbol: string; quoteSymbol: string; price: number; nearUsd: number;
+  // NEAR-1 (security batch 2): the NEAR ↔ quote tiers a trade may bridge through (trustedTiers); the tier itself is picked per trade
+  bridgeTiers?: string[] };
 type Action = { fn: { method: string; args: unknown; gas: bigint; deposit: bigint } } | { transfer: bigint };
 
 // ── bytes ──
@@ -98,6 +100,7 @@ const transient = (m: string) => /timeout|timed out|fetch|network|aborted|Unexpe
 // F-38/F-10 V12: an optional validator runs on a node's result inside the loop. If it returns a message the
 // result is malformed for this call (a bad or forged shape, not a verdict): that node is skipped like a transient
 // failure and the next one is tried, instead of the bad result being returned to the caller.
+const READ_MS = 8000;
 export async function nearRpc(method: string, params: unknown, validate?: (r: any) => string | void): Promise<any> {
   let last: unknown;
   // F-39 V12: snapshot the start index so the loop counter `i` advances independently of the rotation pointer.
@@ -106,7 +109,9 @@ export async function nearRpc(method: string, params: unknown, validate?: (r: an
   for (let i = 0; i < n; i += 1) {
     const url = NEAR_RPCS[(s + i) % n];
     try {
-      const r = await rpcAt(url, method, params);
+      // (native-scenarios 2026-11-04) a view / block read that has not answered in 8 s goes to the next node (it waited 20 s: a
+      // hung first node held a click that long before the second one was asked); sends and the tx watcher keep 20 s
+      const r = await rpcAt(url, method, params, method === 'query' || method === 'block' ? READ_MS : 20000);
       const bad = validate ? validate(r) : undefined;
       if (bad) { last = new Error(bad); rpcIdx = (s + i + 1) % n; continue; }
       return r;
@@ -408,8 +413,14 @@ export async function nearRoute(token: string, hint?: any): Promise<NearRoute> {
   // a coin priced in something else than NEAR: buys go NEAR → quote → coin when Rhea has that first leg; without it buys need the quote itself and sells pay out in it
   // F-21 V12: the NEAR→quote bridge pool is always discovered on chain (findBridgePool) and never taken from the
   // page hint — a compromised page must not choose a leg of a signed swap.
+  // NEAR-1 (security batch 2, 2026-11-04): the quote coin's own nearly.trade launch (if it is one) is read beside the probe — no extra round trip
+  const qLaunch = quote !== NEAR.wnear ? nearView<any>(NEAR.factory, 'get_launch_by_token', { token: quote }).catch(() => null) : null;
   if (quote !== NEAR.wnear) bridgePool = await findBridgePool(quote);
-  const r: NearRoute = { token: t, pool: String(l.pool_id), quote, quoteDecimals: qm.decimals, decimals: tm.decimals, bridgePool, symbol: String(l.symbol || tm.symbol), quoteSymbol: qm.symbol, ...live };
+  // the probe only says Rhea has SOME NEAR leg; a leg is used only through a tier this vault trusts, and which of those is picked per trade
+  const bridgeTiers = bridgePool ? trustedTiers(quote, await qLaunch) : [];
+  if (!bridgeTiers.length) bridgePool = null; else if (!bridgeTiers.includes(String(bridgePool))) bridgePool = bridgeTiers[0];
+  if (bridgeTiers.length) bridgeRef(quote, bridgeTiers).catch(() => {});   // warmed off the click: the first sell finds it ready
+  const r: NearRoute = { token: t, pool: String(l.pool_id), quote, quoteDecimals: qm.decimals, decimals: tm.decimals, bridgePool, bridgeTiers, symbol: String(l.symbol || tm.symbol), quoteSymbol: qm.symbol, ...live };
   // F-21 V12: a slow lookup that started earlier must not overwrite a fresher route written by a later one —
   // `at` holds when this read began, and we only write if no newer entry is already cached.
   const cur = routeCache.get(t);
@@ -428,6 +439,81 @@ async function dclQuoteNow(poolIds: string[], input: string, output: string, amo
   try { const r = await nearView<any>(NEAR.dcl, 'quote', { pool_ids: poolIds, input_token: input, output_token: output, input_amount: amount.toString(), tag: null }); const v = r?.amount ?? r; const n = BigInt(String(v)); return n > 0n ? n : null; } catch { return null; }
 }
 const bps = (slippage: number) => BigInt(Math.round(Math.min(99, Math.max(0.1, slippage)) * 100));
+
+// ── NEAR-1 (security batch 2, 2026-11-04): which NEAR ↔ quote tier a trade bridges through ──
+// Before: the tier was the one where 0.1 NEAR BUYS the most, and sells took their signed minimum from a quote through that same
+// tier. Rhea DCL's create_pool and liquidity are open to anyone (on chain, 2026-10-27…11-04: pools created by juaner.near,
+// pearlquant.near, hmoood.near besides the launchpads, each with its own init_point), so a tier can be seeded one-sided: a
+// little quote coin cheap enough to win the 0.1 NEAR buy probe and (next to) no NEAR to buy it back — a sell through it signs a
+// minimum near zero, without a dialog. Live today without any attacker: USDC's 400 tier buys 0.25 USDC for 0.1 NEAR and gives
+// 0.031 NEAR back; USDt's 400 tier gives 0. Now:
+//   1. only TRUSTED tiers are used: the ones read on chain on 2026-11-04 as two-sided and deep (BRIDGE_POOLS), or the quote
+//      coin's own nearly.trade launch pool (named by the factory, not by whoever made a pool). A quote with neither (ETH, WBTC,
+//      the stock tokens, RHEA today): buys are refused as before ("Rhea has no NEAR → X pool"), sells pay out in X.
+//   2. a tier counts only while it is two-sided at a small size: what 0.1 NEAR buys sells back for at least 0.1 NEAR less its
+//      fee twice and 3 % (read once per quote per minute, off the click — bridgeRef).
+//   3. a sell quotes every usable tier at its REAL size in the sell direction (all at once: one round trip, as before) and takes
+//      the most NEAR; if even that fills the bridge leg worse than the best small two-sided rate by more than the slippage, the
+//      sell pays out in the quote coin instead (the coin leg alone: the coin's own factory pool) — never a near-zero minimum,
+//      and the holder can still exit.
+//   4. a buy quotes every usable tier at its real size (at once, in the round trip it already makes) and takes the most coin.
+const BRIDGE_FEES = [100, 400, 2000, 10000];
+const bridgeIds = (quote: string) => { const [x, y] = [quote, NEAR.wnear].sort(); return BRIDGE_FEES.map((fee) => `${x}|${y}|${fee}`); };
+export const BRIDGE_POOLS = new Set([
+  '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1|wrap.near|100', '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1|wrap.near|2000',   // USDC
+  'usdt.tether-token.near|wrap.near|100', 'usdt.tether-token.near|wrap.near|2000',   // USDt
+  'wrap.near|zec.omft.near|10000',   // ZEC
+  'qtc.omft.near|wrap.near|10000',   // QTC
+  'prl.omft.near|wrap.near|10000',   // PEARL
+]);
+export function trustedTiers(quote: string, launch: any): string[] {
+  const own = launch && launch.step === 'Done' && typeof launch.pool_id === 'string' ? launch.pool_id : '';
+  return bridgeIds(quote).filter((id) => BRIDGE_POOLS.has(id) || id === own);
+}
+const BRIDGE_PROBE = 10n ** 23n;   // 0.1 NEAR, the size findBridgePool probes with
+type TwoSided = Map<string, { b: bigint; s: bigint }>;   // tier → 0.1 NEAR buys b of the quote; b sells back for s yocto
+const refs = new Map<string, { at: number; p: Promise<TwoSided> }>();
+export const twoSidedFloor = (id: string) => { const f = 1_000_000n - BigInt(id.split('|')[2] || '0'); return (BRIDGE_PROBE * f * f * 97n) / (1_000_000n * 1_000_000n * 100n); };
+export function bridgeRef(quote: string, tiers: string[]): Promise<TwoSided> {
+  const k = quote + ' ' + tiers.join(','); const c = refs.get(k); if (c && Date.now() - c.at < 60_000) return c.p;
+  const p = Promise.all(tiers.map(async (id) => {
+    const b = await dclQuote([id], NEAR.wnear, quote, BRIDGE_PROBE); if (!b) return null;
+    const s = await dclQuote([id], quote, NEAR.wnear, b);
+    return s != null && s >= twoSidedFloor(id) ? [id, { b, s }] as const : null;
+  })).then((xs) => { const m: TwoSided = new Map(); for (const x of xs) if (x) m.set(x[0], x[1]); if (!m.size) refs.delete(k); settled.set(k, m); return m; });
+  refs.set(k, { at: Date.now(), p }); p.catch(() => refs.delete(k));
+  return p;
+}
+// the tiers one trade may use: the route's trusted tiers, minus any the last settled two-sided read found one-sided (never waited for)
+const settled = new Map<string, TwoSided>();
+const usable = (r: NearRoute) => { const t = r.bridgeTiers || []; const m = settled.get(r.quote + ' ' + t.join(',')); return m && m.size ? t.filter((id) => m.has(id)) : t; };
+export async function nearSellPlan(r: NearRoute, amount: bigint, slip: bigint): Promise<{ toNear: boolean; outToken: string; pools: string[]; q: bigint | null }> {
+  if (r.quote === NEAR.wnear) return { toNear: true, outToken: NEAR.wnear, pools: [r.pool], q: await dclQuote([r.pool], r.token, NEAR.wnear, amount) };
+  const tiers = r.bridgePool ? usable(r) : [];
+  const [legQ, outs, ref] = await Promise.all([
+    dclQuote([r.pool], r.token, r.quote, amount),
+    Promise.all(tiers.map((id) => dclQuote([r.pool, id], r.token, NEAR.wnear, amount))),
+    tiers.length ? bridgeRef(r.quote, r.bridgeTiers || []).catch(() => null) : Promise.resolve(null),
+  ]);
+  const inQuote = { toNear: false, outToken: r.quote, pools: [r.pool], q: legQ };
+  if (legQ == null || !ref || !ref.size) return inQuote;
+  let best = -1; for (let i = 0; i < tiers.length; i += 1) if (ref.has(tiers[i]) && outs[i] != null && (best < 0 || outs[i]! > outs[best]!)) best = i;
+  if (best < 0) return inQuote;
+  // the bridge leg at this size (outs / legQ, NEAR per quote unit) against the best small two-sided rate (s / b), within the slippage
+  let top = { b: 1n, s: 0n }; for (const v of ref.values()) if (v.s * top.b > top.s * v.b) top = v;
+  if (outs[best]! * top.b * 10000n < top.s * legQ * (10000n - slip)) return inQuote;
+  return { toNear: true, outToken: NEAR.wnear, pools: [r.pool, tiers[best]], q: outs[best]! };
+}
+// a buy's quote through every usable tier at its real size, at once; the most coin wins (a tie keeps the lower fee tier)
+function nearBuyQuote(r: NearRoute, amount: bigint): Promise<{ pools: string[]; q: bigint | null }> {
+  if (!r.bridgePool) return dclQuote([r.pool], NEAR.wnear, r.token, amount).then((q) => ({ pools: [r.pool], q }));
+  const tiers = usable(r);
+  if (!tiers.length) return Promise.resolve({ pools: [r.pool], q: null });
+  return Promise.all(tiers.map((id) => dclQuote([id, r.pool], NEAR.wnear, r.token, amount))).then((outs) => {
+    let best = -1; for (let i = 0; i < tiers.length; i += 1) if (outs[i] != null && (best < 0 || outs[i]! > outs[best]!)) best = i;
+    return best < 0 ? { pools: [tiers[0], r.pool], q: null } : { pools: [tiers[best], r.pool], q: outs[best]! };
+  });
+}
 // a registration, once seen, is remembered (an account is almost never unregistered): no view call next time
 const regSeen = new Map<string, number>();
 // What a registration costs is the token's own storage_balance_bounds().min (0.00125 NEAR for most, more for some):
@@ -462,9 +548,8 @@ export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRou
   if (side === 'buy') {
     const amount = nearToYocto(size); if (amount <= 0n) throw new Error('Amount');
     if (r.quote !== NEAR.wnear && !r.bridgePool) throw new Error(`${r.symbol} is priced in ${r.quoteSymbol} and Rhea has no NEAR → ${r.quoteSymbol} pool: buy it with ${r.quoteSymbol} on nearly.trade`);
-    const pools = r.bridgePool ? [r.bridgePool, r.pool] : [r.pool];
-    // one round trip for everything the node can tell at once: balance, quote, both registrations
-    const [{ spendable, exists }, q, regTok, regW] = await Promise.all([nearSpendable(me), dclQuote(pools, NEAR.wnear, r.token, amount), reg(r.token, me), reg(NEAR.wnear, me)]);
+    // one round trip for everything the node can tell at once: balance, quote (every usable bridge tier at this size — NEAR-1), both registrations
+    const [{ spendable, exists }, { pools, q }, regTok, regW] = await Promise.all([nearSpendable(me), nearBuyQuote(r, amount), reg(r.token, me), reg(NEAR.wnear, me)]);
     if (!exists) throw new Error(`Wallet ${me.slice(0, 8)}… has no NEAR yet — send NEAR to it first`);
     if (size > spendable) throw new Error(`Not enough NEAR: ${spendable.toFixed(3)} spendable after storage and gas`);
     let minOut: bigint;
@@ -491,14 +576,15 @@ export async function nearTradeOne(a: NearAcct, side: 'buy' | 'sell', r: NearRou
     return { hash };
   }
   // sells pay out in NEAR when Rhea can bridge the quote back; otherwise in the coin's own quote asset (RHEA, ZEC, a stock)
-  const toNear = r.quote === NEAR.wnear || !!r.bridgePool;
-  const outToken = toNear ? NEAR.wnear : r.quote;
-  const pools = toNear && r.bridgePool ? [r.pool, r.bridgePool] : [r.pool];
-  const [balRaw, regOut] = await Promise.all([nearView<string>(r.token, 'ft_balance_of', { account_id: me }).then((v) => BigInt(v || '0')).catch(() => 0n), reg(outToken, me)]);
+  // NEAR-1: where the sell pays out (NEAR through a bridge tier, or the quote coin) is decided by the sell-direction quotes
+  // below; both registrations are read in the first round trip, so the choice costs none
+  const bridged = r.quote !== NEAR.wnear && !!r.bridgePool;
+  const [balRaw, regNear, regQuote] = await Promise.all([nearView<string>(r.token, 'ft_balance_of', { account_id: me }).then((v) => BigInt(v || '0')).catch(() => 0n), r.quote === NEAR.wnear || bridged ? reg(NEAR.wnear, me) : Promise.resolve(0n), r.quote === NEAR.wnear ? Promise.resolve(0n) : reg(r.quote, me)]);
   const pct = Math.min(100, Math.max(0.01, size));
   const amount = pct >= 100 ? balRaw : (balRaw * BigInt(Math.round(pct * 100))) / 10000n;
   if (amount <= 0n) throw new Error('Nothing to sell');
-  const q = await dclQuote(pools, r.token, outToken, amount);
+  const { toNear, outToken, pools, q } = await nearSellPlan(r, amount, slip);
+  const regOut = toNear ? regNear : regQuote;
   let minOut: bigint;
   if (q != null) minOut = (q * (10000n - slip)) / 10000n;
   // F-21 V12: no page-price fallback for the signed minimum — refuse the sell if Rhea gives no live DCL quote.
@@ -529,17 +615,16 @@ export async function nearPreviewOne(a: NearAcct, side: 'buy' | 'sell', r: NearR
   const { balance } = me ? await nearSpendable(me) : { balance: 0 };
   const base = { name: a.name, address: me || a.address, side, venue: 'Rhea DCL', contract: NEAR.dcl as `0x${string}`, method: 'ft_transfer_call(Swap)', gas: 180, gasPriceGwei: 0, gasEth: 0.002, balanceEth: balance };
   if (side === 'buy') {
-    const amount = nearToYocto(size); const pools = r.bridgePool ? [r.bridgePool, r.pool] : [r.pool];
-    const q = await dclQuote(pools, NEAR.wnear, r.token, amount);
+    const amount = nearToYocto(size);
+    const { q } = await nearBuyQuote(r, amount);
     const expected = q != null ? Number(q) / 10 ** r.decimals : r.price > 0 && r.nearUsd > 0 ? ((size * r.nearUsd) / r.price) * 0.99 : 0;
     return { ...base, amountIn: size, amountInLabel: `${size} NEAR`, expected, min: expected * (1 - slippage / 100), pricePerToken: expected > 0 ? size / expected : 0, funded: balance >= size + 0.06 };
   }
   const balRaw = me ? BigInt(await nearView<string>(r.token, 'ft_balance_of', { account_id: me }).catch(() => '0')) : 0n;
   const amount = size >= 100 ? balRaw : (balRaw * BigInt(Math.round(Math.max(0.01, size) * 100))) / 10000n;
-  const toNear = r.quote === NEAR.wnear || !!r.bridgePool;
-  const outToken = toNear ? NEAR.wnear : r.quote; const outDec = toNear ? 24 : r.quoteDecimals;
-  const pools = toNear && r.bridgePool ? [r.pool, r.bridgePool] : [r.pool];
-  const q = amount > 0n ? await dclQuote(pools, r.token, outToken, amount) : null;
+  // the same pick as the sell itself (NEAR-1): the preview shows what the click would sign
+  const plan = amount > 0n ? await nearSellPlan(r, amount, bps(slippage)) : { toNear: r.quote === NEAR.wnear || !!r.bridgePool, q: null };
+  const toNear = plan.toNear, outDec = toNear ? 24 : r.quoteDecimals, q = plan.q;
   const tokens = Number(amount) / 10 ** r.decimals;
   const expected = q != null ? Number(q) / 10 ** outDec : toNear && r.price > 0 && r.nearUsd > 0 ? (tokens * r.price / r.nearUsd) * 0.99 : 0;
   return { ...base, venue: toNear ? 'Rhea DCL' : `Rhea DCL → ${r.quoteSymbol}`, amountIn: tokens, amountInLabel: `${tokens.toLocaleString('en-US', { maximumFractionDigits: 0 })} ${r.symbol}`, expected, min: expected * (1 - slippage / 100), pricePerToken: tokens > 0 ? expected / tokens : 0, funded: balance >= 0.06 && amount > 0n };
@@ -576,11 +661,11 @@ const burntOf = (r: any) => (r?.receipts_outcome || []).reduce((s: bigint, ro: a
 // a trade's verdict comes from its watcher (no RPC call here); any other hash is looked up once
 export async function nearReceipt(hash: string) {
   const v = verdicts.get(hash);
-  if (v) return { ok: true, pending: false, status: v.status, ...(v.error ? { error: v.error } : {}), block: 0, gasUsed: Number(v.outcome?.transaction_outcome?.outcome?.gas_burnt || 0), feeEth: yoctoToNear(burntOf(v.outcome)) };
-  if (watching.has(hash)) return { ok: true, pending: true };
+  if (v) return { ok: true, pending: false, status: v.status, state: v.status === 'success' ? 'confirmed' : 'reverted', ...(v.error ? { error: v.error } : {}), block: 0, gasUsed: Number(v.outcome?.transaction_outcome?.outcome?.gas_burnt || 0), feeEth: yoctoToNear(burntOf(v.outcome)) };
+  if (watching.has(hash)) return { ok: true, pending: true, state: 'pending' };
   const sender = txSender.get(hash); if (!sender) return { ok: true, pending: true };
   const r = await nearRpc('tx', { tx_hash: hash, sender_account_id: sender, wait_until: 'NONE' }).catch(() => null);
   if (!executed(r, hash)) return { ok: true, pending: true };
   const f = failureOf(r) || (usedOf(r) === 0n ? 'Swap did not fill' : '');
-  return { ok: true, pending: false, status: f ? 'reverted' : 'success', ...(f ? { error: f } : {}), block: 0, gasUsed: Number(r.transaction_outcome?.outcome?.gas_burnt || 0), feeEth: yoctoToNear(burntOf(r)) };
+  return { ok: true, pending: false, status: f ? 'reverted' : 'success', state: f ? 'reverted' : 'confirmed', ...(f ? { error: f } : {}), block: 0, gasUsed: Number(r.transaction_outcome?.outcome?.gas_burnt || 0), feeEth: yoctoToNear(burntOf(r)) };
 }

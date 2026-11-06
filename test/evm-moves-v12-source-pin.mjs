@@ -84,8 +84,12 @@ test('F-70: rolling one-hour buy ledger per lane, 5× cap asks', () => {
   has(readFileSync(join(here, '..', 'src', 'v13Guards.ts'), 'utf8'), 'export const BUY_WINDOW_MS = 60 * 60_000;');
 });
 
-test('F-52: a failed RPC read or nonce>0 counts as held → remove gate not bypassed', () => {
-  has(eng, 'if (bal === null || bal > 0n || nonce === null || nonce > 0) held = true;');
+// security audit 2026-11-04 SEC-3 (F-9 / F-52): no frame can prove a key empty on every lane, its reserve and its order /
+// perps wallets — erasing a keyed wallet always passes the 'remove' gate (behaviour: test/sec-remove-gate.mjs)
+test('F-52 / SEC-3: the remove gate is never skipped on a balance guess', () => {
+  const body = eng.slice(eng.indexOf('\n  remove: async (id: string, auth?: Auth)'), eng.indexOf('\n  setActive: async'));
+  assert.ok(body.includes("await gate('remove', auth);"), 'remove() passes the gate');
+  assert.ok(!/if \(held\) await gate\('remove'/.test(body), 'not only when a guess says funded');
 });
 
 test('F-12: the bridge confirmation computes the quote before the dialog and shows the amount', () => {

@@ -44,7 +44,7 @@ function world(o = {}) {
     click: () => click,
     wait: async (ms) => { T += ms; },
   };
-  const f = createFloat(deps);
+  const f = createFloat(Object.assign(deps, { readyFloat: true, gasFromW: true }));   // usd-mode2: the buffer of before
   const prefs = (p) => store.set(`trenches.float.v1.prefs.sol.${W_EVM}`, JSON.stringify({ activeAt: T, presets6: [String(usd(10))], ...p }));
   const settle = async () => { for (let i = 0; i < 200; i++) await new Promise((r) => setImmediate(r)); };
   return { f, st, click, store, prefs, settle, advance: (ms) => { T += ms; }, now: () => T };

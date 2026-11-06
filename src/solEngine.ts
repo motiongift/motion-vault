@@ -46,7 +46,8 @@ import { nativeChainOf, nativeSeed } from './nativeKeys.ts';
 import { directIxsChecked, directInnerGuard, directBalanceGuard, directPriceCheck, directQuoteCheck } from './floatDirect.ts';   // the USD buy from the reserve (appended at the end)
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
-export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number };
+// mev (TC-M2, exec-quality 2026-11-04): webEngine's per-lane MEV-protection map; `mev.sol` on = Jito bundle-only sends
+export type SolSettings = { slippage: number; gasBoost: number; turbo: boolean; solTip?: number; solPriority?: number; mev?: Record<string, boolean> };
 // 'jupiter': a coin pump.fun quotes in another token, with no Meteora DLMM pool against SOL — `quote` is that token
 export type SolRoute = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm' | 'jupiter' | 'pumphop'; tokenProgram: string; decimals: number; symbol: string; pool: string; isCashback: boolean; isMayhem: boolean; baseVault?: string; quoteVault?: string; dlmm?: DlmmRoute; dlmmAlts?: { pool: string; dlmm: DlmmRoute }[]; dlmmMore?: { p: Promise<{ pool: string; dlmm: DlmmRoute }[]>; v?: { pool: string; dlmm: DlmmRoute }[] }; quote?: string; quoteSymbol?: string; hop?: HopRoute; fee?: TransferFee };
 // (token2022-fee, 2026-11-01) a Token-2022 coin that charges a transfer fee (TransferFeeConfig), read from its mint account:
@@ -304,6 +305,9 @@ export function compileV0(payer: string, ixs: Ix[], blockhash: string, tables: {
 export function signMessage(message: Uint8Array, seed: Uint8Array) { const sig = ed25519.sign(message, seed); return { sig, tx: cat(compact(1), sig, message) }; }
 const budget = (units: number, microLamports: number): Ix[] => [ix(P.budget, [], cat(Uint8Array.of(2), u32(units))), ix(P.budget, [], cat(Uint8Array.of(3), u64(BigInt(Math.max(0, Math.floor(microLamports))))))];
 const transferIx = (from: string, to: string, lamports: bigint) => ix(P.system, [[from, true, true], [to, false, true]], cat(u32(2), u64(lamports)));
+// TC-M2: the Jito tip with the read-only jitodontfront key appended (the System program ignores extra accounts; to be proven by a
+// mainnet simulateTransaction before release — test/sol-mev-protect.mjs)
+const tipIxGuarded = (from: string, to: string, lamports: bigint) => ix(P.system, [[from, true, true], [to, false, true], [JITO_DONT_FRONT, false, false]], cat(u32(2), u64(lamports)));
 const ataCreate = (payer: string, owner: string, mint: string, tokenProgram: string) => ix(P.ata, [[payer, true, true], [ataOf(owner, mint, tokenProgram), false, true], [owner, false, false], [mint, false, false], [P.system, false, false], [tokenProgram, false, false]], Uint8Array.of(1));
 const syncNative = (acc: string) => ix(P.token, [[acc, false, true]], Uint8Array.of(17));
 const closeAcc = (acc: string, dest: string, owner: string, tokenProgram = P.token) => ix(tokenProgram, [[acc, false, true], [dest, false, true], [owner, true, false]], Uint8Array.of(9));
@@ -705,7 +709,9 @@ async function quoteAmm(r: SolRoute, side: 'buy' | 'sell', amountIn: bigint, pre
   if (!bv || !qv) throw new Error('Pool vaults not found');
   const base = rdU64(bv.data, 64), quote = rdU64(qv.data, 64) + vq;
   let cfg: { flat: Tier; tiers: Tier[] } | null = null;
-  try { cfg = feeConfigFrom(P.ammFeeConfig, m.has(P.ammFeeConfig) ? m.get(P.ammFeeConfig) ?? null : (await readBatch([P.ammFeeConfig]))[0] ?? null); } catch {}
+  // (native-scenarios 2026-11-04) a fee config read in the last 5 min is not asked for again: marketAddrs left it out of the click's
+  // one read for that reason, and the read here was a whole extra round trip on every warm PumpSwap click (its answer was discarded)
+  try { cfg = feeCfgFresh(P.ammFeeConfig) || feeConfigFrom(P.ammFeeConfig, m.has(P.ammFeeConfig) ? m.get(P.ammFeeConfig) ?? null : (await readBatch([P.ammFeeConfig]))[0] ?? null); } catch {}
   const mcap = base > 0n ? (quote * 1_000_000_000_000_000n) / base : 0n;
   const tier = cfg ? tierFor(cfg, mcap) : { threshold: 0n, lp: 20n, protocol: 5n, creator: 5n };
   const totalBps = tier.lp + tier.protocol + tier.creator;
@@ -1017,13 +1023,22 @@ function loadFeeLevels(): Promise<any> {
   return (feeLoad ||= Promise.race([solRpc<any>('getPriorityFeeEstimate', [{ accountKeys: [P.pump, P.pamm, P.dlmm], options: { includeAllPriorityFeeLevels: true } }]).catch(() => null), new Promise<null>((ok) => setTimeout(() => ok(null), 3000))])
     .then((est) => { feeLoad = null; const lv = est?.priorityFeeLevels; if (lv) { feeLv = lv; feeAt = Date.now(); } return lv || feeLv || {}; }));
 }
+// TC-M2: with MEV protection on, a trade is sent ONLY to Jito block engines as a one-transaction bundle (bundleOnly): it is
+// never forwarded to a leader as a plain transaction, so nobody can put a trade in front of it inside the auction, and a
+// bundle that would fail does not land (no fee). Such a send must tip (Jito's minimum is 1,000 lamports): at least the
+// tip floor's p50 in every mode, Eco included. jitodontfront (read-only key on the tip transfer) makes the block engine
+// refuse any bundle that places another transaction before ours.
+export const JITO_DONT_FRONT = 'jitodontfront111111111111111111111111111111';
 export async function sendPlan(s: SolSettings) {
   const mode = s.turbo ? 'turbo' : (s.gasBoost || 1) <= 1 ? 'eco' : 'fast';
+  const protect = s.mev?.sol === true;
   const pinnedTip = s.solTip && s.solTip > 0 ? Math.min(0.1, s.solTip) : 0;
   const pinnedMicro = s.solPriority && s.solPriority > 0 ? s.solPriority : 0;
   // tip floor and fee levels side by side, and only the ones this plan actually uses
-  const [t, lv] = await Promise.all([pinnedTip || mode === 'eco' ? FALLBACK_TIPS : tips(), pinnedMicro ? ({} as any) : feeLevels()]);
-  const tipSol = pinnedTip ? pinnedTip : mode === 'turbo' ? Math.min(0.003, Math.max(0.0002, t.p95 || 0.0015)) : mode === 'fast' ? Math.min(0.001, Math.max(0.00005, t.p75 || 0.00002)) : 0;
+  const [t, lv] = await Promise.all([(pinnedTip || mode === 'eco') && !protect ? FALLBACK_TIPS : tips(), pinnedMicro ? ({} as any) : feeLevels()]);
+  let tipSol = pinnedTip ? pinnedTip : mode === 'turbo' ? Math.min(0.003, Math.max(0.0002, t.p95 || 0.0015)) : mode === 'fast' ? Math.min(0.001, Math.max(0.00005, t.p75 || 0.00002)) : 0;
+  // a protected send lands only through the tip: never under the floor's p50 (live 2026-11-04: ~0.0000078 SOL) or 1,000 lamports
+  if (protect) tipSol = Math.max(tipSol, Math.min(0.001, Number(t.p50) || 0.00001), 0.000001);
   let micro = pinnedMicro || Number(mode === 'turbo' ? lv.veryHigh : mode === 'fast' ? lv.high : lv.medium) || (mode === 'eco' ? 1000 : 50000);
   micro = Math.ceil(Math.max(0, Math.min(Number(micro) || 0, mode === 'turbo' ? 5_000_000 : 2_000_000)));
   // F-8 V12: defense in depth. A settings page can pin solTip≤0.1 SOL and solPriority≤5M µlamports with no click,
@@ -1036,7 +1051,7 @@ export async function sendPlan(s: SolSettings) {
   if (tipLamports > FEE_CEIL) tipLamports = FEE_CEIL;
   const prioCeilMicro = ((FEE_CEIL - tipLamports) * 1_000_000n) / CU_CEIL;   // µlamports/CU that keeps tip + priority ≤ the ceiling
   if (BigInt(micro) > prioCeilMicro) micro = Number(prioCeilMicro);
-  return { mode, tipLamports, micro };
+  return { mode, tipLamports, micro, protect };
 }
 // A blockhash stays valid for ~150 slots (≈60 s); one fetched up to maxAgeMs ago is reused, so all the
 // wallets of a click (and a click right after a hover) sign over the same one without waiting for it.
@@ -1090,8 +1105,8 @@ function joinClick(): Click { if (!openClick) { const c: Click = { size: 0 }; op
 // The public block engine answers 429 past ~1 request per second per region: each send takes the
 // regions nobody used in the last second (fast: 2, turbo: its share of all of them), at least one.
 const jitoLast = new Map<string, number>(); let jitoTurn = 0;
-function jitoRoads(mode: string, click?: Click): string[] {
-  if (mode === 'eco') return [];
+function jitoRoads(mode: string, click?: Click, protect = false): string[] {
+  if (mode === 'eco' && !protect) return [];
   const want = mode === 'turbo' ? Math.max(2, Math.ceil(JITO_ENDPOINTS.length / Math.max(1, click?.size || 1))) : 2;
   const now = Date.now();
   // V13 (G5): measured regions first, fastest first; the rest in the list's order
@@ -1106,8 +1121,17 @@ function jitoRoads(mode: string, click?: Click): string[] {
 // still have reached a leader, so the status is unknown: never re-sent by itself, tracked, and said so.
 export class SolSendUnknown extends Error { hash = ''; }
 const silent = (e: any) => Number(e?.status) >= 500 || /timeout|timed out|abort|failed to fetch|networkerror|load failed|fetch failed/i.test(String(e?.name || '') + ' ' + String(e?.message || e || ''));
-async function broadcast(tx: Uint8Array, mode: string, click?: Click) {
+async function broadcast(tx: Uint8Array, mode: string, click?: Click, protect = false) {
   const b64 = toB64(tx);
+  // TC-M2: protected = Jito only, bundle-only; the RPC, publicnode and the user's nodes never see the bytes
+  if (protect) {
+    const roads = jitoRoads(mode === 'eco' ? 'fast' : mode, click, true).map((u) => rpcAt<string>(u + '/api/v1/transactions?bundleOnly=true', 'sendTransaction', [b64, { encoding: 'base64' }], 8000));
+    try { return await firstOk(roads); } catch {
+      const errs = (await Promise.allSettled(roads)).map((x) => (x.status === 'rejected' ? x.reason : null)).filter(Boolean);
+      if (errs.some(silent)) throw new SolSendUnknown('No block engine confirmed it received the transaction — its status is unknown. Check the wallet before trying again');
+      throw new Error('Not sent: ' + String((errs[0] as any)?.message || 'every block engine refused it').slice(0, 140) + ' (MEV protection is on: Jito only)');
+    }
+  }
   const viaRpc = rpcAt<string>(RPC_URL(), 'sendTransaction', [b64, { encoding: 'base64', skipPreflight: true, maxRetries: 3 }], 8000);
   // a second RPC road straight from this browser: same bytes, so at most one copy ever lands
   const viaPublic = rpcAt<string>(PUBLIC_RPC, 'sendTransaction', [b64, { encoding: 'base64', skipPreflight: true, maxRetries: 3 }], 8000);
@@ -1269,10 +1293,10 @@ async function solHoldGate(sender: string): Promise<void> {
 // (solHoldGate), the same bytes go out on every road (broadcast), and if every road went silent the send is NOT a
 // failure — the bytes may have reached a leader. The wallet is then held by sender and a SolSendUnknown carrying
 // the signature is thrown, so the caller (and webEngine's once()) keeps the job "sending", never retried.
-async function sendSigned(tx: Uint8Array, hash: string, lvh: number, holdKey: string, opts: { mode?: string; click?: Click; venue?: string } = {}): Promise<string> {
+async function sendSigned(tx: Uint8Array, hash: string, lvh: number, holdKey: string, opts: { mode?: string; click?: Click; venue?: string; protect?: boolean } = {}): Promise<string> {
   await solHoldGate(holdKey);
-  const { mode = 'eco', click, venue = '' } = opts;
-  try { await broadcast(tx, mode, click); }
+  const { mode = 'eco', click, venue = '', protect = false } = opts;
+  try { await broadcast(tx, mode, click, protect); }
   catch (e) {
     if (e instanceof SolSendUnknown) { e.hash = hash; trackSig(hash, venue); unknownSends.set(holdKey, { sig: hash, lvh }); }
     throw e;
@@ -1569,7 +1593,7 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   // Jupiter's copy of each table must be what the chain holds (a forged map would point the signed indexes at other accounts)
   for (const t of tables) { const claimed = built0.claimed[t.key] || []; if (claimed.length > t.addresses.length || claimed.some((a, i) => a !== t.addresses[i])) throw new Error('Jupiter\'s lookup table does not match the chain — refused'); }
   const plan = await planP;
-  const tip = plan.tipLamports > 0n ? [transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
+  const tip = plan.tipLamports > 0n ? [plan.protect ? tipIxGuarded(user, pick(JITO_TIP), plan.tipLamports) : transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
   // the F-8 ceiling at this route's compute limit: tip + priority never past ~0.005 SOL
   const microAt = (units: number) => Math.min(plan.micro, Number(((JUP_FEE_CEIL - (plan.tipLamports > JUP_FEE_CEIL ? JUP_FEE_CEIL : plan.tipLamports)) * 1_000_000n) / BigInt(units)));
   const feesAt = (units: number) => plan.tipLamports + (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n + SIG_FEE + 10_000n;
@@ -1634,7 +1658,7 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
   sentSigs.set(hash, now);
   // F-1/F-55 V12: the same single send path as every other outflow
-  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: 'jupiter' }); }
+  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: 'jupiter', protect: plan.protect }); }
   catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(hash); throw e; }
   return { hash };
 }
@@ -1723,7 +1747,7 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
     ixs = (await solTradeIxs(user, r, side, amount, s.slippage, m)).ixs;
   }
   const plan = await planP;
-  const tip = plan.tipLamports > 0n ? [transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
+  const tip = plan.tipLamports > 0n ? [plan.protect ? tipIxGuarded(user, pick(JITO_TIP), plan.tipLamports) : transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
   // the most this transaction can be signed with: Fast simulates at 400k and signs ≤ 400k, Turbo signs 300k — 400k on
   // DLMM, where a sell that walks many bins measured 337k (pump / PumpSwap never pass 100k)
   const maxUnits = s.turbo ? (r.venue === 'dlmm' ? 400_000 : 300_000) : 400_000;
@@ -1764,7 +1788,7 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
   sentSigs.set(hash, now);
   // F-1/F-55 V12: one send path for every outflow — holds the wallet and throws SolSendUnknown on a silent send
-  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: r.venue }); }
+  try { await sendSigned(tx, hash, lvh, user, { mode: plan.mode, click, venue: r.venue, protect: plan.protect }); }
   catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(hash); throw e; }
   return { hash };
 }
@@ -2174,8 +2198,8 @@ async function motionPriceUsd(mint: string): Promise<number | null> {
   } catch { return null; }
 }
 export class SolDirectNoGas extends Error { name = 'SolDirectNoGas'; }
-export type SolDirectBuilt = { tx: Uint8Array; hash: string; lvh: number; mode: string; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number> };
-type DirectPlan = { message: (blockhash: string) => Uint8Array; bh: BlockhashInfo; mode: string; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number>; mark: (k: string) => void };
+export type SolDirectBuilt = { tx: Uint8Array; hash: string; lvh: number; mode: string; protect?: boolean; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number> };
+type DirectPlan = { message: (blockhash: string) => Uint8Array; bh: BlockhashInfo; mode: string; protect?: boolean; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number>; mark: (k: string) => void };
 /** Build, check, simulate and sign R's buy — never sent here (solDirectBuy sends). */
 export async function solDirectBuild(rAcct: SolAcct, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings): Promise<SolDirectBuilt> {
   if (!rAcct.key || rAcct.ext) throw new Error('No Solana key for this reserve');
@@ -2187,7 +2211,7 @@ export async function solDirectBuild(rAcct: SolAcct, w: string, r: SolRoute, usd
   for (let i = 0; i < 3 && sentSigs.has(b58e(signed.sig)); i++) { const nb = await newerBlockhash(bh); bh = nb.v; lvh = nb.lvh; signed = sign(bh); }
   if (signed.tx.length > 1232) throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount');
   p.mark('signed');
-  return { tx: signed.tx, hash: b58e(signed.sig), lvh, mode: p.mode, minOut: p.minOut, outQuote: p.outQuote, route: p.route, timing: p.timing };
+  return { tx: signed.tx, hash: b58e(signed.sig), lvh, mode: p.mode, protect: p.protect, minOut: p.minOut, outQuote: p.outQuote, route: p.route, timing: p.timing };
 }
 /** Every step of R's buy up to its signature, for an address only (no key, nothing signed or sent): measurements and tests. */
 export async function solDirectDryRun(R: string, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings): Promise<{ bytes: number; minOut: bigint; outQuote: bigint; route: string; timing: Record<string, number> }> {
@@ -2235,7 +2259,7 @@ async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s
   mark('tables');
   const plan = await planP;
   mark('plan');
-  const tip = plan.tipLamports > 0n ? [transferIx(R, pick(JITO_TIP), plan.tipLamports)] : [];
+  const tip = plan.tipLamports > 0n ? [plan.protect ? tipIxGuarded(R, pick(JITO_TIP), plan.tipLamports) : transferIx(R, pick(JITO_TIP), plan.tipLamports)] : [];
   const microAt = (units: number) => Math.min(plan.micro, Number(((JUP_FEE_CEIL - (plan.tipLamports > JUP_FEE_CEIL ? JUP_FEE_CEIL : plan.tipLamports)) * 1_000_000n) / BigInt(units)));
   const feesAt = (units: number) => plan.tipLamports + (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n + SIG_FEE + 10_000n;
   const rentMax = BigInt(opens + 1) * RENT_ATA22;   // the route's own opens + W's coin account
@@ -2287,7 +2311,7 @@ async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s
   });
   if (why) throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + why + '. Nothing was sent.');
   let bhi = await bhP; if (Date.now() - bhi.at > 20_000) bhi = await blockhash(0);
-  return { message: (b) => compileV0(R, all(units, microAt(units)), b, tables), bh: bhi, mode: plan.mode, minOut, outQuote: BigInt(built.quote.outAmount), route: (built.quote.routePlan || []).map((h) => h.swapInfo?.label || '?').join(' → '), timing, mark };
+  return { message: (b) => compileV0(R, all(units, microAt(units)), b, tables), bh: bhi, mode: plan.mode, protect: plan.protect, minOut, outQuote: BigInt(built.quote.outAmount), route: (built.quote.routePlan || []).map((h) => h.swapInfo?.label || '?').join(' → '), timing, mark };
 }
 /** R's buy for W, sent through the engine's single held-wallet path (held by R's address on an unknown status). */
 export async function solDirectBuy(rAcct: SolAcct, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings, gate?: () => boolean): Promise<{ hash: string; minOut: bigint; route: string; timing: Record<string, number> }> {
@@ -2300,7 +2324,7 @@ export async function solDirectBuy(rAcct: SolAcct, w: string, r: SolRoute, usdcI
   if (gate && !gate()) throw new Error('The buy from your USD balance took too long to prepare — nothing was sent');
   const now = Date.now(); for (const [x, at] of sentSigs) if (now - at > 120_000) sentSigs.delete(x);
   sentSigs.set(b.hash, now);
-  try { await sendSigned(b.tx, b.hash, b.lvh, R, { mode: b.mode, click, venue: 'jupiter' }); }
+  try { await sendSigned(b.tx, b.hash, b.lvh, R, { mode: b.mode, click, venue: 'jupiter', protect: b.protect }); }
   catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(b.hash); throw e; }
   return { hash: b.hash, minOut: b.minOut, route: b.route, timing: b.timing };
 }
