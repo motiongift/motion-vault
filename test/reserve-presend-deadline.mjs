@@ -1,4 +1,4 @@
-// The pre-send deadline of the buy straight from the USD reserve (owner 2026-11-01: «даю добро делай»; src/preSendDeadline.ts).
+// The pre-send deadline of the buy straight from the USD reserve (owner 2026-11-01: “approved”; src/preSendDeadline.ts).
 // A reserve direct buy (webEngine usdBuy on Solana, usdBuyEvm on Robinhood / BNB) whose build stalls BEFORE anything is handed
 // to broadcast is answered "not started … nothing was sent" after PRE_SEND_MS and lets go of the per-wallet trade guard; a build
 // that passed the gate (may have broadcast) keeps today's behaviour and the guard.
@@ -24,7 +24,7 @@ const never = () => new Promise(() => {});
 // STILL_SENDING falls back to hold & fire
 const DIRECT_FALLBACK = /not available|off for this wallet|holds .* USDC — less|reserve needs about|Bad arguments|unknown method|no fresh price|route pays far less than the market price|found no route|answered for a different trade|not supported yet|does not fit|nothing was sent|previous send from this wallet .*unknown status/i;
 const STILL_SENDING = /is still being sent/i;
-const APP = 'B:/rework/motion-ios/src/domain/usdHold.ts';
+const APP = (process.env.MOTION_IOS_DIR || '../motion-ios') + '/src/domain/usdHold.ts';
 
 // ── the pure deadline ──
 test('PRE_SEND_MS is 20 s and the late text is a fallback refusal for the app (nothing was sent, not "still being sent")', () => {

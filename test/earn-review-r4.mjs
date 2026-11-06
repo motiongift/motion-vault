@@ -1,4 +1,4 @@
-// r4: the re-review of r3 (B:\tmp\earn-review\review-r3.txt) — M3-1 (silence is never a stop; only a positive reorg signal is),
+// r4: the re-review of r3 (local earn-review/review-r3.txt) — M3-1 (silence is never a stop; only a positive reorg signal is),
 // L3-3 (a click's withdrawal is re-read later for the books), L3-2 (Kamino: the landed USDC is booked), L3-1 (a signature flood:
 // paged, budgeted, nothing skipped). S1 / S2: test/earn-session.mjs "r4 …". Mocked chains only.
 import test from 'node:test';

@@ -1,4 +1,4 @@
-// pumphop (2026-11-01, owner «их можно купить должно быть»; trade core: «я даю добро на все»): a pump.fun coin whose live curve is
+// pumphop (2026-11-01, owner “they must be buyable”; trade core: “full go-ahead”): a pump.fun coin whose live curve is
 // quoted in another pump coin Q is bought / sold from SOL in ONE PumpSwap multi_hop_swap — SOL → Q (Q's SOL curve or its canonical
 // PumpSwap pool) → the coin. Before this every such coin went to Jupiter, which routes a new one minutes late or never (pee Eyrm…,
 // quoted in nut: "can't be bought here yet").

@@ -78,7 +78,7 @@ function world(o = {}) {
       return ok(quoteFor(b));
     }
     // motion's keyed pass-through: the live server forwards EXACT_INPUT only (pulse-indexer /api/bridge/vault-quote); with
-    // B:/tmp/native-donor/server-vault-quote-exact-output.patch it forwards EXACT_OUTPUT too (o.proxyExactOut)
+    // local native-donor/server-vault-quote-exact-output.patch it forwards EXACT_OUTPUT too (o.proxyExactOut)
     if (url === PROXY + '/api/bridge/vault-quote' && JSON.parse(init.body).tradeType !== 'EXACT_INPUT' && !o.proxyExactOut) return { ok: false, status: 400, json: async () => ({ ok: false, error: 'bad quote request' }) };
     if (url === PROXY + '/api/bridge/vault-quote') { const b = JSON.parse(init.body); log.quotes.push(b); return ok(quoteFor(b)); }
     if (url === 'https://api.relay.link/price') {
@@ -310,7 +310,7 @@ test('donor selection: both chains can spare it → the cheaper quote; only one 
   assert.deepEqual(d.log.reads, ['robinhood']); assert.equal(d.log.sends.length, 0); assert.equal(rd.click.state, 'none');
 });
 
-// 2026-11-01 (owner «доводи до уровня фомо … я даю добро на все»: deposit on one chain, trade on any): a click may take the
+// 2026-11-01 (owner “bring it up to fomo's level … full go-ahead”: deposit on one chain, trade on any): a click may take the
 // donor chain's kept ready float too — only W's gas floor and the deposit's own gas stay; that chain refills in the background.
 // Before, the same wallet was "no donor" and the buy failed for want of SOL.
 test('keep-float (a click): Robinhood keeps only its gas floor + the gas of the deposit; a donor that leaves its kept float alone is preferred; a wallet that cannot spare the need is refused with why, nothing signed', async () => {
@@ -448,7 +448,7 @@ test('the USD balance off: nothing is read or moved from another chain', async (
 });
 
 // ── the measurement: click → native landed → buy sent, on the fake chains with the latencies measured on 2026-10-30 ──
-// (read-only, B:\tmp\native-donor\live.mjs): Relay quote ~0.3–0.8 s, Robinhood reads ~0.1–0.2 s, a Solana read ~0.12 s; the
+// (read-only, local native-donor/live.mjs): Relay quote ~0.3–0.8 s, Robinhood reads ~0.1–0.2 s, a Solana read ~0.12 s; the
 // fill ~1 s after the deposit's block (Relay's own request history, RH → SOL, 19 of 19 within 1 s) + ~0.5 s inclusion. The
 // app's hold & fire asks for a fresh status every 0.5 s and fires on the first one that covers the buy.
 test('timing: click → SOL landed → buy fired, within the app\'s 15 s hold (today: the buy fails at once)', async () => {
@@ -476,7 +476,7 @@ test('timing: click → SOL landed → buy fired, within the app\'s 15 s hold (t
   for (const x of runs) { assert.ok(x.fired > 0 && x.fired < 15_000, JSON.stringify(x)); assert.ok(x.fired >= x.landed); }
 });
 
-// ── 2026-11-01: a click elsewhere from small balances (owner «доводи до уровня фомо … я даю добро на все»; a tester with $4.90 on
+// ── 2026-11-01: a click elsewhere from small balances (owner “bring it up to fomo's level … full go-ahead”; a tester with $4.90 on
 // Robinhood / BNB and nothing on Solana could not buy $1 there). The need now always carries W's gas floor; a click may take a
 // chain's whole float above its gas floor; two chains pay one click together when neither can alone ──
 const above = (chain, usd) => F.FLOAT_CFG[chain].gasFloor + BigInt(Math.round(usd * 1e6)) * ETH / (BigInt(PRICE[chain]) * F.USD);

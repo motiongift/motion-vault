@@ -4,7 +4,7 @@ Branch `v13-hardening`, based on `main` 389fe5b (V12, the live engine `iwpFL7OJ`
 pinned in trench.** The release is the owner's command (`scripts/vault-release.mjs` from trench, per `docs/PROJECT.md` §5/§6).
 
 Sources: trench `docs/drafts/SECURITY-AUDIT-2026-10-25.md` §3 (VA-1 … VA-13), `docs/drafts/SPEED-AUDIT-2026-10.md` (rows marked
-ENGINE), `B:\tmp\speed-audit\engine-trade-path.md` (gaps G1–G17).
+ENGINE), a local copy (`speed-audit/engine-trade-path.md`) (gaps G1–G17).
 
 **Owner's rule: no fix may slow trading.** Every row below gives the sequential round trips (RT) on the click before → after.
 "Beside X" = issued in the same tick as X, so it costs no RT of its own.
@@ -268,7 +268,7 @@ Expected (warm, 1 wallet), from the speed audit's measured RTs:
 | V12 pins updated (intent kept) | `evm-moves-v12-source-pin` F-70 (the window moved to v13Guards), `webengine-v12-source-pin` F-57 (the guard is started beside the quote), `solnear-source-pin` F-54 (parallel candidate quotes) |
 
 **Real-browser runs of this build with trench's harnesses** (Chrome; the vault's production CSP; mocked nodes;
-nothing signed against a chain). Logs are in `B:\motion-backups\v13-hardening\`.
+nothing signed against a chain). Logs are in a local copy (`motion-backups/v13-hardening/`).
 - `E2E_ENGINE=<dev build of this branch> node scripts/vault-dialog-shots.mjs` → **340 PASS, 0 FAIL**: every vault dialog
   at 390 / 1280, import / export / restore / remove / phone access, backup across lanes.
   - A first run failed 2 checks and hung: the 600 ms dwell then applied in Chromium too, and the harness confirms dialogs

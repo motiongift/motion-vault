@@ -135,7 +135,7 @@ export const RULES = {
   activeMs: 7 * 86_400_000,
   walletPct: 30n,            // floats ≤ 30 % of the wallet
 };
-// ── the ready float after a trade (owner 2026-10-29, «да добавляй тоже делай»; floatEngine afterTrade) ──
+// ── the ready float after a trade (owner 2026-10-29, “approved, add it too”; floatEngine afterTrade) ──
 // Before: W's float was refilled only by the next routine tick (the app's 60 s timer, deferred inside a click / token-page
 // window), so after two or three quick buys every buy took the slow hold path. Now:
 //   1. a trade of W that CONFIRMED schedules one refill tick of that wallet x chain on the fast path, once no trade is between
@@ -144,7 +144,7 @@ export const RULES = {
 //      the last 5 (readySize6); while the user trades in a burst (>= 2 buys reported, or >= 2 trade clicks of this frame, on
 //      this chain in the last 60 s) the float holds 4 buys instead of 1.5 — a refill lands ~4 s after the buy it follows
 //      (confirmation, plan, top-up, landing), so at a buy every 2 s about two are in flight (simulated 2026-10-29: 3 holds of
-//      5 at 3 buys, 2 at 4; B:\tmp\float-direct\ab\refill-sim.mjs) — within the per-chain cap and the $250 ceiling, as before;
+//      5 at 3 buys, 2 at 4; local float-direct/ab/refill-sim.mjs) — within the per-chain cap and the $250 ceiling, as before;
 //   3. that refill tops W up to the target as soon as it is under it (not only under the 60 % low band), from $1;
 //   4. the sweep W -> R of a surplus waits 5 minutes after the last trade while the user is in a burst (re-entry is likely:
 //      the surplus a sell left is the next buy's float); otherwise the usual 60 s quiet rule.
@@ -184,7 +184,7 @@ export const tradingUsd6 = (chain: FloatChain, floatRaw: bigint, price6: bigint)
   const c = FLOAT_CFG[chain]; const over = floatRaw - c.gasFloor; return over > 0n ? nativeToUsd6(over, price6, c.nativeDecimals) : 0n;
 };
 
-// ── the floor a CLICK tops W up to (2026-11-01, owner «доводи до уровня фомо … я даю добро на все»: deposit on one chain, trade
+// ── the floor a CLICK tops W up to (2026-11-01, owner “bring it up to fomo's level … full go-ahead”: deposit on one chain, trade
 // on any) ──
 // The 0.02 SOL gas floor is the background refill's (it covers many trades); a click top-up of an empty Solana wallet asked for
 // all of it on top of the buy, so $2.45 a wallet elsewhere could not pay a $1 buy there. A click now tops W up to what THIS buy
@@ -297,7 +297,7 @@ export function termsOk(t: { caps?: { perDay6?: unknown; feesPerDay6?: unknown; 
 //   - the gas drop: motion SENDS a reserve a little gas; nothing of the user's moves;
 //   - USDG / USDC sent straight to W joins R: W -> R, an own-address move of the kind rules 1 names (R pays W's fee only);
 //   - a Solana reserve as a cross-chain donor through motion's bridge: the bridge line, from the wallet's own reserve.
-// Rules 2 (owner 2026-10-29: «да делай давай» — "bump the consent rules so users re-confirm that the reserve may buy coins
+// Rules 2 (owner 2026-10-29: “approved” — "bump the consent rules so users re-confirm that the reserve may buy coins
 // for them"): a buy the user taps in USD may be paid straight from the wallet's own reserve — R signs ONE transaction that
 // spends its stable and delivers the coin to W (float.buy, src/floatDirect.ts). The stable leaves the wallet's addresses for a
 // pool, which rules 1 ("nothing can leave the wallets") did not allow: a new yes. A grant on rules 1 stops being live; the
@@ -338,10 +338,10 @@ export type ChainState = {
   // ready dollars (READY, 2026-11-01 pass 3): the user bought on this chain in the last 7 days, and this chain's snapshot is
   // recent enough (and newer than the last cross-chain arrival into it) for a background move to be planned from it
   traded?: boolean; readyOk?: boolean;
-  // W's native the user chose to KEEP as native when the switch went on (2026-11-01, owner «я даю добро на все»: "why does it
+  // W's native the user chose to KEEP as native when the switch went on (2026-11-01, owner “full go-ahead”: "why does it
   // ask me to convert when I already have $800 USDC?"): the routine sweep never converts it — only what arrives above it
   keep?: bigint;
-  // (usd-mode2 2026-11-05, B:/tmp/usd-mode-1105 follow-up: a tester's wallet kept getting R's USDG swapped into ETH, "for buys",
+  // (usd-mode2 2026-11-05, local usd-mode-1105 follow-up: a tester's wallet kept getting R's USDG swapped into ETH, "for buys",
   // while his buys were paid by R) buys on this chain are paid straight from the reserve (float.buy, rules >= 2): W keeps no
   // ready-native buffer here. No routine top-up ('below low', 'refill') and no cross-chain move for one; W keeps what it holds
   // (its gas floor is never swept) and the sweep's threshold is the one of before (a sell's proceeds above it still join R).
@@ -365,7 +365,7 @@ export type PlanInput = {
   // `feesDay6` = what such moves cost this wallet in the last 24 h; `from` = the reserves a public bridge can send from (EVM).
   // Left out (a click, the after-trade refill, older callers, the tests of before) = the plan is exactly as before
   ready?: { feesDay6: bigint; from: FloatChain[] };
-  // a click is planned all or nothing (TC-1, 2026-11-04, B:/tmp/usd-scenarios + B:/tmp/usd-buy-final): when everything this frame
+  // a click is planned all or nothing (TC-1, 2026-11-04, local usd-scenarios + local usd-buy-final): when everything this frame
   // can reach for it (W here, this chain's reserve, the reserves it can sign a cold top-up from within XCHAIN, and `urgentExtra6`:
   // what the wallet's own native on the other EVM chains can bring, the engine's estimate) cannot pay the bare need (the buy + W's
   // floor + what the moves may lose), NO move is planned for it and `short.infeasible` says what it can pay instead. The engine
@@ -375,7 +375,7 @@ export type PlanInput = {
   // TC-1: the reserves whose cold top-up for this click runs in THIS frame (the engine knows: its own chain, the EVM reserves
   // through motion's bridge, the Solana reserve when it can pay its transfer). Left out = every other reserve counts (optimistic)
   urgentSign?: FloatChain[];
-  // (usd-mode 2026-11-05, B:/tmp/usd-mode-1105: a tester's 100 USDG went Robinhood → BNB through Relay right after his deposit,
+  // (usd-mode 2026-11-05, local usd-mode-1105: a tester's 100 USDG went Robinhood → BNB through Relay right after his deposit,
   // though he never bought on BNB; the BNB reserve and wallet hold no BNB, so those dollars could not even be used there): a
   // routine cross-chain rebalance 'local reserve short' goes INTO a chain only when the user bought there in the last 7 days
   // (`traded`), not because a page of it was open (`active`). A click's own cold top-up is unchanged. Left out = as before
@@ -385,7 +385,7 @@ export type PlanInput = {
   // reserve 0.0000868 ETH on a background tick. Left out = as before (W refills R's gas whenever idle)
   gasFromWClickOnly?: boolean;
 };
-// ── a click's cross-chain top-up in parts (2026-11-01 pass 2, owner «я даю добро на все … главное скорость и стабильность»):
+// ── a click's cross-chain top-up in parts (2026-11-01 pass 2, owner “full go-ahead … speed and stability first”):
 // motion's bridge carries at most $1,000 a fill (the vault's MOTION_BRIDGE_MAX6 and the solver's maxFillUsd). A click whose
 // cross-chain part was larger — a $900 buy wants $1,125 with its 25 % — went to ONE reserve as ONE move, which motion refused
 // whole, every time (two $2,500 reserves could not pay a $900 buy). Now a reserve's share goes in parts of at most part6 ($990:
@@ -397,8 +397,7 @@ export const XCHAIN = { part6: 990n * USD, parts: 4 } as const;
 export const partMaxOf = (max6: bigint | null | undefined): bigint => (max6 && max6 > 0n && (max6 * 99n) / 100n < XCHAIN.part6 ? (max6 * 99n) / 100n : XCHAIN.part6);
 /** What one click may carry across chains through motion's bridge, in dollars (the app's ticket: never "Paid from" above it). */
 export const xchainClickMax6 = (part6: bigint = XCHAIN.part6): bigint => part6 * BigInt(XCHAIN.parts);
-// ── ready dollars on every chain the user trades (2026-11-01 pass 3, proposal A1; owner «я даю добро на все … доводи до уровня
-// фомо», «мы не можем проебать бабки юзеров никак строго») ──
+// ── ready dollars on every chain the user trades (2026-11-01 pass 3, proposal A1; owner “full go-ahead … bring it up to fomo's level”, “we can never lose users' money, strictly”) ──
 // A click on a chain whose reserve is empty waits for a cross-chain top-up (~3 s: quote, source inclusion, payout, the hold's
 // read). A click on a chain whose reserve holds its dollars is a direct buy from that reserve (~0.7 s, TRADE-CORE 2026-10-29).
 // So on every chain with a buy in the last 7 days the background keeps the reserve R at 1.5 x the ready size (readySize6: the
@@ -530,7 +529,7 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       const deficit6 = x.float < cf ? nativeToUsd6Up(cf - x.float, x.price6, cfg.nativeDecimals) : 0n;
       const want6 = (urgentNeed * RULES.clickMarginPct) / 100n + deficit6;
       const clickNow6 = clickUsd6(c, x.float, x.price6) + x.inFlight6;
-      // PROPOSAL TC-1 (2026-11-04, B:/tmp/usd-scenarios, the owner's $540 Robinhood buy): before, a click its reserves could not pay
+      // PROPOSAL TC-1 (2026-11-04, local usd-scenarios, the owner's $540 Robinhood buy): before, a click its reserves could not pay
       // still moved everything they held (the whole $239 BNB reserve became ETH in W) and the page waited 15 s for a figure W could
       // never reach. Now the plan first adds up what this click can reach at all; below the bare need it plans NOTHING for it (no
       // swap, no bridge, no gas move) and says what it can pay. A move landing here right now (bridge-busy) keeps the old answer
@@ -926,7 +925,7 @@ export const ACCOUNT_DEVICES: Record<FloatLang, { on: string; off: string }> = {
 };
 export const ACCOUNT_MORE: Record<FloatLang, string> = { en: 'How it works', ru: 'Как это работает', zh: '运作方式', id: 'Cara kerjanya', es: 'Cómo funciona', fr: 'Comment ça marche' };
 // A rules bump (FLOAT_RULES): what is new, ONE line per version, in the six languages; the dialog asks for that line alone,
-// with the whole consent folded under it. Rules 2 (owner 2026-10-29 «да делай давай»): the buy straight from the reserve.
+// with the whole consent folded under it. Rules 2 (owner 2026-10-29 “approved”): the buy straight from the reserve.
 export const RULES_DELTA: Partial<Record<number, Record<FloatLang, string>>> = {
   2: { en: "New: a buy you tap in USD may be paid straight from your wallet's own reserve — the reserve buys the coin for that wallet in one transaction (no top-up first), within your limits. Nothing else changes.", ru: 'Новое: покупку в USD может оплатить напрямую собственный резерв вашего кошелька — резерв покупает монету для этого кошелька одной транзакцией (без пополнения заранее), в ваших пределах. Остальное не меняется.', zh: '新规则：你以 USD 点击的买入可直接由你钱包自己的储备支付——储备在一笔交易中为该钱包买入代币（无需先充值），在你的限制之内。其余不变。', id: 'Baru: pembelian yang Anda ketuk dalam USD dapat dibayar langsung dari cadangan dompet Anda sendiri — cadangan membeli koin untuk dompet itu dalam satu transaksi (tanpa isi ulang dulu), dalam batas Anda. Selebihnya tidak berubah.', es: 'Nuevo: una compra que pulses en USD puede pagarse directamente desde la reserva propia de tu cartera: la reserva compra la moneda para esa cartera en una sola transacción (sin recarga previa), dentro de tus límites. Nada más cambia.', fr: "Nouveau : un achat que vous lancez en USD peut être payé directement par la réserve propre de votre portefeuille — la réserve achète le jeton pour ce portefeuille en une seule transaction (sans recharge préalable), dans vos limites. Rien d'autre ne change." },
 };
@@ -947,7 +946,7 @@ export function rulesDeltaLines(from: number, to: number, lang: FloatLang, delta
 
 // ── a switch-on for an account that already holds dollars (2026-11-01, the owner, holding ~$800 as USD balance, got "Turn on
 // USD balance · Convert $179 to dollars · …" and asked "why does it ask me to convert when I already have $800 USDC?"; owner
-// «я даю добро на все», «мы не можем проебать бабки юзеров никак строго») ──
+// “full go-ahead”, “we can never lose users' money, strictly”) ──
 // The vault's grant is per device (floatConsent carries it to the account's other devices, when it can): a device whose own
 // grant is not live — never confirmed here, ran out after 30 days, or another device's record it could not adopt (newer
 // rules, a signer whose key this vault does not hold, …) — used to get the FIRST switch-on dialog, which bundles converting
@@ -1305,8 +1304,7 @@ export function floatArgs(method: string, o: unknown): Record<string, unknown> {
 // lands is the user's coin from then on: it is kept out of the dollar figure and out of every sweep (convKept below). Covered by
 // the rules-2 line the grant already agreed to ("a buy you tap in USD may be paid straight from that wallet's own reserve: the
 // reserve buys the coin and it lands in the wallet, in one transaction"), so no new consent and no rules bump: it needs a live
-// grant on rules >= DIRECT_BUY_RULES for that wallet and chain, like float.buy. No limits (owner in chat 2026-11-05: «убрать лимиты,
-// тогда текст останется верным» — the consent says "no daily or volume limits"): the bounds are the $1 minimum, what R holds liquid,
+// grant on rules >= DIRECT_BUY_RULES for that wallet and chain, like float.buy. No limits (owner in chat 2026-11-05: “remove the limits, then the text stays true” — the consent says "no daily or volume limits"): the bounds are the $1 minimum, what R holds liquid,
 // the oracle / slippage check of the top-up, the live grant and one move per wallet and chain at a time (the lock).
 export const CONVERT_MIN6 = 1n * USD;
 // a conversion sent less than this long ago and not landed yet: its kept amount is never shrunk (W's read may predate it)
@@ -1426,7 +1424,7 @@ export const convertWhy = (code: ConvertCode, lang: FloatLang, v: Record<string,
 // the chain's pinned stablecoin (USDG on Robinhood, USDC on BNB / Solana) signed by the wallet's OWN reserve R — to the wallet itself
 // (to 'wallet': no address argument) or to an outside address (to 'address'). No swap, no bridge. The consent is Send's own: an
 // address the vault holds no key for = the 'withdraw' 2FA gate + the vault's "Send outside your vault" dialog (trusted click); the
-// vault's own wallets = the 'transfer' gate. No limits (owner 2026-11-05: «убрать лимиты»): never more than R holds liquid, at
+// vault's own wallets = the 'transfer' gate. No limits (owner 2026-11-05: “remove the limits”): never more than R holds liquid, at
 // least $0.10. A repeat of the same idempotencyKey returns the first answer and never sends twice.
 export const WITHDRAW_MIN6 = 100_000n;              // $0.10
 export const WITHDRAW_MAX_USD = 100_000;            // the argument's range (not a limit: R never pays more than it holds)

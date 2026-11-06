@@ -1,4 +1,4 @@
-// turboGas(): the gas limit of a turbo send, picked from the route shape (src/turboGas.ts, owner 2026-11-01 «я даю добро на все»).
+// turboGas(): the gas limit of a turbo send, picked from the route shape (src/turboGas.ts, owner 2026-11-01 “full go-ahead”).
 // Pure input → limit checks plus a source check of the two wired lines in webEngine.ts. No network.
 //   node --test test/turbo-gas.mjs
 import test from 'node:test';
@@ -81,7 +81,7 @@ test('floor 900k and cap 5M hold for every input', () => {
   }
 });
 
-test('the limits cover the gas measured on the live chains (2026-11-01, B:\\tmp\\foreman\\turbo-gas.md)', () => {
+test('the limits cover the gas measured on the live chains (2026-11-01, local foreman/turbo-gas.md)', () => {
   const cases = [
     [{ type: 'v4', poolKey: { hooks: LONG_HOOK } }, UR, 0.3, 1_400_000],
     [{ type: 'standard', stage: 'curve', router: ROUTER }, ROUTER, 0.5, 1_350_000],

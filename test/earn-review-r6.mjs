@@ -1,4 +1,4 @@
-// r6: the re-review of r5 (B:\tmp\earn-review\review-r5.txt) — M5-1 (Kamino's pre-step simulation tolerates what else moved R's
+// r6: the re-review of r5 (local earn-review/review-r5.txt) — M5-1 (Kamino's pre-step simulation tolerates what else moved R's
 // accounts; a simulation-only mismatch is retried, never a stop) and L5-1 (the signer's own nonce decides whether a silent step was
 // dropped). Mocked chains only.
 import test from 'node:test';

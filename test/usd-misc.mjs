@@ -1,4 +1,4 @@
-// USD balance fix pass (2026-11-01, owner «я даю добро на все … главное скорость и стабильность торговли»):
+// USD balance fix pass (2026-11-01, owner “full go-ahead … trading speed and stability first”):
 //   1. a second top-up / refill of the same chain in the same calendar minute ran nothing (its id was taken by the first, ARRIVED
 //      job) while the answer still listed it as planned: the page waited 15 s, then "not sent" (usd-trading-same-minute-topup-skipped)
 //   2. the Solana direct buy's gas ask waited for SOL_GAS.enough (2.1M lamports), not for what the build needs (~3.1M+), and

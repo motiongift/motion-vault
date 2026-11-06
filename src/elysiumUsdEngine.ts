@@ -43,7 +43,7 @@ export type ElyUsdDeps = {
   account: () => string | null;                                  // the account's main address (null: this device only)
   wallet: (id: string) => ElyUsdWallet;                           // throws for Privy / hop / chain-only wallets
   permission: (id: string) => ElyPermission | null;   // the wallet's LIVE USD-balance permission, else null
-  // (release 9) no permission caps on Elysium (owner 2026-11-05: «убрать лимиты, тогда текст останется верным»): the live grant decides
+  // (release 9) no permission caps on Elysium (owner 2026-11-05: “remove the limits, then the text stays true”): the live grant decides
   // (release 8) the ids of this vault account's wallets that can hold a USD balance, in the vault's order (left out = no donors)
   wallets?: () => string[];
   // (release 8) Earn's ready part on a wallet's reserve on that chain, micro-dollars (cached, read only; left out = none)
@@ -217,7 +217,7 @@ export function createElyUsd(deps: ElyUsdDeps) {
       // (release 6) motion's fee is 0.1 %, at least $0.01: a quote that names more signs nothing
       if (elyFeeTooHigh(got.fee6, got.usd6)) return { answer: { ok: false, state: 'failed', code: 'quote', why: 'motion\'s quote charges more than its 0.1 % fee — nothing was moved' } };
       // the PAYING wallet's grant, asked again inside its reserve's lock (it may have been switched off since the plan): live and on
-      // that network, or nothing moves. (release 9: no caps — owner in chat 2026-11-05: «убрать лимиты, тогда текст останется верным»)
+      // that network, or nothing moves. (release 9: no caps — owner in chat 2026-11-05: “remove the limits, then the text stays true”)
       { const pp = deps.permission(pw.id);
         if (!pp || !pp.chains.includes(plan.from)) return { answer: { ok: false, state: 'failed', code: 'donor-off', why: `${pw.id === w.id ? 'This wallet' : pw.name}'s USD balance is off on that network — nothing was moved` } }; }
       if (confirm && !(await confirm(got.out))) return { answer: { ok: false, state: 'cancelled', why: 'Not confirmed — nothing was moved' } };

@@ -1,5 +1,5 @@
 // 2026-11-01, the click a tester could not make: "Buy $1 × 2 wallets" on Solana with $0 SOL and $4.90 of USD balance on
-// Robinhood / BNB (B:\tmp\usd-xchain-click\plan-repro.mjs). The reserves' click top-up (floatCore planMoves) left out W's own
+// Robinhood / BNB (local usd-xchain-click/plan-repro.mjs). The reserves' click top-up (floatCore planMoves) left out W's own
 // gas floor: tradingUsd6 counts only what sits above the floor, so a click on a chain where W holds nothing got exactly its
 // need + 25 % and W's ready stayed ~0.02 SOL short of the click — hold & fire waited its whole 15 s, then "buying anyway".
 // Pure: planMoves with the live chain configuration, prices as on the day.

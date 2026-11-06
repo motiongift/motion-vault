@@ -1,6 +1,6 @@
 // Earn on the USD balance — the pure rules. Robinhood: USDG in Morpho "Steakhouse USDG" (this file); BNB: USDC in Aave v3
 // (src/earnAave.ts); Solana: USDC in Kamino Lend's main market (src/earnKamino.ts).
-// Design: C:\Users\anton\OneDrive\Рабочий стол\bull\earn-research\REPORT.md §6 / §8; notes B:\tmp\earn-mvp\notes.txt.
+// Design: the Earn research report (local copy, §6 / §8); notes: local earn-mvp/notes.txt.
 //
 // The USD balance's reserve R holds USDG. With Earn on, R keeps a liquid buffer B and puts only the rest, E, into ONE
 // ERC-4626 vault this build names (allow-listed here: chain, vault, asset, the four selectors, receiver = owner = R). The

@@ -315,7 +315,7 @@ export function jobFrom(raw: string | null | undefined): ElyJob | null {
 /** a job stuck open this long is shown as "delayed — nothing is lost" (the solver redeems / refunds on its side) */
 export const ELY_DELAYED_MS = 10 * 60_000;
 
-// (release 9, owner in chat 2026-11-05: «убрать лимиты, тогда текст останется верным») the paying wallet's permission caps that
+// (release 9, owner in chat 2026-11-05: “remove the limits, then the text stays true”) the paying wallet's permission caps that
 // release 8 enforced here (perDay / feesPerDay / perChain / total, and their per-wallet day ledger) are gone: the consent says
 // "no daily or volume limits", and the code says the same. What bounds a move is what the paying reserve holds, the live grant
 // of that wallet and chain, one move per reserve at a time (its lock), the quote's checks and the vault's own per-move ceiling.

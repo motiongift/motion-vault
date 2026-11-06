@@ -1,4 +1,4 @@
-// (2026-11-03) "Add HYPE / USDC on Elysium" from a trading wallet, through motion's bridge (trench docs: B:\tmp\elysium-funding).
+// (2026-11-03) "Add HYPE / USDC on Elysium" from a trading wallet, through motion's bridge (trench docs: local elysium-funding).
 // What the vault may do on this path, pinned at the source: the recipient is the paying wallet's OWN address (no parameter can
 // name another), the quote is checked against the pinned solver key and OUR prices before the dialog, the dialog says what leaves,
 // what arrives where and the 6-day way back, and the only bytes signed are ONE plain transfer (native or the chain's stablecoin)

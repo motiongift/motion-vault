@@ -1,4 +1,4 @@
-// Release 7: the venues of B:\tmp\elysium-venues (all 8 routers deployed by the owner, 2026-11-04, code == pin on both nodes):
+// Release 7: the venues of local elysium-venues (all 8 routers deployed by the owner, 2026-11-04, code == pin on both nodes):
 // four stock V3Factory copies, two stock V4 PoolManager copies, Stockium's renamed-callback V3 fork (own pool init hash) and Kleos V3
 // pools quoted in Kleos' own WHYPE 0x0269…9eef. V3 fee tiers: any integer in (0, 100000]. Pure: no network.
 //   node --experimental-strip-types --test test/elysium-rel7-venues.mjs

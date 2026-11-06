@@ -1,5 +1,4 @@
-// One USD balance — the buy straight from the reserve on EVM (owner 2026-10-29: «давай делай и все что там осталось выкатывай
-// тоже тогда»). Pure: which ONE call the reserve R signs for a market (the float's own router, recipient W), the simulation
+// One USD balance — the buy straight from the reserve on EVM (owner 2026-10-29: “approved, and ship everything that is left too”). Pure: which ONE call the reserve R signs for a market (the float's own router, recipient W), the simulation
 // probe the vault runs on that exact call before it signs (an eth_call with the probe's code at R's address), and the
 // checks on what the probe saw. webEngine usdBuyEvm runs them; nothing here holds a key or touches the network.
 //   V3 pools (Uniswap V3 / Pons graduates on Robinhood, PancakeSwap V3 on BNB): multicall(deadline, [exactInput]) along
@@ -48,7 +47,7 @@ export type EvmRoute = { type: string; fee?: number; quoteToken?: string; bridge
 export type EvmPlan = { kind: 'v3' | 'v2' | 'v4' | 'curve'; to: Hex; spender: Hex; permit2?: { token: Hex; spender: Hex }; build: (minOut: bigint) => Hex; hops: string[];
   router?: { address: Hex; codeHash: Hex; venue: Hex; selector: Hex; spec: readonly [number, number, number, number, boolean] } };
 
-// ── bonding curves: UsdBuyRouter (B:\tmp\float-direct\contracts, AUDIT.md) ──
+// ── bonding curves: UsdBuyRouter (local float-direct/contracts, AUDIT.md) ──
 // Its address on each chain is the deployer's first creation (0xf0e0…5c2e, nonce 0): the vault uses it only once the code there
 // hashes to the runtime the audited source compiles to with that chain's immutables (stable, wrapped, swap router, fee) and the
 // venue's allow-list entry reads back as below — until then (not deployed) a curve buy is "not available" and keeps the hold.

@@ -1,4 +1,4 @@
-// Account backup v4: a PASSKEY as the second factor on the backup key (2026-10-30, owner: «пусть агенты это все уже делают»).
+// Account backup v4: a PASSKEY as the second factor on the backup key (2026-10-30, owner: “approved, let the agents build all of it”).
 //
 // Backup v3 (vaultRecovery.ts backupKeyV3) seals every wallet key and the gen-2 salts under a key from the main wallet's
 // signature alone: whoever holds the account's Privy session (email / Google login, a stolen browser session, a script on

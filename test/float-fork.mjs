@@ -1,6 +1,6 @@
 // USD balance on Robinhood Chain's REAL contracts (a local hardhat fork; USDC-BALANCE.md §14.1 float-fork): the vault
 // module (src/floatEngine.ts) unchanged, its deps over the fork node, throwaway keys, fork-only balances.
-//   cd B:/tmp/limit-fork && npx hardhat node --port 8547                         (background)
+//   cd <limit-fork> && npx hardhat node --port 8547                         (background)
 //   FORK_RPC=http://127.0.0.1:8547 node --experimental-strip-types --test test/float-fork.mjs
 // Skipped without FORK_RPC.
 import test from 'node:test';

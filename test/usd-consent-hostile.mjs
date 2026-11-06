@@ -1,5 +1,5 @@
-// Regression tests from the security review of usd-consent-follow (2026-11-02, B:\tmp\foreman\usd-ux-1102-engine-review.md;
-// probes B:\tmp\usd-ux-1102\review\{head,base}\test\hostile*.mjs). Each case below FAILED on the reviewed head (and H2 on the
+// Regression tests from the security review of usd-consent-follow (2026-11-02, local foreman/usd-ux-1102-engine-review.md;
+// probes local usd-ux-1102/review/{head,base}/test/hostile*.mjs). Each case below FAILED on the reviewed head (and H2 on the
 // live base 35d4aea) and passes with F1–F4:
 //   H1  a seed holder (one phished main signature) seals its own key into the backup the page hands over and signs a grant:
 //       never followed — a signer counts only as a key this vault holds, a co-signer it holds, or a backup-v4 entry opened

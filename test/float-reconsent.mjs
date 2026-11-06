@@ -50,7 +50,7 @@ const yesterday = () => ({ store: new Map(Object.entries(FIX.store)), clock: { n
 const settle = async () => { for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r)); };
 const ON = { walletId: 'w1', chains: ['robinhood', 'bsc', 'sol'] };
 // a build on rules 1 (the rules every grant up to 2026-10-29 agreed to): what "survives a release" means when the rules did not
-// change. The real build is on rules 2 since 2026-10-29 (the buy from the reserve, owner «да делай давай»): tested below.
+// change. The real build is on rules 2 since 2026-10-29 (the buy from the reserve, owner “approved”): tested below.
 const R1 = { current: 1, accepted: 1 };
 
 test('fixture: yesterday\'s engine wrote the grant after a dialog that named the volume caps; the record holds no text, language or build', () => {
@@ -139,7 +139,7 @@ test('a substantive rules bump re-asks: the old grant pauses (off in every frame
   assert.deepEqual(F.rulesDeltaLines(1, 3, 'fr', {}), [F.RULES_DIALOG.fr.fallback]);
 });
 
-test('THIS build (rules 2, owner 2026-10-29 «да делай давай»): yesterday\'s grant pauses; the next switch asks only the buy-from-the-reserve line, in the user\'s language; then the reserve may buy', async () => {
+test('THIS build (rules 2, owner 2026-10-29 “approved”): yesterday\'s grant pauses; the next switch asks only the buy-from-the-reserve line, in the user\'s language; then the reserve may buy', async () => {
   assert.deepEqual({ ...F.FLOAT_RULES }, { current: 2, accepted: 2 });
   for (const lang of ['en', 'ru', 'zh', 'id', 'es', 'fr']) assert.ok(F.RULES_DELTA[2][lang].length > 40, lang);
   assert.match(F.RULES_DELTA[2].en, /reserve/); assert.match(F.RULES_DELTA[2].en, /within your limits/);

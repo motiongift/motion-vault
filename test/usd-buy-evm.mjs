@@ -4,6 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+// FLOAT_DIRECT_DIR = a local checkout of the float-direct contracts (the checks that need it are skipped without it)
+const FD = process.env.FLOAT_DIRECT_DIR || '../float-direct';
 import { decodeFunctionData, parseAbi, encodeAbiParameters } from 'viem';
 import * as E from '../src/usdBuyEvm.ts';
 import * as F from '../src/floatCore.ts';
@@ -85,7 +88,7 @@ test('curves through UsdBuyRouter: four.meme / Flap with BNB, the Pons family wi
   assert.throws(() => E.evmDirectPlan({ ...base, chain: 'bsc', route: { type: 'four', manager: '0x0000000000000000000000000000000000000bad', quoteToken: Z } }), E.DirectUnsupported, 'another manager');
   assert.throws(() => E.evmDirectPlan({ ...base, route: { type: 'four', manager: FOUR, quoteToken: Z } }), E.DirectUnsupported, 'no four.meme on Robinhood');
   // the deploy config the contract is deployed with = the vault's copy (offsets and venues)
-  const deployCfg = 'B:/tmp/float-direct/contracts/deploy/venues.mjs';
+  const deployCfg = FD + '/contracts/deploy/venues.mjs';
   if (existsSync(deployCfg)) {
     const src = readFileSync(deployCfg, 'utf8');
     assert.match(src, /four = \(manager\) => \(\{ venue: manager, selector: SEL\.fourBuy, amountOffset: 68, recipientOffset: 36, tokenOffset: 4, nativeOffset: 0, ponsFactory: false \}\)/);
@@ -107,8 +110,8 @@ test('the price guard reads the EXPECTED out (a 30 % slippage setting never trip
   assert.equal(E.minOutOf(1000n, 12), 880n); assert.equal(E.minOutOf(1n, 50), 1n);
 });
 
-test('the probe the vault embeds is the one compiled from contracts/UsdBuyProbe.sol (when the toolchain is here)', { skip: !existsSync('B:/tmp/float-direct/contracts/artifacts/UsdBuyProbe.json') }, () => {
-  const a = JSON.parse(readFileSync('B:/tmp/float-direct/contracts/artifacts/UsdBuyProbe.json', 'utf8'));
+test('the probe the vault embeds is the one compiled from contracts/UsdBuyProbe.sol (when the toolchain is here)', { skip: !existsSync(FD + '/contracts/artifacts/UsdBuyProbe.json') }, () => {
+  const a = JSON.parse(readFileSync(FD + '/contracts/artifacts/UsdBuyProbe.json', 'utf8'));
   assert.equal(E.PROBE_RUNTIME, a.deployedBytecode);
 });
 
@@ -170,9 +173,9 @@ test('background: R approves the float\'s router, then Permit2, then Permit2 for
   assert.equal(b.sent.length, 0);
 });
 
-test('the curve router: the pinned code hashes are the audited runtime with the owner\'s RESCUE; the per-buy cap is $100 (vault-side)', { skip: !existsSync('B:/tmp/float-direct/contracts/deploy/expected-hash.mjs') }, async () => {
-  const { expectedHashes } = await import('file:///B:/tmp/float-direct/contracts/deploy/expected-hash.mjs');
-  const { RESCUE } = await import('file:///B:/tmp/float-direct/contracts/deploy/venues.mjs');
+test('the curve router: the pinned code hashes are the audited runtime with the owner\'s RESCUE; the per-buy cap is $100 (vault-side)', { skip: !existsSync(FD + '/contracts/deploy/expected-hash.mjs') }, async () => {
+  const { expectedHashes } = await import(pathToFileURL(FD + '/contracts/deploy/expected-hash.mjs').href);
+  const { RESCUE } = await import(pathToFileURL(FD + '/contracts/deploy/venues.mjs').href);
   assert.equal(RESCUE, E.CURVE_RESCUE);
   const h = await expectedHashes();
   assert.equal(E.CURVE_ROUTER.bsc.codeHash, h.bsc); assert.equal(E.CURVE_ROUTER.robinhood.codeHash, h.robinhood);

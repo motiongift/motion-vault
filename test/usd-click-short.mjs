@@ -1,8 +1,8 @@
-// The click's `short` answer (2026-11-04, the owner's $540 MOTION buy on Robinhood: web r135, engine glncySWJ; B:\tmp\usd-buy-final).
+// The click's `short` answer (2026-11-04, the owner's $540 MOTION buy on Robinhood: web r135, engine glncySWJ; local usd-buy-final).
 // Wallet 1 held $549 in all — ~$250 of ETH in W on Robinhood, $239.11 USDC in the BNB reserve, $22.40 of SOL float (a click
 // elsewhere never moves it) and ~$37 elsewhere. The click's plan moved the whole BNB reserve (the bridge log: "paid bsc→robinhood
 // 239.113576 USD") and kept the rest in plan.short — which no answer carried, so the page waited 15 s for a figure W could never
-// reach. Now (one design, B:/tmp/usd-buy-final):
+// reach. Now (one design, local usd-buy-final):
 //   TC-1  a click everything it can reach cannot pay is planned all or nothing: NO move, answered at once
 //         { state: 'failed', code: 'short', short: { usd, canUsd } } (test/usd-atomic-click.mjs has the planner's 500-world proof);
 //   E1    a click whose moves did go but leave W short (a part refused on the way, a donor that brought less) answers 'moving' +

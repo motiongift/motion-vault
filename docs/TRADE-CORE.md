@@ -1,7 +1,6 @@
 # TRADE CORE: frozen (owner's rule, 2026-10-25)
 
-> **Owner, 2026-10-25 ~22:00:** «пожалуйста сохрани как свод правил текущую сборку транзакций — текущая скорость великолепна и
-> бесподобна … чтобы это не сломалось на некст фиксах … чтобы никакие агенты не трогали это ядро без моего согласия».
+> **Owner, 2026-10-25 ~22:00:** “keep the current transaction building as a rulebook — the current speed is excellent … so that it does not break in later fixes … so that no agent touches this core without my consent”.
 >
 > **For every agent:** the code below builds, signs and sends every trade. It is frozen at the state that went live on
 > 2026-10-25 21:38. **You do not change it without the owner's explicit "yes" in chat for that exact change.** Not for a
@@ -12,9 +11,9 @@
 
 | Piece | Live | Source |
 |---|---|---|
-| Vault engine | `sha384-Nsg69rvTwufsI/Tqz/qb9Y9DKZ91Z5WqucfT/EtYG3TXnSnKmeaDrI1hkj+gz2wk` (pinned in `vault.html`, published in `/releases.json`) | `B:\rework\github\motion-vault-rc`, branch `engine-rc-v13`, commit `9b76d53`, tag **`trade-core-2026-10-25`**. Archived copy: `B:\motion-backups\trade-core-20261025\engine-9b76d53.js` |
-| Server | deployed from snapshot `B:\tmp\trench-snap-limit` (2026-10-25 21:38) | trench tree |
-| App | `entry-8c9a0a3d…` (export `B:\tmp\motion-web-limit3`) | app snapshot `B:\tmp\motion-snap-limit3` |
+| Vault engine | `sha384-Nsg69rvTwufsI/Tqz/qb9Y9DKZ91Z5WqucfT/EtYG3TXnSnKmeaDrI1hkj+gz2wk` (pinned in `vault.html`, published in `/releases.json`) | the motion-vault repo, branch `engine-rc-v13`, commit `9b76d53`, tag **`trade-core-2026-10-25`**. Archived copy: `engine-9b76d53.js` in the owner's local backup |
+| Server | deployed from snapshot a local copy (`trench-snap-limit`) (2026-10-25 21:38) | trench tree |
+| App | `entry-8c9a0a3d…` (export a local copy (`motion-web-limit3`)) | app snapshot a local copy (`motion-snap-limit3`) |
 
 ### 1a. Engine (motion-vault)
 - **Whole files:** `src/solEngine.ts` (every Solana venue: pump.fun, PumpSwap, Meteora DLMM, the Jupiter route and its guards,
@@ -50,7 +49,7 @@ Not pinned by hash (they live in very large files), but **frozen by this rule al
 | Solana priority-fee estimate | 0.15 s from the client (was 0.48–0.84 s); 1–12 ms on the box |
 | EVM click paths | 1 round trip fewer than the previous engine on Pons buys, V4 native/WETH buys and armed sells, V3, Pons stock-pair sells (code review 2026-10-25) |
 
-Harness: `B:\tmp\rel-limit\latency-rc.mjs` (copy in `B:\motion-backups\trade-core-20261025\`), `HEADED=1 N=10 node latency-rc.mjs`
+Harness: a local copy (`rel-limit/latency-rc.mjs`) (copy in a local copy (`motion-backups/trade-core-20261025/`)), `HEADED=1 N=10 node latency-rc.mjs`
 (headed Chrome; headless crashes on the vault import). Engine A = the frozen build, R = the candidate.
 
 ## 3. How it is enforced
@@ -82,7 +81,7 @@ Harness: `B:\tmp\rel-limit\latency-rc.mjs` (copy in `B:\motion-backups\trade-cor
 
 ## 6. Roll back to the frozen core
 
-- Engine: put `B:\motion-backups\trade-core-20261025\engine-9b76d53.js` at `server/web/vendor/engine.js` of the deploy snapshot,
+- Engine: put the archived `engine-9b76d53.js` (the owner's local backup) at `server/web/vendor/engine.js` of the deploy snapshot,
   then deploy it (deploy-push pins it into `vault.html` + `releases.json`); check `releases.json` shows `sha384-Nsg69rvT…`.
-- Source: `git -C B:\rework\github\motion-vault-rc checkout trade-core-2026-10-25 -- src/`, only on a branch made for the rollback.
+- Source: `git checkout trade-core-2026-10-25 -- src/` in motion-vault, only on a branch made for the rollback.
 - Server: backups `/root/bak-{trenches,etc,app}-limit-20261025-2138.tgz` on the box (the deploy that made this state).

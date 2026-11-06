@@ -1,5 +1,5 @@
 // Earn on the USD balance — the vault side (pure rules: src/earnCore.ts, src/earnAave.ts, src/earnKamino.ts; design and the
-// reviewer's checklist: B:\tmp\earn-mvp\notes.txt).
+// reviewer's checklist: local earn-mvp/notes.txt).
 //
 // `createEarn(deps)` runs in every lane's vault frame and moves money on THAT frame's chain only, between ONE place and ONE
 // place: the wallet's own reserve R and that chain's one allow-listed venue —
@@ -23,7 +23,7 @@
 //            a fee raised): nothing new goes in, and what is in comes out by itself (every withdrawal fully checked).
 //   changed  the venue's code was upgraded (Aave proxy implementation, Kamino program): nothing new goes in; withdrawals go on.
 //
-// r2 (the independent review, B:\tmp\earn-review\review.txt): a hard stop holds the switch-off's withdrawals too (H1 / M8: only
+// r2 (the independent review, local earn-review/review.txt): a hard stop holds the switch-off's withdrawals too (H1 / M8: only
 // the user's own action moves money after it), the switch-off has its own day budget and backs off; one step per wallet × chain
 // is held until it ends (H4: the lock is never let go early, a step past EARN.stepMs sends nothing more, no step starts while
 // another one's transaction is open); the principal is booked from the transaction's own events and a lagging position read is

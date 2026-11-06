@@ -1,4 +1,4 @@
-// r3 (owner 2026-11-03 «лочить на 8 часов / 11 часов пока ночь идёт»): Earn in timed sessions — the end brings everything back by
+// r3 (owner 2026-11-03 “lock for 8 hours / 11 hours while it is night”): Earn in timed sessions — the end brings everything back by
 // itself (the switch-off's path, its budget and its stops), also when the device was offline at the end; nothing is locked during
 // a session; sessions replace each other; a clock that jumps back ends one. Mocked chain only.
 import test from 'node:test';
@@ -92,7 +92,7 @@ test('session: a hard stop holds the end\'s exit too (only the user\'s own withd
   await tick(w2, e2); w2.clock.t += 30 * H; assert.notEqual((await tick(w2, e2)).step, 'withdraw');
 });
 
-// ══ r4: the re-review of r3 (B:\tmp\earn-review\review-r3.txt) — S1 / S2 pass the safe way ══
+// ══ r4: the re-review of r3 (local earn-review/review-r3.txt) — S1 / S2 pass the safe way ══
 const shares = (wd) => wd.st.shares.get(lc(wd.R)) ?? 0n;
 test('r4 S1: after a session ENDED, a new one is confirmed in the vault (no 2FA on the valid permission): declined → nothing goes in; accepted → it runs', async () => {
   const wd = makeEarnWorld(); const e = createEarn({ ...wd.earnDeps, ask: async (a) => { wd.asks.push(a); return answer; } });

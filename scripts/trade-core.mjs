@@ -1,5 +1,5 @@
-// TRADE CORE pin (owner, 2026-10-25: "сохрани как свод правил текущую сборку транзакций — текущая скорость великолепна;
-// чтобы никакие агенты не трогали это ядро без моего согласия"). See docs/TRADE-CORE.md.
+// TRADE CORE pin (owner, 2026-10-25: “keep the current transaction building as a rulebook — the current speed is excellent;
+// no agent touches this core without my consent”). See docs/TRADE-CORE.md.
 //
 // The trade core = every byte that runs between a click and a signed transaction leaving the browser: whole files
 // (solEngine.ts, bnbRouter.ts, evmV4Router.ts, standardRouter.ts, v13Guards.ts) and the trade-path declarations of webEngine.ts.

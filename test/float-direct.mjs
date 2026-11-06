@@ -1,6 +1,6 @@
 // USD balance — the buy straight from the reserve (src/floatDirect.ts, src/solEngine.ts solDirectBuild). The fixture is a REAL
 // mainnet simulation of R's one transaction (USDC → CLUTCH via Whirlpool → Manifest → Raydium CP, paid into W's coin
-// account), captured 2026-10-29 with B:\tmp\float-direct\ab\capture-fixture.mjs (sigVerify off, nothing sent).
+// account), captured 2026-10-29 with local float-direct/ab/capture-fixture.mjs (sigVerify off, nothing sent).
 //   node --experimental-strip-types --test test/float-direct.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';

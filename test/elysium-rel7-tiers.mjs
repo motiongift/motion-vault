@@ -1,4 +1,4 @@
-// Release 7 (owner in chat 2026-11-04: «Да, автохуки»; «выводи и также пиши что не проверено …»): hook tiers.
+// Release 7 (owner in chat 2026-11-04: “yes, auto-hooks”; “list them and say what is not verified …”): hook tiers.
 // Tier 1 'reviewed' = a reviewed CODE HASH on its PoolManager (any address); 'auto' = the lane's claim for a hash the watcher passed;
 // 'unverified' = any other non-refused hook on a stock V4 PoolManager with a static fee ≤ 10 %. The claimed hash goes into ELY_GUARD,
 // which checks EXTCODEHASH on chain (a wrong claim = "no pool"). Pure: no network.

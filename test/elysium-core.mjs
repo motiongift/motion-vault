@@ -1,5 +1,5 @@
 // trade-core.patch E1 — the Elysium trade path's pure decisions (src/elysiumCore.ts), one test per guard.
-// Real addresses / pool ids are the ones read on chain 99901 on 2026-11-03 (B:\tmp\elysium-trade\logs\probe*.txt).
+// Real addresses / pool ids are the ones read on chain 99901 on 2026-11-03 (local elysium-trade/logs/probe*.txt).
 //   node --experimental-strip-types --test test/elysium-core.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -226,7 +226,7 @@ test('exact approvals: exactly the amount, 0 first over a smaller one, Permit2 f
   assert.throws(() => E.elyApprovals({ token: EGG, router: ur, amount: 0n, allowance: 0n, p2Amount: 0n, p2Expiry: 0, now }), /size/);
 });
 
-// (release 9, owner in chat 2026-11-05: «Да, фикс Permit2») the live revert: tx 0x57f0c734…7781, block 829998, EINU — Permit2
+// (release 9, owner in chat 2026-11-05: “yes, the Permit2 fix”) the live revert: tx 0x57f0c734…7781, block 829998, EINU — Permit2
 // AllowanceExpired(1793873306 = 10:08:26Z). The allowance was set 15 min before; the sell read a block time 20 s before expiry,
 // reused it (the old rule renewed only within 30 s) and was included 19 s after it had expired.
 test('Permit2 (r9): an allowance expiring 20 s after signing is renewed, for 30 minutes from the later of block time and wall clock', () => {

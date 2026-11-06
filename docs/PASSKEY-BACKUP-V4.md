@@ -1,6 +1,6 @@
 # Account backup v4: a passkey as the second factor (2026-10-30)
 
-Owner's go: «пусть агенты это все уже делают» (2026-10-30). Status: **built and tested on branch `passkey-backup`. Not released,
+Owner's go: “approved, let the agents build all of it” (2026-10-30). Status: **built and tested on branch `passkey-backup`. Not released,
 not deployed.** The trench side (server module, routes, nginx, the opt-in "Protect your backup" UI in both designs, the public
 explainer at `/security/backup`) is applied in the trench main tree; release plan and checklist: trench `docs/PROTECT-BACKUP.md`.
 

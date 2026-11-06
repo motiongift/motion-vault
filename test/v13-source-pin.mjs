@@ -80,7 +80,7 @@ test('VA-2: the size is validated before tradeLimits records anything, and the l
 
 test('VA-3: the bridge quote the vault signs comes from api.relay.link itself and is checked before the dialog', () => {
   const ob = body(eng, 'async function ownBridgeQuote(', '\n}\n');
-  // (2026-10-29, owner «ну да делай» to the Relay-key fix) the quote goes through relayApi.relayQuote: api.relay.link
+  // (2026-10-29, owner “approved” to the Relay-key fix) the quote goes through relayApi.relayQuote: api.relay.link
   // keyless FIRST (unchanged), motion's keyed pass-through only when Relay refuses for want of a key, and then only with the
   // server-independent checks (pinned depository / programs, Relay's own keyless price) — test/relay-swap.mjs
   has(ob, 'const { j, source } = await relayQuote(body as never);');

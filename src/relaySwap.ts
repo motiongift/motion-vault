@@ -1,4 +1,4 @@
-// Cross-chain swaps on Relay (2026-10-29; owner: «ну да делай»). The bridge's route with a coin on either side: a coin the
+// Cross-chain swaps on Relay (2026-10-29; owner: “approved”). The bridge's route with a coin on either side: a coin the
 // wallet holds on the origin chain (memecoins included) → the native coin, a stable or any coin on another chain. Relay
 // routes it and fills it from its own solvers; the vault signs Relay's own steps from the user's wallet and nothing else.
 // motion never holds the funds and never pays anything out of its own reserves on this path.

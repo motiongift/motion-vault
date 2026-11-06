@@ -1,14 +1,14 @@
 // Earn on the USD balance — Solana: USDC in Kamino Lend's main market (pure rules; the engine side is src/earnEngine.ts, adapter
 // 'kamino'). Chosen over Jupiter Lend because klend publishes its Anchor IDL on chain (kamino_lending 1.27.0, read 2026-11-03 from
 // its IDL account 8qLKwp1fk8WyqmzarkuMeZEX3AzL4VDSmA2UZTKT2aCJ): every instruction, account list and the Reserve layout below are
-// checked against it (B:\tmp\earn-mvp\probe\idl\klend.idl.json, reserve-layout.txt). Jupiter Lend has no on-chain IDL.
+// checked against it (local earn-mvp/probe/idl/klend.idl.json, reserve-layout.txt). Jupiter Lend has no on-chain IDL.
 //
 // R holds Kamino's collateral token (kUSDC, the reserve's cToken) in its own token account — no obligation, no borrowing, no
 // farm. R signs ONE transaction per step, built only here: [create R's token account (idempotent)], refresh_reserve,
 // deposit_reserve_liquidity(amount)  — or —  refresh_reserve, redeem_reserve_collateral(cTokens). Owner = R, source and
 // destination = R's own associated token accounts. Simulated on mainnet state 2026-11-03 (sigVerify off, nothing signed):
 // a $10 deposit minted 8.269857 kUSDC; deposit + redeem of everything returned $10 less 1 micro-USDC (rounding); a wrong supply
-// vault was refused by klend (Custom 2012). Log: B:\tmp\earn-mvp\logs\sol-kamino-readonly-probe.log.
+// vault was refused by klend (Custom 2012). Log: local earn-mvp/logs/sol-kamino-readonly-probe.log.
 import { sha256 } from '@noble/hashes/sha2';
 import { USD } from './floatCore.ts';
 

@@ -49,7 +49,7 @@ function harness(extra = [], more = {}) {
 // the four dialogs, with the flags their ask() call carries IN THE SOURCE (danger / keep / funds read off the line)
 const DIALOGS = ["Set up this device", "A different account signed in", "Change network nodes", "Start a new empty vault?"];
 const lineOf = (title) => { const ls = SRC.split('\n').filter((l) => l.includes(`ask({ title: '${title}'`)); assert.equal(ls.length, 1, title); return ls[0]; };
-// "Set up this device" carries `funds: !fresh` (owner 2026-11-04: «да делай», test/sec-b2-fresh-attach.mjs): a restore keeps the
+// "Set up this device" carries `funds: !fresh` (owner 2026-11-04: “approved”, test/sec-b2-fresh-attach.mjs): a restore keeps the
 // typed number, so it counts here as funds; a fresh account's first attach is the one-click exception.
 const flags = (title) => { const l = lineOf(title); return { danger: /ask\(\{ title: '[^']+', (?:[^}]*?)danger: true/.test(l), keep: / keep: true/.test(l), funds: / funds: (?:true|!fresh)/.test(l), ok: (/ ok: '([^']+)'/.exec(l) || [])[1] || 'OK' }; };
 

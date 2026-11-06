@@ -1,4 +1,4 @@
-// One USD balance — the buy straight from the reserve (owner 2026-10-29: «давай делай это все»; design: B:\tmp\float-direct).
+// One USD balance — the buy straight from the reserve (owner 2026-10-29: “approved, do all of it”; design: local float-direct).
 //
 // Before: a USD-balance buy the trading wallet W could not cover waited for a top-up — the reserve R swapped its stable to
 // native and paid W (one transaction), the page watched for it to land, then W bought (a second transaction): two
@@ -6,7 +6,7 @@
 // Now: R itself buys, in ONE transaction it signs, spending its own stable and delivering the coin straight to W:
 //   Solana  a Jupiter route USDC → coin with destinationTokenAccount = W's coin account (Jupiter hops USDC → SOL → coin by
 //           itself, so pump.fun curves and coins without a USDC pool work); R pays the fee and the rent of W's account.
-//   EVM     the stateless UsdBuyRouter (B:\tmp\float-direct\contracts, NOT deployed): R's stable → native → the venue's own
+//   EVM     the stateless UsdBuyRouter (local float-direct/contracts, NOT deployed): R's stable → native → the venue's own
 //           native-in buy, the coin delivered to W, reverted below the minimum.
 // R is the user's own wallet (derived from W's key); nothing here is motion's money. This module is pure: the checks the
 // vault runs on what R is asked to sign and on what the simulation shows (src/solEngine.ts solDirectBuild calls them), and
@@ -144,7 +144,7 @@ export function directQuoteCheck(j: { inputMint?: unknown; outputMint?: unknown;
   if (!(min > 0n) || min > out || min * 10000n < out * BigInt(10000 - want.bps) - 10000n) throw new Error('Jupiter\'s minimum does not match your slippage — refused');
   return { out, min };
 }
-// ── EVM: UsdBuyRouter.buy (contract: B:\tmp\float-direct\contracts\UsdBuyRouter.sol — NOT deployed) ──
+// ── EVM: UsdBuyRouter.buy (contract: local float-direct/contracts/UsdBuyRouter.sol — NOT deployed) ──
 // One call R signs: the router pulls `stableIn` from msg.sender (R) only, swaps it to native on the float's own stable/native
 // pool (SwapRouter02 exactInputSingle, ≥ minNative), calls ONE allow-listed venue with that native and the venue's own
 // native-in buy calldata (recipient = W where the venue takes one), forwards whatever coin landed on the router to W, refunds
@@ -159,7 +159,7 @@ export function usdBuyCalldata(b: UsdBuy): `0x${string}` {
   if (b.stableIn <= 0n || b.minNative <= 0n || b.minTokens <= 0n) throw new Error('A USD buy needs an amount and two floors');
   return encodeFunctionData({ abi: USD_BUY_ABI, functionName: 'buy', args: [b] });
 }
-// The after-trade refill of the ready float (owner 2026-10-29, «да добавляй тоже делай») lives with the sizing rules:
+// The after-trade refill of the ready float (owner 2026-10-29, “approved, add it too”) lives with the sizing rules:
 // src/floatCore.ts REFILL, readySize6, burstOf, sweepAllowed; src/floatEngine.ts afterTrade / noteBuy.
 
 // ── the frame call: float.buy (the app's `floatBuy`) ──

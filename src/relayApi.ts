@@ -1,4 +1,4 @@
-// Relay's quote for the vault, with or without Relay's API key in reach (2026-10-29; owner: «ну да делай»).
+// Relay's quote for the vault, with or without Relay's API key in reach (2026-10-29; owner: “approved”).
 //
 // Up to now every Relay quote the vault signs is one it fetched from api.relay.link ITSELF, keyless (V13 VA-3). Relay's
 // docs say every quote/v2 request needs an API key "starting October 2, 2026"; keyless quotes still answered on
@@ -12,7 +12,7 @@
 // A 'motion' quote is treated as coming from a party that may lie, and is held to checks that do not depend on it:
 // the deposit goes only to Relay's pinned depository (EVM) / pinned programs (Solana), exact amounts, this wallet as the
 // depositor, the chains and coins asked for, and what it pays must stand against Relay's own keyless price (or Relay's
-// keyless token prices). See B:\tmp\relay-swap\VAULT-PROPOSAL.md (threat model) for what that does and does not cover.
+// keyless token prices). See local relay-swap/VAULT-PROPOSAL.md (threat model) for what that does and does not cover.
 import { BRIDGE_APP_FEE } from './v13Guards.ts';
 
 export const RELAY_API = 'https://api.relay.link';
@@ -51,7 +51,7 @@ export const relayBody = (b: Omit<RelayBody, 'tradeType' | 'appFees'>): RelayBod
 // (a Cloudflare / WAF page with no Relay error) is NOT a key refusal (audit 2026-11-01 vault-security-relay-recipient).
 export const keyRefused = (status: number, j: any) => status === 401 || /UNAUTHORIZED|API[_ ]?KEY|x-api-key/i.test(`${j?.errorCode || ''} ${j?.message || ''}`);
 
-// (audit 2026-11-01, vault-security-relay-recipient; owner's rule «мы не можем проебать бабки юзеров никак строго») A Relay
+// (audit 2026-11-01, vault-security-relay-recipient; owner's rule “we can never lose users' money, strictly”) A Relay
 // deposit pays out to the recipient in Relay's record for the request id; the calldata carries only the depositor and the
 // id. Relay has no keyless read of that record before the deposit (requests/v2?id= is empty until a deposit, intents/status
 // says only 'waiting', requests/v3 wants the key — checked 2026-11-01). So for a quote that came through motion's keyed
@@ -75,7 +75,7 @@ export async function relayQuote(body: RelayBody, f: Fetch = fetch, opts: { viaM
   return { j: pj, source: 'motion' };
 }
 
-// ── reads the USD balance makes (2026-10-29, owner: «USD-баланс: перевести его запросы к Relay на схему с ключом … делай тоже») ──
+// ── reads the USD balance makes (2026-10-29, owner: “USD balance: move its Relay requests to the keyed scheme … do that too”) ──
 // A request's status: intents/status/v3 takes the key as OPTIONAL (Relay's docs: "Optional API key for authentication and
 // higher rate limits"), so it stays keyless and direct — what says a move landed never comes through motion. v2 is the
 // fallback while it answers.

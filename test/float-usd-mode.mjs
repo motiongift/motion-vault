@@ -1,4 +1,4 @@
-// The USD balance never surprises (2026-11-05, B:/tmp/usd-mode-1105: a tester deposited USDG on Robinhood, never bought on BNB, and
+// The USD balance never surprises (2026-11-05, local usd-mode-1105: a tester deposited USDG on Robinhood, never bought on BNB, and
 // saw 100 USDG go to BNB as USDC; then a $500 buy paid from his reserve was followed by a $100.77 USDG -> ETH swap into his wallet).
 //   1. a routine cross-chain rebalance goes INTO a chain only when the user bought there in the last 7 days (crossNeedsTrade);
 //   2. a buy paid straight from the reserve (noteBuy) does not refill W's float when it confirms (afterTrade).

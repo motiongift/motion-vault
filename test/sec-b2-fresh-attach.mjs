@@ -1,4 +1,4 @@
-// Owner in chat 2026-11-04 (relayed by the coordinator): «да делай» to "drop the typed code for a FRESH account's first attach and
+// Owner in chat 2026-11-04 (relayed by the coordinator): “approved” to "drop the typed code for a FRESH account's first attach and
 // fix the copy; keep the code for restores". "Set up this device" (mainAttach) is a one-click dialog when the page hands in no
 // expectFp, the vault holds no seed of any kind and no local wallet besides login / hop rows; every restore keeps SEC-5b's typed
 // frame-drawn number. Runs the REAL engine.mainAttach and askChoice cut out of src/webEngine.ts in a Chromium vault frame whose
@@ -108,5 +108,5 @@ test('fresh account: "Not now" still cancels the first attach (the dialog is kep
 test('wiring: mainAttach computes fresh from expectFp, every seed slot and the local (non-login, non-hop) wallets', () => {
   assert.match(SRC, /const fresh = !src\?\.expectFp && !Object\.keys\(seeds\)\.length && !allAccounts\(\)\.some\(\(a\) => !a\.ext && !a\.hop\);/);
   assert.match(SRC, /ask\(\{ title: 'Set up this device', ok: 'Continue', cancelLabel: 'Not now', keep: true, funds: !fresh, /);
-  assert.match(SRC, /«да делай»/);
+  assert.match(SRC, /Owner in chat 2026-11-04: “approved”/);
 });

@@ -727,7 +727,7 @@ export function createFloat(deps: FloatDeps) {
     const recipient = toNative ? (tc.kind === 'evm' ? w.w.evm : w.w.sol) : (tc.kind === 'evm' ? w.r.evm : w.r.sol);
     const outDecimals = toNative ? tc.nativeDecimals : tc.stable.decimals;
     if (b === 'relay') {
-      // (2026-10-29, owner «USD-баланс: перевести его запросы к Relay на схему с ключом … делай тоже») keyless from Relay first,
+      // (2026-10-29, owner “USD balance: move its Relay requests to the keyed scheme … do that too”) keyless from Relay first,
       // as before; motion's keyed pass-through only when Relay refuses for want of a key (relayApi.relayQuote). A quote that
       // came through motion must also pass what does not trust motion: the exact claims, Relay's pinned depository with an
       // exact approve, and Relay's own keyless price. The checks below (recipient, oracle floor, pinned contracts, the
@@ -1007,7 +1007,7 @@ export function createFloat(deps: FloatDeps) {
 
   /**
    * A waiting click on chain c that the reserves could not cover, paid from the trading wallet's OWN native on another EVM
-   * chain of the permission (src/nativeDonor.ts; 2026-10-30, owner «если считаешь что поможет и ускорит то делай»). Every
+   * chain of the permission (src/nativeDonor.ts; 2026-10-30, owner “approved if it helps and makes it faster”). Every
    * donor chain at once: W's native there, that chain's oracle and gas price (deps.nativeDonor.read) beside Relay's
    * EXACT_OUTPUT quote for exactly what c still lacks. A donor is one whose spare (above its gas floor and the deposit's gas —
    * since 2026-11-01 a click may take the chain's kept trading float too, see nativeDonorSpare) pays the quote and whose quote
@@ -1535,7 +1535,7 @@ export function createFloat(deps: FloatDeps) {
         const ok = deps.now() - sn.at < READY.snapMs && !into.some(isOpen) && into.every((j) => sn.at > j.updatedAt);
         return { traded: true, ...(ok ? { readyOk: true } : {}) };
       };
-      // PROPOSAL TC-1 (2026-11-04, B:/tmp/usd-scenarios): what the wallet's own native on the other EVM chains could bring this click
+      // PROPOSAL TC-1 (2026-11-04, local usd-scenarios): what the wallet's own native on the other EVM chains could bring this click
       // through Relay — read LIVE (the same reads nativeDonorRun makes, side by side, 2.5 s at most) and only for a click the
       // reserves alone cannot pay (below); nativeDonorRun's own spare / cap rules, at most its per-buy cap. A click those and the
       // reserves pay TOGETHER is then not called infeasible
@@ -1557,7 +1557,7 @@ export function createFloat(deps: FloatDeps) {
         const e6 = one6 > two6 ? one6 : two6;
         return e6 > NATIVE_DONOR.max6 ? NATIVE_DONOR.max6 : e6;
       };
-      // TC-1 is never applied while a move into this chain is still on its way or settling (review F1, B:/tmp/usd-buy-timeout): an
+      // TC-1 is never applied while a move into this chain is still on its way or settling (review F1, local usd-buy-timeout): an
       // open top-up / cross-chain move into it, or one that ARRIVED under BRIDGE_SETTLE_MS ago whose payout no read here shows yet —
       // those dollars are in no read this plan is made from, so a click they pay would be called unpayable and refused. The plan of
       // before then runs (held behind that move: 'moving' + retryMs), and click.short stays silent while a move is held
@@ -1689,7 +1689,7 @@ export function createFloat(deps: FloatDeps) {
         saveJobs(w, c, jobs);
         ran.push(job);
       };
-      // PROPOSAL TC-6 (2026-11-04, B:/tmp/usd-scenarios): a waiting click's moves that are signed on DIFFERENT chains run side by side
+      // PROPOSAL TC-6 (2026-11-04, local usd-scenarios): a waiting click's moves that are signed on DIFFERENT chains run side by side
       // — this chain's own swap (R here) beside the cross-chain parts from each other reserve (R there, its own nonce): before, one
       // after another, so a click paid from two places waited for the first move's quote, signature and fill before the second
       // even started (~1.2–1.5 s each). Moves signed on the SAME chain (W's gas to R, then R's swap; a reserve's parts) stay in
@@ -1763,7 +1763,7 @@ export function createFloat(deps: FloatDeps) {
         // R's liquid part moved: this chain's snapshot is read again (the total never counts a dollar twice)
         if (earnStep && (earnStep.step === 'deposit' || earnStep.step === 'withdraw')) s = await readChain(w, c).catch(() => s);
       }
-      // (E1, 2026-11-04, the owner's $540 Robinhood buy, B:/tmp/usd-buy-final) what W can pay here once every move of this click
+      // (E1, 2026-11-04, the owner's $540 Robinhood buy, local usd-buy-final) what W can pay here once every move of this click
       // lands, when the moves that DID go leave it short — TC-1 above refuses a click that could never be paid before anything
       // moves; this is what is left: a part refused on the way, a donor that brought less than the plan counted, a plan made while
       // TC-1 was off. Before, no answer carried it and the page waited its 15 s for a figure W could never reach, then "didn't
@@ -1941,7 +1941,7 @@ export function createFloat(deps: FloatDeps) {
     const a = String(address || ''); return list.find((x) => lc(x.w.evm) === lc(a) || (!!x.w.sol && x.w.sol === a)) || null;
   };
   const refilling = new Map<string, { again: boolean }>();
-  // (usd-mode 2026-11-05, B:/tmp/usd-mode-1105) a buy paid straight from the reserve (noteBuy, called by webEngine only for those)
+  // (usd-mode 2026-11-05, local usd-mode-1105) a buy paid straight from the reserve (noteBuy, called by webEngine only for those)
   // spends R's dollars, not W's float: its confirmation does not refill W. Before, each such buy raised the ready size to the buy
   // and the refill swapped R's USDG into ETH for W (a tester: $100.77 → 0.0416 ETH 4 s after a $500 buy that never touched W).
   // One mark per reserve buy sent, per wallet × chain, consumed by that wallet's next confirmed trade there; a mark older than
@@ -1989,7 +1989,7 @@ export function createFloat(deps: FloatDeps) {
   // (2026-11-04) a buy on Elysium paid from the USD balance (src/elysiumUsdEngine.ts, the Elysium frame): this wallet's LIVE
   // permission and its chains (the reserves that may pay), or null; a switch-off still converting counts as off. Vault frame only
   // (webEngine), never in engine.float: the page cannot call it
-  // (release 9, owner 2026-11-05: «убрать лимиты, тогда текст останется верным») the chains only: no caps on the Elysium funding path
+  // (release 9, owner 2026-11-05: “remove the limits, then the text stays true”) the chains only: no caps on the Elysium funding path
   function liveFor(walletId: string): { chains: FloatChain[] } | null {
     const w = walletOf(walletId);
     if (!permissionLive(perms(w), deps.now()) && !anyOffOrder(w)) join(w);

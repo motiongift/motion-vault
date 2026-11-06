@@ -3,16 +3,18 @@
 // R, the guards, the ONE transaction R sends, W holding the coin. Also proves the vault's pinned code hash is the code a
 // deployment of the audited artifact leaves on each chain. Throwaway R / W keys; nothing reaches either chain.
 //   FORK_BSC=http://127.0.0.1:8548 FORK_RH=http://127.0.0.1:8547 node --experimental-strip-types --test test/usd-buy-evm-curve-fork.mjs
-// Needs the contract artifacts (B:\tmp\float-direct\contracts: node build.mjs); skipped without them or the forks.
+// Needs the contract artifacts (FLOAT_DIRECT_DIR = a local float-direct checkout; contracts: node build.mjs); skipped without them or the forks.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { createPublicClient, createWalletClient, http, defineChain, parseAbi, keccak256 } from 'viem';
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { evmDirectPlan, probeCall, decodeProbe, evmDirectGuard, routerOut, minOutOf, PROBE_RUNTIME, CURVE_ROUTER } from '../src/usdBuyEvm.ts';
 import * as F from '../src/floatCore.ts';
 
-const ART = 'B:/tmp/float-direct/contracts/artifacts/UsdBuyRouter.json', CFG = 'file:///B:/tmp/float-direct/contracts/deploy/venues.mjs';
+const FD = process.env.FLOAT_DIRECT_DIR || '../float-direct'; // a local checkout of the float-direct contracts
+const ART = FD + '/contracts/artifacts/UsdBuyRouter.json', CFG = pathToFileURL(FD + '/contracts/deploy/venues.mjs').href;
 const DEPLOYER = '0xf0e0Aa5adB4D501D8d2E9a8f2F6De8744B2c5c2e';
 const ERC20 = parseAbi(['function balanceOf(address) view returns (uint256)', 'function transfer(address,uint256) returns (bool)', 'function approve(address,uint256) returns (bool)']);
 const WHALES = { bsc: '0xF977814e90dA44bFA03b6295A0616a897441aceC', robinhood: F.FLOAT_CFG.robinhood.oracle.pool };

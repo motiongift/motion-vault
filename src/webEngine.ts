@@ -80,10 +80,10 @@ import { P as SOL_P, b58e as solB58e } from './solEngine';
 import { solDirectBuy, SolDirectNoGas } from './solEngine';
 // …under a pre-send deadline that lets go of the trade guard when the build stalls before anything is sent (owner 2026-11-01)
 import { preSendDeadline, PRE_SEND_MS, LATE_TEXT } from './preSendDeadline';
-// turbo's gas limit fits the route, picked synchronously from the route shape (owner 2026-11-01: «я даю добро на все»)
+// turbo's gas limit fits the route, picked synchronously from the route shape (owner 2026-11-01: “full go-ahead”)
 import { turboGas } from './turboGas';
 import { usdBuyArgs } from './floatDirect';
-// …and on Robinhood / BNB (owner 2026-10-29 «давай делай и все что там осталось выкатывай тоже тогда»; src/usdBuyEvm.ts)
+// …and on Robinhood / BNB (owner 2026-10-29 “approved, and ship everything that is left too”; src/usdBuyEvm.ts)
 import { evmDirectPlan, probeCall, decodeProbe, evmDirectGuard, evmPriceCheck, routerOut, minOutOf, PROBE_RUNTIME, DirectUnsupported, USD_BUY_ROUTER_ABI, CURVE_BUY_MAX_USD, type EvmChain, type EvmRoute, type EvmPlan } from './usdBuyEvm';
 import { erc20TransferData as bridgeTransferData } from './motionBridgeCore';
 import { solBridgeTransferIxs, solBridgeNativeIxs } from './bridgeSolver';
@@ -336,7 +336,7 @@ let lastBroadcastNode = '';   // the node that accepted the last signed transact
 // 'public-refused' (every private road refused it), 'private+public-slow' (a private road won after the hedge fired)
 let lastBroadcastPath = '';
 // ── MEV v2 (mev-v2 2026-11-04): BNB private-first, the SAME signed bytes to the public node as the fallback ──
-// Measured 2026-11-04 from a browser origin (B:\tmp\mev-v2\report.txt): 48 Club (rpc-bsc / rpc), BlockRazor (default and
+// Measured 2026-11-04 from a browser origin (local mev-v2/report.txt): 48 Club (rpc-bsc / rpc), BlockRazor (default and
 // /fullprivacy), bloXroute, PancakeSwap MEV Guard and publicnode all refuse a legacy tx below 0.05 gwei ("minimum needed
 // 50000000") and take it from 0.05 gwei (a 0-BNB throwaway key: the price check answers before the funds check). The
 // 1 gwei (48 Club) / 0.1 gwei (BlockRazor) their eth_gasPrice says is a suggestion, not the floor. In 1,332 live blocks
@@ -5484,7 +5484,7 @@ async function bridgeReserveOn(chainKey: string, token: `0x${string}`, owner: `0
   return { stable, native };
 }
 // ── the trading wallet's OWN native on another EVM chain, for a waiting click its reserves cannot cover (src/nativeDonor.ts,
-// floatEngine nativeDonorRun; 2026-10-30, owner «если считаешь что поможет и ускорит то делай») ──
+// floatEngine nativeDonorRun; 2026-10-30, owner “approved if it helps and makes it faster”) ──
 // The read: W's native there, that chain's on-chain oracle (the same pool its own frame prices the USD balance with) and the
 // legacy price W would sign at — on that chain's own nodes, side by side, after a running trade (as bridgeReserveOn)
 async function nativeDonorRead(chainKey: string, owner: `0x${string}`): Promise<{ native: bigint; price6: bigint; gasPrice: bigint }> {
@@ -5807,8 +5807,8 @@ const float = createFloat({
     sol: { sheet: floatSheetSol, oracle6: () => floatNowQuiet(() => solFloatPrice6(SOL_ORACLE_POOL, FLOAT_CFG.sol.stable.address)) },
   },
 });
-// ── one USD balance: the buy straight from the reserve (owner 2026-10-29 «давай делай это все»; NOT released — it waits for
-// the owner's yes, B:\tmp\float-direct\APPROVAL-REQUEST.md) ──
+// ── one USD balance: the buy straight from the reserve (owner 2026-10-29 “approved, do all of it”; NOT released — it waits for
+// the owner's yes, local float-direct/APPROVAL-REQUEST.md) ──
 // A click in USD mode whose trading wallet W cannot cover the buy no longer waits for a top-up: W's own reserve R signs ONE
 // transaction that spends its USDC and pays the coin into W (solEngine solDirectBuy, every check of a Jupiter buy from R's
 // side). The same per-wallet double-press guard, buy limits (in SOL at the float's price), 'trench:tx' states and follow
@@ -6196,7 +6196,7 @@ const engine = {
     // (buildProfile under its own seed: the entry opens, profile.fp matches) and would attach that main with no click —
     // and mainProfile(main) then seals every key of this vault under that seed. Same for expectFp and the profile: page
     // data. An empty frame has no anchor of its own to tell the account's main from a foreign one; only this click does.
-    // Owner in chat 2026-11-04: «да делай» — no typed code on a FRESH account's first attach (no expectFp from the page, no seed
+    // Owner in chat 2026-11-04: “approved” — no typed code on a FRESH account's first attach (no expectFp from the page, no seed
     // of any kind in this vault, no local wallet other than login / hop rows): the click still decides, but one click. The
     // trade-off SEC-5b took the code for, accepted here: a decoy click through a masked frame (Chromium, IOv2 still says
     // "visible") can attach a page script's own main. On a fresh vault there is nothing for it to take now (no keys, no salt),
@@ -7259,7 +7259,7 @@ const engine = {
     return { ok: true, hash: keccak256(raw), asset, amount: units.toString(), days: ELY_EXIT_DAYS };
   },
   // (2026-11-04) the route choice into Elysium: float (motion's bridge, the fast path within its float) or official (Relay → HyperEVM →
-  // W's own Inbox.depositEth, no float limit). src/elysiumRoute.ts; the page contract is B:\tmp\ely-route\notes.txt.
+  // W's own Inbox.depositEth, no float limit). src/elysiumRoute.ts; the page contract is local ely-route/notes.txt.
   elysiumRoute: (o: { walletId: string; pay: 'native' | 'stable'; amount: number; route?: 'auto' | 'float' | 'official'; phase?: 'quote' }, auth?: Auth) => elysiumRoute(o, auth),
   elysiumRouteStatus: async (jobId: string) => elyRoute.status(String(jobId)),
   elysiumRouteResume: (jobId: string) => elyRoute.resume(String(jobId)),
@@ -7296,7 +7296,7 @@ async function onExtImport(e: MessageEvent, run: (items: { name?: string; privat
   } catch (err) { answer({ ok: false, e: String((err as Error)?.message || err).slice(0, 200) }); }
   return true;
 }
-// ── (2026-11-03) "Add HYPE / USDC on Elysium": motion's bridge pays on Elysium (B:\tmp\elysium-funding\plan.txt option c) ──
+// ── (2026-11-03) "Add HYPE / USDC on Elysium": motion's bridge pays on Elysium (local elysium-funding/plan.txt option c) ──
 // The trading wallet W pays motion's solver on THIS frame's chain (Robinhood / BNB: its native coin or its stablecoin, ONE plain
 // transfer to the solver's published deposit address, signed here and handed over raw), and the solver pays W's SAME address on
 // Elysium with ONE createRetryableTicket (HYPE) or ONE gateway deposit (USDC) on HyperEVM, every refund address = W. The quote is
@@ -7387,7 +7387,7 @@ const ELYSIUM_DOCS = 'https://elysium.kinetiq.xyz/docs/bridging-hyperevm-tokens-
 // (2026-11-04, the independent review's disclosure) beside the 6-day line, in the vault's own dialogs
 const ELYSIUM_RISK = 'Elysium\'s bridge can be upgraded by Kinetiq\'s 4-of-11 multisig without a delay.';
 const ELYSIUM_BACK = 'Moving funds back from Elysium to HyperEVM takes about 6 days (rollup challenge period, per Kinetiq\'s docs).';
-// ── (2026-11-04) the route choice into Elysium + the "official" route (src/elysiumRoute.ts; B:\tmp\ely-route\notes.txt) ──
+// ── (2026-11-04) the route choice into Elysium + the "official" route (src/elysiumRoute.ts; local ely-route/notes.txt) ──
 // float = motion's bridge (elysiumFund above, unchanged: the fast path while the float can fill the amount); official = Relay → W's
 // OWN address on HyperEVM (native HYPE, motion's 0.1 % as Relay's app fee) → W's OWN Inbox.depositEth() → W on Elysium. No float.
 // Robinhood / BNB / Solana frames; nothing here runs on a click (the trade path never reaches it).
@@ -7485,7 +7485,7 @@ async function elysiumRoute(o: { walletId: string; pay: 'native' | 'stable'; amo
   if (pick.route === 'float') return { route: 'float', ...(await engine.elysiumFund(floatArgs, auth)) };
   return elyRoute.go({ walletId: o.walletId, coin, amount, gate: () => gate('transfer', auth) });
 }
-// ── (2026-11-04) a buy on Elysium paid from the USD balance (src/elysiumUsdEngine.ts; B:\tmp\elysium-usd) ──
+// ── (2026-11-04) a buy on Elysium paid from the USD balance (src/elysiumUsdEngine.ts; local elysium-usd) ──
 // The Elysium frame's float.ensure { chain: 'elysium', reason: 'click' | 'notice' | 'jobs', … } lands here (engine.float.ensure
 // routes it); every other chain's ensure is float.ensure exactly as before. What may be signed: ONE stablecoin transfer from the
 // wallet's OWN reserve R (Robinhood / BNB: bridgeSignEvmTransfer, the same signer every cold top-up uses, on that chain's own

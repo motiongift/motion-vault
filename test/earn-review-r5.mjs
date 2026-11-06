@@ -1,4 +1,4 @@
-// r5: the re-review of r4 (B:\tmp\earn-review\review-r4.txt) — the reviewer's X1, X2, X3 (tests\review-r4.mjs) passing THE SAFE WAY,
+// r5: the re-review of r4 (local earn-review/review-r4.txt) — the reviewer's X1, X2, X3 (tests\review-r4.mjs) passing THE SAFE WAY,
 // plus the nonce rule of X2. Mocked chain only.
 import test from 'node:test';
 import assert from 'node:assert/strict';

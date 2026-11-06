@@ -1,4 +1,4 @@
-// usd-mode2 (2026-11-05, B:/tmp/usd-mode-1105 follow-up): where the reserve pays the buys, W keeps no ready-native buffer, and R's gas
+// usd-mode2 (2026-11-05, local usd-mode-1105 follow-up): where the reserve pays the buys, W keeps no ready-native buffer, and R's gas
 // never comes out of W in a routine plan. Replays the tester's two rel-9 transactions:
 //   0x469bddd5…2f75 17:25:37 UTC  R swapped 100.462606 USDG -> 0.044523696 ETH to W  (topup 'below low': W ~$50 under its $90 low band)
 //   0xe2a2d4d7…e4a3 17:16:48 UTC  W sent R 0.000086837634614 ETH                     (gas 'reserve gas': R 0.0000132 -> reserveGas 0.0001)

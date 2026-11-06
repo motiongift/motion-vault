@@ -1,5 +1,4 @@
-// USD balance pass 3, latency (2026-11-01, owner «я даю добро на все … доводи до уровня фомо», hard rule «мы не можем проебать
-// бабки юзеров никак строго»; spec B:\tmp\foreman\fix2-usd.md "Proposals" A1, A3):
+// USD balance pass 3, latency (2026-11-01, owner “full go-ahead … bring it up to fomo's level”, hard rule “we can never lose users' money, strictly”; spec local foreman/fix2-usd.md "Proposals" A1, A3):
 //   A1  ready dollars: on every chain the user bought on in the last 7 days a routine background tick keeps the reserve R at 1.5 x
 //       the ready size, moved in from the richest other EVM reserve through the public bridges (Relay → deBridge, every check
 //       of a rebalance), from $10 instead of $100 on such chains; a click on that chain is then a direct buy from its own reserve

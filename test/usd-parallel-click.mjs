@@ -1,4 +1,4 @@
-// PROPOSAL TC-6 (2026-11-04, B:/tmp/usd-scenarios; NOT applied): a click's moves signed on different chains run side by side.
+// PROPOSAL TC-6 (2026-11-04, local usd-scenarios; NOT applied): a click's moves signed on different chains run side by side.
 // A BNB click paid from the Robinhood reserve AND the Solana reserve: before, the Solana part's quote and fill started only after
 // the Robinhood part had filled; now both go at once (motion allows two fills of a wallet in flight), and the parts of ONE reserve
 // still go one after another. The world is test/usd-fix2.mjs's (copied), with a delay on motion's /fill.

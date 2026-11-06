@@ -1,7 +1,6 @@
 // USD balance — a device that is catching up never bundles a conversion into its consent (2026-11-01). The owner, holding about
 // $800 as USD balance, got "Turn on USD balance · Convert $179 to dollars · Wallet 1 0.0789 ETH → USDG · …" and asked "why does
-// it ask me to convert when I already have $800 USDC?" (owner «я даю добро на все», «мы не можем проебать бабки юзеров никак
-// строго»). The grant is per device; a device whose own grant is not live got the FIRST switch-on dialog, whose one button
+// it ask me to convert when I already have $800 USDC?" (owner “full go-ahead”, “we can never lose users' money, strictly”). The grant is per device; a device whose own grant is not live got the FIRST switch-on dialog, whose one button
 // both granted and converted. Now:
 //   - dollars already in the reserves / a grant here that ran out / the account's newer record this device could not adopt
 //     → a one-tap confirm that converts NOTHING, says why it shows; converting is a second, separately labelled button that

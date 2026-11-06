@@ -1,5 +1,4 @@
-// USD balance fix pass 2 (2026-11-01, owner «я даю добро на все … главное для нас это скорость и стабильность как торговли так и
-// приложения», «мы не можем проебать бабки юзеров никак строго»), B:\tmp\audit2\pass2.json "p2-usd-parity-*":
+// USD balance fix pass 2 (2026-11-01, owner “full go-ahead … what matters most is the speed and stability of both trading and the app”, “we can never lose users' money, strictly”), local audit2/pass2.json "p2-usd-parity-*":
 //   xchain-cap-800      a click whose cross-chain part was over motion's $1,000 per-fill cap went as ONE move, refused whole, every
 //                       time: now parts of at most $990 (XCHAIN), one after another, each only once the one before it FILLED
 //   settle-window-hang  a second cross-chain-funded click within 10 s of the first one's arrival (a double tap) answered "moving"

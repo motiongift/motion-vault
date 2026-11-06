@@ -1,4 +1,4 @@
-// The ready float after a trade (owner 2026-10-29 «да добавляй тоже делай»; src/floatCore.ts REFILL, src/floatEngine.ts
+// The ready float after a trade (owner 2026-10-29 “approved, add it too”; src/floatCore.ts REFILL, src/floatEngine.ts
 // afterTrade): a confirmed trade refills W on the fast path once no trade is being signed; the target follows the buys and
 // holds 4 of them in a burst (buys reported, or this frame's own trade clicks); the sweep waits in a burst. A Solana frame on a
 // mocked chain with a fake clock.

@@ -1,5 +1,5 @@
-// PROPOSAL TC-1 (2026-11-04, B:/tmp/usd-scenarios; NOT applied — the owner's line-by-line yes and an independent review first):
-// a click is planned all or nothing. The owner's $540 MOTION buy on Robinhood (B:/tmp/usd-buy-timeout): Wallet 1 could reach
+// PROPOSAL TC-1 (2026-11-04, local usd-scenarios; NOT applied — the owner's line-by-line yes and an independent review first):
+// a click is planned all or nothing. The owner's $540 MOTION buy on Robinhood (local usd-buy-timeout): Wallet 1 could reach
 // $489.51 there ($250.40 of ETH in W + the BNB reserve's $239.11); the plan still moved the whole BNB reserve, W landed at $489,
 // the page waited its 15 s and said "try again". Now nothing moves for a click that cannot be paid, the answer says so at once
 // (click.state 'failed', code 'short', short.canUsd), and every click that CAN be paid is planned byte for byte as before.

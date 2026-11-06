@@ -1,4 +1,4 @@
-// Release 6 (owner, 2026-11-04: «поключи ансаппортед чтобы тоже можно было ими всеми торговать … делай нормально»; B:\tmp\elysium-hooks):
+// Release 6 (owner, 2026-11-04: “connect the unsupported ones too, so all of them can be traded … do it properly”; local elysium-hooks):
 // the launchpads' routers (pinned by code), the 9 reviewed hooks (pinned by code) with their buy-time rules, ELY_GUARD, and the
 // 6-field SWAP_EXACT_IN_SINGLE of Elysium's Universal Routers. Pure: no network (the guard on a real EVM: D:\tmp\agent-tmp\rel6\hooks\
 // guard-live.mjs; the 25-coin flow on the live routers: hooks\fullflow-rel6.mjs).

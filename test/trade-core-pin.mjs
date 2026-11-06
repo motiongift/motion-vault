@@ -19,7 +19,7 @@ test('every trade-path declaration of webEngine.ts is the approved one', () => {
 });
 
 // the region (route checks → tradeOne → preview → leftovers → limits → tradeGuard → trade / tradeInner → receipts) was hashed
-// but never compared until 2026-11-01 (owner: «я даю добро на все»)
+// but never compared until 2026-11-01 (owner: “full go-ahead”)
 test('every pinned region of webEngine.ts is the approved one', () => {
   for (const [f, regions] of Object.entries(CORE_REGIONS)) for (const [a, b] of regions) {
     const k = `${f}#${a}…${b}`;

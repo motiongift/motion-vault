@@ -1,4 +1,4 @@
-// Cross-chain swaps on Relay + the Relay-key fallback (2026-10-29; owner: «ну да делай»). Pure decisions of src/relayApi.ts
+// Cross-chain swaps on Relay + the Relay-key fallback (2026-10-29; owner: “approved”). Pure decisions of src/relayApi.ts
 // and src/relaySwap.ts against REAL Relay answers (test/fixtures/relay-quote-*.json: keyless quote/v2, 2026-10-29, never
 // executed), every tampering a lying quote source could try, and source pins for the engine wiring. Run:
 //   node --experimental-strip-types --test test/*.mjs
@@ -181,7 +181,7 @@ test('engine: relaySwap has the bridge\'s two phases, gates and dialogs; bridges
   for (const f of ['relayApi.ts', 'relaySwap.ts', 'bridgeEngine.ts']) assert.ok(!/['"]x-api-key['"]\s*:|RELAY_API_KEY|apiKey/.test(readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8')), `${f}: never a key in the vault`);
 });
 
-// ── the USD balance's reads (2026-10-29, owner «USD-баланс: перевести его запросы к Relay на схему с ключом … делай тоже») ──
+// ── the USD balance's reads (2026-10-29, owner “USD balance: move its Relay requests to the keyed scheme … do that too”) ──
 test('status: keyless and direct (v3, the key optional there; v2 the fallback); never through motion; only a real request id', async () => {
   const { relayStatus } = await import('../src/relayApi.ts');
   const seen = [];

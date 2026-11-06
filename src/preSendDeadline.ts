@@ -1,5 +1,5 @@
-// The pre-send deadline of the buy straight from the USD reserve (owner 2026-11-01: «даю добро делай», answering "Ограничение по
-// времени для зависшей прямой покупки из резерва — снятие блокировки внутри хранилища, нужна правка движка").
+// The pre-send deadline of the buy straight from the USD reserve (owner 2026-11-01: “approved”, answering "A time
+// limit for a stuck direct buy from the reserve — releasing the lock inside the vault, needs an engine change").
 //
 // The reserve's direct buy (webEngine usdBuy / usdBuyEvm) holds the per-wallet trade guard (tradeGuard, `buy:<coin>:<wallet>`,
 // across tabs). A build that stalled BEFORE anything was sent (route check, quote, probe / simulation, the gas drop) kept that

@@ -571,7 +571,7 @@ test('another device started a move to that chain in the last 2 minutes: deferre
   assert.ok(!(await wd.f.jobs({ walletId: 'w1' })).jobs.some((x) => x.kind === 'rebalance'));
 });
 
-// ── Relay wants a key (2026-10-29, owner «USD-баланс: перевести его запросы к Relay на схему с ключом … делай тоже») ──
+// ── Relay wants a key (2026-10-29, owner “USD balance: move its Relay requests to the keyed scheme … do that too”) ──
 // (audit 2026-11-01, vault-security-relay-recipient) Relay pays out to the recipient in ITS record for the request id, which
 // the vault cannot read before the deposit; a quote relayed by motion's server names the recipient only in the server's
 // own JSON. So a keyed Relay is never signed through motion: the move goes to the next bridge, the pass-through is never

@@ -570,7 +570,7 @@ test('(rel-8) the plan: own first, then other wallets (gas, network order, large
   assert.equal(planElyDeposit({ usd6: 10n * C.USD6, from: null, reserves: [o('w2', 'robinhood', 900)], chains: ['robinhood'], health: h }).kind, 'refused', 'a deposit never takes another wallet\'s reserve');
 });
 
-// ── (release 9, owner in chat 2026-11-05: «убрать лимиты, тогда текст останется верным») no permission caps on the Elysium funding
+// ── (release 9, owner in chat 2026-11-05: “remove the limits, then the text stays true”) no permission caps on the Elysium funding
 // path: the consent says "no daily or volume limits" and the code matches it. Release 8's caps tests became these "no cap" tests ──
 test('(rel-9 no caps) the rule and its day ledger are gone from the core; the source enforces no perDay / feesPerDay / perChain / total', () => {
   for (const k of ['elyCapsProblem', 'elyDayAdd', 'elyDayFrom', 'elyDayOf', 'ELY_DAY_KEY']) assert.equal(EC[k], undefined, k);

@@ -2,7 +2,7 @@
 // fork-only balances; nothing reaches either chain). Per market: the vault's plan (src/usdBuyEvm.ts) → the probe's eth_call
 // with its code at R (state override) → the guards → the floor from the quote → the ONE transaction R sends → W holds the coin.
 // Routes are the indexer's answers for these coins on 2026-10-29.
-//   cd B:/tmp/limit-fork && npx hardhat node --port 8547 &  npx hardhat node --config hardhat.bsc.cjs --port 8548 &
+//   cd local limit-fork && npx hardhat node --port 8547 &  npx hardhat node --config hardhat.bsc.cjs --port 8548 &
 //   FORK_RH=http://127.0.0.1:8547 FORK_BSC=http://127.0.0.1:8548 node --experimental-strip-types --test test/usd-buy-evm-fork.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,7 +1,7 @@
 // The buy straight from the reserve on Robinhood Chain's REAL contracts (a local hardhat fork, throwaway keys, fork-only
 // balances; nothing is sent to the chain): R signs ONE call to the float's own SwapRouter02 — stable → WETH → coin, or stable →
 // coin — and the coin lands in W. Coins from motion's board on 2026-10-29: CASHCAT (WETH, Uniswap V3 0.3 %), SPCX (USDG 0.05 %).
-//   cd B:/tmp/limit-fork && npx hardhat node --port 8547                         (background)
+//   cd <limit-fork> && npx hardhat node --port 8547                         (background)
 //   FORK_RPC=http://127.0.0.1:8547 node --experimental-strip-types --test test/float-direct-fork.mjs
 // Skipped without FORK_RPC.
 import test from 'node:test';

@@ -1,6 +1,6 @@
 // Earn on the USD balance — BNB Chain: USDC in Aave v3 (pure rules; the engine side is src/earnEngine.ts, adapter 'aave3').
 // Every address and fact below was read on chain on 2026-11-03 (bsc-rpc.publicnode.com, eth_call / getCode / getStorageAt only;
-// B:\tmp\earn-mvp\logs\bnb-aave-readonly-probe.log). Aave v3 is the lower-risk choice on BNB (Venus Core: a documented
+// local earn-mvp/logs/bnb-aave-readonly-probe.log). Aave v3 is the lower-risk choice on BNB (Venus Core: a documented
 // alternative only, notes.txt). R signs exactly three kinds of call here: approve(Pool, exact) on USDC; Pool.supply(USDC, amount,
 // onBehalfOf = R, referral 0); Pool.withdraw(USDC, amount, to = R). The aToken (aBnbUSDC) is R's receipt; it accrues by itself.
 import { decodeFunctionData, encodeFunctionData, keccak256, toHex, type Hex } from 'viem';

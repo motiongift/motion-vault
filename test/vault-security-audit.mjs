@@ -1,5 +1,5 @@
-// Audit fix pass 2026-11-01, area vault-security (owner: «я даю добро на все … главное для нас это скорость и стабильность»,
-// «мы не можем проебать бабки юзеров никак строго»). One test per finding, run against the shipped code: the pure modules are
+// Audit fix pass 2026-11-01, area vault-security (owner: “full go-ahead … what matters most is speed and stability”,
+// “we can never lose users' money, strictly”). One test per finding, run against the shipped code: the pure modules are
 // imported, and the webEngine.ts pieces (which need browser globals) are cut out of the source byte for byte
 // (scripts/trade-core.mjs declChunk, or the `name: async` method body), transpiled, and run against stubs.
 //   vault-security-relay-recipient   — a quote motion's server relays is never signed (its recipient is unverifiable)
@@ -111,8 +111,8 @@ test('backup-coverage: mainSync and mainProfile narrow on the server copy they a
   assert.ok(sync.includes('if (!mismatch) narrowCoverage(m, p);') && sync.indexOf('narrowCoverage(m, p)') < sync.indexOf('await persist();'));
   assert.ok(prof.includes('if (narrowCoverage(m, remote)) { await persist(); pushBackupState(); }') && prof.indexOf('narrowCoverage(m, remote)') < prof.indexOf('buildProfile('));
   assert.match(prof, /pendingPublish\.set\(r\.digest, \{ main: m, addrs: r\.covered, count,/);
-  const vc = 'C:/Users/anton/OneDrive/Рабочий стол/Outline/program/trench/server/web/vault-client.js';
-  const na = 'B:/rework/motion-ios/src/security/nativeVault/account.ts';
+  const vc = (process.env.TRENCH_DIR || '../trench') + '/server/web/vault-client.js'; // the page copy, when a trench checkout is next to this one
+  const na = (process.env.MOTION_IOS_DIR || '../motion-ios') + '/src/security/nativeVault/account.ts';
   for (const [f, call] of [[vc, "call('backupDropped', lastMain ? { address: lastMain } : {}).catch(() => {});"], [na, "callV('backupDropped', lastMain ? { address: lastMain } : {}).catch(() => {});"]]) {
     let s = ''; try { s = readFileSync(f, 'utf8'); } catch { continue; }
     const nm = s.indexOf('const noteMode'); const file = s.indexOf("if (next === 'file') {", nm); const back = s.indexOf('} else if (fileOnly) {', file);

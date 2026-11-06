@@ -1,5 +1,5 @@
-// r2: one test per finding of the independent review (B:\tmp\earn-review\review.txt), and the reviewer's own reproductions R1, R2,
-// R3, R5, R6 (B:\tmp\earn-review\tests\review-earn.mjs) — each now passing THE SAFE WAY (the reviewer's assertions inverted where
+// r2: one test per finding of the independent review (local earn-review/review.txt), and the reviewer's own reproductions R1, R2,
+// R3, R5, R6 (local earn-review/tests/review-earn.mjs) — each now passing THE SAFE WAY (the reviewer's assertions inverted where
 // they asserted the bug). Mocked chains only (test/fixtures/earn-world*.mjs): throwaway keys, nothing leaves the process.
 import test from 'node:test';
 import assert from 'node:assert/strict';

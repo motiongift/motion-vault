@@ -1,5 +1,5 @@
 {
- "note": "pumphop fixture: real mainnet accounts read 2026-11-01T09:44:55.853Z (read-only) + historical multi_hop_swap layouts and events (B:/tmp/pumphop/capture.mjs)",
+ "note": "pumphop fixture: real mainnet accounts read 2026-11-01T09:44:55.853Z (read-only) + historical multi_hop_swap layouts and events (local pumphop/capture.mjs)",
  "coins": {
   "PEE": {
    "mint": "EyrmrJgAiqfniXdqB1L59Bw4GEJWUsjtTYSxhWUGpump",

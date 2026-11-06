@@ -1,5 +1,5 @@
-// r3: the re-review of r2 (B:\tmp\earn-review\review-r2.txt) — one test per item, and the reviewer's reproductions G1, G2, G3
-// (B:\tmp\earn-review\tests\review-r2.mjs) passing THE SAFE WAY (its assertions inverted). Mocked chains only.
+// r3: the re-review of r2 (local earn-review/review-r2.txt) — one test per item, and the reviewer's reproductions G1, G2, G3
+// (local earn-review/tests/review-r2.mjs) passing THE SAFE WAY (its assertions inverted). Mocked chains only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -174,8 +174,10 @@ test('L-e: a passive device never withdraws for a click (it would make the activ
   assert.match(src('floatEngine.ts'), /!er\.verifying && !er\.foreign/);
 });
 
-test('L-c (app copy) and the monitor\'s Permit: source checks', () => {
-  const app = readFileSync('B:/tmp/earn-mvp/app/src/i18n/copy/earn.ts', 'utf8');
+// EARN_MVP_DIR = a local checkout of the earn-mvp app + server copies (skipped without it)
+const EARN_MVP = process.env.EARN_MVP_DIR || '';
+test('L-c (app copy) and the monitor\'s Permit: source checks', { skip: !EARN_MVP }, () => {
+  const app = readFileSync(EARN_MVP + '/app/src/i18n/copy/earn.ts', 'utf8');
   assert.match(app, /withdrawNow: \['Withdraw and turn off Earn on \{chain\}'/);
-  assert.match(readFileSync('B:/tmp/earn-mvp/trench/server/earn-monitor.mjs', 'utf8'), /'0x40336af4b170f3dad5ddfb59897a8289adc3bed01417ca7e2bd77f85bc526413'\]\);/);
+  assert.match(readFileSync(EARN_MVP + '/trench/server/earn-monitor.mjs', 'utf8'), /'0x40336af4b170f3dad5ddfb59897a8289adc3bed01417ca7e2bd77f85bc526413'\]\);/);
 });

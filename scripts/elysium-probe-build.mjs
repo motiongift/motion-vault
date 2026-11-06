@@ -1,7 +1,7 @@
 // Builds contracts/ElysiumProbe.sol and contracts/ElysiumGuard.sol (release 6) with solc 0.8.26 (soljson, the npm `solc` package)
 // and prints the runtime bytecode that src/elysiumCore.ts carries as ELYSIUM_PROBE_RUNTIME / ELY_GUARD_CODE. Reproducible: same
 // compiler, same settings, same bytes (no metadata hash).
-//   SOLC_DIR=B:/tmp/limit-fork/node_modules/solc node scripts/elysium-probe-build.mjs [--check]
+//   SOLC_DIR=<path to node_modules/solc> node scripts/elysium-probe-build.mjs [--check]
 // --check: exit 1 unless both builds equal the constants in src/elysiumCore.ts.
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

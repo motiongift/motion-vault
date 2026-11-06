@@ -1,5 +1,5 @@
 // The trading wallet's OWN native on another chain as a waiting click's donor (2026-10-30; a user: "I have eth on rh and can't
-// do anything on solana still"; owner: «если считаешь что поможет и ускорит то делай»). Pure: no network, no clock, no key.
+// do anything on solana still"; owner: “approved if it helps and makes it faster”). Pure: no network, no clock, no key.
 //
 // Before: a click on chain X whose W had no native asked the reserves only (planMoves). A user whose money sat as ETH in the
 // Robinhood trading wallet (or BNB in the BNB one) had no reserve anywhere until a background conversion ran (only while
@@ -89,7 +89,7 @@ export function nativeDonorMaxIn(o: { from: FloatChain; out6: bigint; price6: bi
 
 /**
  * What W may give on its chain: its native above the gas floor, the kept trading float (`keep6` at `price6`) and the gas of the
- * deposit itself. A waiting click passes keep6 = 0 (2026-11-01, owner «доводи до уровня фомо … я даю добро на все»: deposit on one
+ * deposit itself. A waiting click passes keep6 = 0 (2026-11-01, owner “bring it up to fomo's level … full go-ahead”: deposit on one
  * chain, trade on any): the chain's ready float is the user's money as well, and a click elsewhere may take all of it above the
  * gas floor; that chain's reserve refills it in the background. The gas floor and the deposit's own gas always stay.
  */
@@ -143,7 +143,7 @@ export function nativeDonorPriceProblem(o: { from: FloatChain; to: FloatChain; a
   const in6 = nativeToUsd6Up(o.amountIn, o.inPrice6, FLOAT_CFG[o.from].nativeDecimals);
   const out6 = nativeToUsd6(o.out, o.outPrice6, FLOAT_CFG[o.to].nativeDecimals);
   if (o.fees6 > nativeDonorFeeCap6(in6)) return "Relay's fee is too high for this move";
-  // two independent oracles, one per chain, each held to the slippage bound: measured 2026-10-30 (B:/tmp/native-donor/live-run.txt),
+  // two independent oracles, one per chain, each held to the slippage bound: measured 2026-10-30 (local native-donor/live-run.txt),
   // a $14.50 move lost 76 bps (Robinhood) / 86–90 bps (BNB) between the pools the vault prices with, Relay's $0.05 fee included
   const slip = Math.min(2 * o.maxSlipBps, 200);
   const floor = ((in6 - o.fees6) * BigInt(10_000 - slip)) / 10_000n;

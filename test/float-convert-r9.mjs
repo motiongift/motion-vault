@@ -162,7 +162,7 @@ test('float.convert arguments: one plain object, walletId / chain / usd required
   ]) assert.throws(() => F.floatArgs('convert', o), re, JSON.stringify(o));
 });
 
-test('convertCheck (owner 2026-11-05: «убрать лимиты, тогда текст останется верным»): only the $1 minimum and what the reserve holds — no day / fee / per-conversion limit', () => {
+test('convertCheck (owner 2026-11-05: “remove the limits, then the text stays true”): only the $1 minimum and what the reserve holds — no day / fee / per-conversion limit', () => {
   assert.equal(F.convertCheck({ usd6: D(25), reserve6: D(500) }), null);
   assert.equal(F.convertCheck({ usd6: D(500), reserve6: D(500) }), null, 'the whole reserve may go');
   assert.equal(F.convertCheck({ usd6: D(5_000), reserve6: D(9_000) }), null, 'no per-conversion cap');
