@@ -1304,6 +1304,8 @@ export function createEarn(deps: EarnDeps) {
       earned: life != null && sn ? Number(life) / 1e6 : null, earned30: e30 != null && sn ? Number(e30) / 1e6 : null,
       ...(apy ? { apyBps: apy.bps, apyBasis: apy.basis } : {}),
       at: sn?.at ?? 0, ...(s.open && !s.open.booked ? { landing: true } : {}), ...(s.open?.booked ? { verifying: true } : {}),
+      // (rel-12) the last deposit / withdrawal here (the USD balance's planner holds cross-chain moves around it)
+      ...(Math.max(s.lastDepositAt || 0, s.lastWithdrawAt || 0) > 0 ? { stepAt: Math.max(s.lastDepositAt || 0, s.lastWithdrawAt || 0) } : {}),
       ...(hw ? { paused: hw, cls: 'hard' as const } : vp ? { paused: vp.why, cls: vp.cls } : {}),
       // M6 / H3: a stop only a new app build lifts; the venue cannot pay anything right now; another device runs Earn (H2); what
       // came out while the USD balance was off

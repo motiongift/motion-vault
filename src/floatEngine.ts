@@ -32,7 +32,7 @@ import { REFILL, readySize6, readyMultTenths, burstOf, sweepAllowed, DIRECT_BUY_
 // a click's cross-chain top-up in parts under motion's per-fill cap, the settle wait's proof, the refusal codes (2026-11-01 pass 2)
 import { partMaxOf, xchainClickMax6, payoutSeen, clickCodeOf, clickUsd6 } from './floatCore.ts';
 // ready dollars on every chain the user trades (A1) and motion's 'paid' at the payout's broadcast (A3), 2026-11-01 pass 3
-import { READY, readyFeeMax6, readyFeesOf } from './floatCore.ts';
+import { READY, readyFeeMax6, readyFeesOf, READY_ROUTES, isReadyRoute, readyCost6, readyHeldPairs, readyRefused, quietRefusal, type ReadyHolds, READY_EARN } from './floatCore.ts';
 // float.convert (release 9): the USD balance into the chain's own coin, kept in the wallet
 import { CONVERT_MIN6, convertCheck, convKept, convertWhy, type ConvertCode, type ConvItem } from './floatCore.ts';
 // float.withdraw (release 9): the reserve's stablecoin out, as the stablecoin
@@ -177,6 +177,8 @@ const SNAP = 'trenches.float.v1.snap.', PERM = 'trenches.float.v1.perm.', JOBS =
 // stable, at most `max` native raw), 'off' = switch-off (R stable → W native, at most `max` stable raw). Written only by
 // configure / off after the trusted click, in the vault origin's own storage (no page can write it).
 const ORDER = 'trenches.float.v1.order.';
+// (rel-12) the ready-dollar routes backing off after a refusal before any send (floatCore READY_HOLD), per wallet
+const READYHOLD = 'trenches.float.v1.readyhold.';
 // a Solana forward of W's USDC (or R's funding of its fee) that was sent and is followed until it lands or cannot any more:
 // { sig, at, failedAt? } per wallet. A second tick (any tab) never sends while one is followed (forwardSol)
 const FWD = 'trenches.float.v1.fwd.';
@@ -276,6 +278,26 @@ export function createFloat(deps: FloatDeps) {
   const loadJobs = (w: FloatWallet, c: FloatChain): FloatJob[] => { try { const j = JSON.parse(deps.store.get(jobsKey(w, c)) || '[]'); return Array.isArray(j) ? j : []; } catch { return []; } };
   const saveJobs = (w: FloatWallet, c: FloatChain, jobs: FloatJob[]) => { const now = deps.now(); deps.store.set(jobsKey(w, c), JSON.stringify(jobs.filter((j) => isOpen(j) || now - j.updatedAt < 14 * 86_400_000).slice(-200))); };
   const allJobs = (w: FloatWallet) => FLOAT_CHAIN_KEYS.flatMap((c) => loadJobs(w, c));
+  // (rel-12) what the user's history shows: every job but a ready move refused before anything was sent (rel-10 kept those)
+  const shownJobs = (w: FloatWallet) => allJobs(w).filter((j) => !quietRefusal(j));
+  const holdKey = (w: FloatWallet) => READYHOLD + w.w.evm.toLowerCase();
+  const holdsOf = (w: FloatWallet): ReadyHolds => { try { const h = JSON.parse(deps.store.get(holdKey(w)) || '{}'); return h && typeof h === 'object' && !Array.isArray(h) ? h : {}; } catch { return {}; } };
+  const holdRefused = (w: FloatWallet, pair: string, why: string) => deps.store.set(holdKey(w), JSON.stringify(readyRefused(holdsOf(w), pair, deps.now(), why)));
+  // (rel-12) Earn on chain k as the planner sees it (floatCore ChainState earn6 / earnKeep6 / earnQuiet), from Earn's cached status
+  // (no read): what a buy here can take out now (the same rule as the status's earnReadyUsd), the buffer it keeps liquid, and
+  // whether a step there is landing or ran in the last 10 minutes. No Earn, or nothing in it: nothing (the plan of before)
+  const earnPlanOf = (w: FloatWallet, k: FloatChain): Pick<ChainState, 'earn6' | 'earnKeep6' | 'earnQuiet'> => {
+    if (!deps.earn) return {};
+    let er: ReturnType<EarnApi['status']> = null;
+    try { er = deps.earn.status(w, k); } catch { return {}; }
+    if (!er) return {};
+    const e6 = er.usd > 0 ? usd6(er.usd) : 0n;
+    const ready6 = e6 > 0n && er.cls !== 'hard' && !er.landing && !er.verifying && !er.foreign ? (usd6(er.redeemable) < e6 ? usd6(er.redeemable) : e6) : 0n;
+    const keep6 = er.buffer > 0 && (e6 > 0n || deps.earn.wants(w)) ? usd6(er.buffer) : 0n;
+    const quiet = !!er.landing || !!er.verifying || (typeof er.stepAt === 'number' && deps.now() - er.stepAt < READY_EARN.quietMs);
+    return { ...(ready6 > 0n ? { earn6: ready6 } : {}), ...(keep6 > 0n ? { earnKeep6: keep6 } : {}), ...(quiet ? { earnQuiet: true } : {}) };
+  };
+  const holdClear = (w: FloatWallet, pair: string) => { const h = holdsOf(w); if (h[pair]) { delete h[pair]; deps.store.set(holdKey(w), JSON.stringify(h)); } };
   const snapKey = (w: FloatWallet, c: FloatChain) => `${SNAP}${c}.${w.w.evm.toLowerCase()}`;
   const readSnap = (w: FloatWallet, c: FloatChain): Snap | null => { try { const s = JSON.parse(deps.store.get(snapKey(w, c)) || 'null'); return s && deps.now() - s.at < 600_000 ? s : null; } catch { return null; } };
   // for display only: the last known snapshot of a chain at any age (its price state says how old) — the account's total never
@@ -576,7 +598,7 @@ export function createFloat(deps: FloatDeps) {
   // the whole wallet as the snapshots of every frame say
   function view(w: FloatWallet) {
     const snaps = Object.fromEntries(FLOAT_CHAIN_KEYS.map((c) => [c, readSnapShown(w, c)])) as Record<FloatChain, Snap | null>;
-    const jobs = allJobs(w); const led = ledgerOf(jobs, deps.now());
+    const jobs = shownJobs(w); const led = ledgerOf(jobs, deps.now());
     // what the ready-dollar moves (READY) cost and moved this week: stated apart (they are inside upkeepWeek too)
     const rf = readyFeesOf(jobs, deps.now());
     let cash6 = 0n, ready6 = 0n, transit6 = 0n, earnSum6 = 0n, earned6 = 0n, earnedKnown = true;
@@ -732,7 +754,7 @@ export function createFloat(deps: FloatDeps) {
       // came through motion must also pass what does not trust motion: the exact claims, Relay's pinned depository with an
       // exact approve, and Relay's own keyless price. The checks below (recipient, oracle floor, pinned contracts, the
       // simulation from R) run for every quote as before.
-      const body = { user: signer, recipient, originChainId: fc.relayChainId, destinationChainId: tc.relayChainId, originCurrency: relayCurrency(from, false), destinationCurrency: relayCurrency(to, toNative), amount: String(amountIn), tradeType: 'EXACT_INPUT' as const, appFees: [], slippageTolerance: String(Math.max(10, Math.floor(job.reason === 'click' ? 100 : 50))) };
+      const body = { user: signer, recipient, originChainId: fc.relayChainId, destinationChainId: tc.relayChainId, originCurrency: relayCurrency(from, false), destinationCurrency: relayCurrency(to, toNative), amount: String(amountIn), tradeType: 'EXACT_INPUT' as const, appFees: [], slippageTolerance: String(Math.max(10, Math.floor(job.reason === 'click' ? 100 : job.ready ? READY_ROUTES.relay.slipBps : 50))) };
       let got: { j: any; source: QuoteSource };
       try { got = await relayQuote(body, deps.fetch); } catch (x) { throw new Error(String((x as Error)?.message || x).slice(0, 90)); }
       const j = got.j;
@@ -742,7 +764,10 @@ export function createFloat(deps: FloatDeps) {
         const p = priceProblem(big(j.details?.currencyOut?.amount), outDecimals, await independentOut(body, fc.stable.decimals, deps.fetch)); if (p) throw new Error('Relay (through motion): ' + p);
       }
       const txs = fc.kind === 'evm' ? j.steps.flatMap((s: any) => (s.kind === 'transaction' ? s.items.map((i: any) => ({ to: String(i.data.to), data: String(i.data.data || '0x'), value: big(i.data.value || '0') })) : [])) : undefined;
-      const fees6 = usd6(Number(j.fees?.relayer?.amountUsd || 0) + Number(j.fees?.gas?.amountUsd || 0) + Number(j.fees?.app?.amountUsd || 0));
+      const stated6 = usd6(Number(j.fees?.relayer?.amountUsd || 0) + Number(j.fees?.app?.amountUsd || 0)), gasUsd6 = usd6(Number(j.fees?.gas?.amountUsd || 0));
+      // (rel-12) a ready move (stable to stable) counts what it takes out of the amount: the stated fees, or the delivery's
+      // shortfall when that is more (Relay's BNB -> Robinhood quotes deliver ~0.16 % under "amount - stated fees"), + R's gas
+      const fees6 = job.ready && !toNative ? readyCost6(stableToUsd6(amountIn, fc.stable.decimals), stableToUsd6(big(j.details?.currencyOut?.amount), outDecimals), stated6) + gasUsd6 : stated6 + gasUsd6;
       return { bridge: b, route, amountIn, out: big(j.details?.currencyOut?.amount), minOut: big(j.details?.currencyOut?.minimumAmount), fees6, etaMs: Math.max(BRIDGE_ETA_MS.relay, Number(j.details?.timeEstimate || 0) * 1000), recipient: String(j.details?.recipient || ''), requestId: String(j.steps[j.steps.length - 1]?.requestId || ''), txs, outDecimals };
     }
     if (b === 'debridge') {
@@ -880,17 +905,19 @@ export function createFloat(deps: FloatDeps) {
       const recent = (j?.requests || []).some((q: any) => deps.now() - Date.parse(q.createdAt || 0) < 120_000 && Number(q.data?.outTxs?.[0]?.chainId || q.data?.destinationChainId || 0) === cfgOf(job.chain).relayChainId);
       if (recent) throw new FloatRefused('deferred: a move to that chain started in the last 2 minutes (another device?)');
     } catch (x) { if (x instanceof FloatRefused) throw x; }
-    // no daily fee cap (owner 2026-10-27) — except a ready-dollar move (READY, 2026-11-01 pass 3): its stated bridge fee at most
-    // $0.10 + 0.5 % of it, so a pre-position never costs more than it is worth (deBridge's fixed fee never passes at these sizes)
-    const feeRoom6 = job.ready ? readyFeeMax6(stableToUsd6(amountIn, fc.stable.decimals)) : UNCAPPED.feesPerDay6;
+    // no daily fee cap (owner 2026-10-27) — except a ready-dollar move (READY, 2026-11-01 pass 3): its cost bounded per route
+    // (rel-12 READY_ROUTES: $0.10 + 0.75 % of it), so a pre-position never costs more than it is worth (deBridge's fixed fee
+    // never passes at these sizes), and each route on its own quote clock (nobody waits for a ready move)
+    const feeRoomOf = (b: BridgeId) => (job.ready ? readyFeeMax6(stableToUsd6(amountIn, fc.stable.decimals), isReadyRoute(b) ? b : 'relay') : UNCAPPED.feesPerDay6);
+    const quoteMsOf = (b: BridgeId) => (job.ready && isReadyRoute(b) ? READY_ROUTES[b].quoteMs : QUOTE_TIMEOUT_MS);
     const order = bridgeOrder(route, bridgeHealth(health(), deps.now()), deps.now(), fc.kind).filter((b) => b !== 'motion');
     const tried: BridgeId[] = reasonsMotion.length ? ['motion' as BridgeId] : []; const reasons: string[] = [...reasonsMotion];
     let q: BridgeQuote | null = null;
     for (const b of order) {
       await stepCheck(job); tried.push(b);
       try {
-        const cand = await withTimeout(quoteBridge(b, route, w, job, amountIn), QUOTE_TIMEOUT_MS);
-        const tc = cfgOf(job.chain);
+        const cand = await withTimeout(quoteBridge(b, route, w, job, amountIn), quoteMsOf(b));
+        const tc = cfgOf(job.chain); const feeRoom6 = feeRoomOf(b);
         let why: string | null;
         if (job.kind === 'cold') {
           // stable → the destination's native: priced with the destination frame's on-chain oracle (fresh only)
@@ -1524,7 +1551,7 @@ export function createFloat(deps: FloatDeps) {
       // chains the user traded in the last 7 days, from the EVM reserves (a public bridge signs from those only), within the day's
       // fee budget. Per chain: traded = a buy there in the last 7 days; readyOk = its snapshot is under READY.snapMs old, newer
       // than every cross-chain move into it that is over (arrived / refunded), and nothing cross-chain into it is open
-      const readyIn = !urgent && !refill ? { feesDay6: readyFeesOf(allJobs(w), deps.now()).day6, from: perm.chains.filter((k) => cfgOf(k).kind === 'evm') } : null;
+      const readyIn = !urgent && !refill ? { feesDay6: readyFeesOf(allJobs(w), deps.now()).day6, from: perm.chains.filter((k) => cfgOf(k).kind === 'evm'), held: readyHeldPairs(holdsOf(w), deps.now()) } : null;
       // (usd-mode 2026-11-05) `traded` on every tick, not only a READY one: a cross-chain rebalance goes only into a chain the user
       // bought on in the last 7 days (floatCore crossNeedsTrade); readyOk stays READY's own
       const tradedOf = (k: FloatChain): { traded?: boolean } => (deps.now() - Math.max(0, ...prefsOf(w, k).buysAt.filter((t) => Number.isFinite(t))) < READY.tradedMs ? { traded: true } : {});
@@ -1570,7 +1597,7 @@ export function createFloat(deps: FloatDeps) {
         // refill tops W up to its target from $1
         for (const k of perm.chains) { const sn = snaps[k]; if (!sn) continue; const burst = burstAt(w, k);
           const kept = keptNative(w, k, sn, perm.caps);
-          chains[k] = { ...stateOf(sn, k, sweepAllowed({ quiet: quietOn(k), burst, lastTradeAt: deps.click().lastTradeAt, now: deps.now() }), allJobs(w).some((j) => isOpen(j) && j.chain === k && (j.kind === 'rebalance' || j.kind === 'cold') && deps.now() - j.at < 120_000)), ...(burst ? { burst } : {}), ...(refill && k === c ? { refill: true } : {}), ...(readyIn ? readyOf(k, sn) : tradedOf(k)), ...(deps.readyFloat !== true && rulesOf(perm) >= DIRECT_BUY_RULES ? { directPays: true } : {}), ...(kept > 0n ? { keep: kept } : {}) }; }
+          chains[k] = { ...stateOf(sn, k, sweepAllowed({ quiet: quietOn(k), burst, lastTradeAt: deps.click().lastTradeAt, now: deps.now() }), allJobs(w).some((j) => isOpen(j) && j.chain === k && (j.kind === 'rebalance' || j.kind === 'cold') && deps.now() - j.at < 120_000)), ...(burst ? { burst } : {}), ...(refill && k === c ? { refill: true } : {}), ...(readyIn ? readyOf(k, sn) : tradedOf(k)), ...(urgent ? {} : earnPlanOf(w, k)), ...(deps.readyFloat !== true && rulesOf(perm) >= DIRECT_BUY_RULES ? { directPays: true } : {}), ...(kept > 0n ? { keep: kept } : {}) }; }
         const led = ledgerOf(allJobs(w), deps.now());
         // the wallet as the vault sees it: every chain's reserve and float (coins at mark are not known here, so the 30 % rule
         // is applied to the USD-mode holdings only — the stricter reading)
@@ -1666,7 +1693,10 @@ export function createFloat(deps: FloatDeps) {
         const job: FloatJob = { id, walletId: w.id, kind: m.kind, chain: m.chain, ...(m.from ? { from: m.from } : {}), usd6: String(m.usd6), fee6: String(m.fee6), state: 'planned', at: deps.now(), updatedAt: deps.now(), ...(urgent && urgent.chain === m.chain ? { click: true } : {}), ...(refill && m.kind === 'topup' && m.chain === c ? { refill: true } : {}), ...(m.ready ? { ready: true } : {}), hashes: [], reason: m.reason, ...baseOf };
         // (TC-6) the job list is taken again AFTER the move: a lane running beside this one may have added its own job meanwhile
         let deferred = false;
-        emit(w, id, m.kind, 'active', { chain: m.chain, usd: Number(m.usd6) / 1e6, ...(m.from ? { from: m.from } : {}) });
+        // (rel-12) a ready move says nothing until a quote fits (runBridge's 'quote' event carries it); refused before any send, it
+        // leaves no job and no event — its route backs off (READY_HOLD) — so the user never sees a "Moved …" that moved nothing
+        const quiet = !!m.ready && !!m.from; let refusedQuietly = false;
+        if (!quiet) emit(w, id, m.kind, 'active', { chain: m.chain, usd: Number(m.usd6) / 1e6, ...(m.from ? { from: m.from } : {}) });
         try {
           // a waiting click's moves (hold & fire) run on the fast path: no 1 request/s bucket (owner 2026-10-27: the top-up of a
           // $5 BNB buy needed ~15 reads through the bucket and missed the 10 s window); a running trade still goes first
@@ -1677,15 +1707,17 @@ export function createFloat(deps: FloatDeps) {
           };
           if (job.click || job.refill) await fastly(step); else await step();
           started = started || id;
+          if (quiet) holdClear(w, `${m.from}>${m.chain}`);
         } catch (x) {
           // a lost answer still names its bytes (followed, never re-sent); a deferred move leaves no job behind
           const out = failOf(job, x);
           if (out === 'deferred') deferred = true;
+          else if (quiet && out === 'failed' && !job.hashes.length) { refusedQuietly = true; holdRefused(w, `${m.from}>${m.chain}`, job.error || 'refused'); }
           else emit(w, id, m.kind, job.state === 'failed' ? 'failed' : 'active', { chain: m.chain, error: job.error });
         }
         job.updatedAt = deps.now();
         const keep = jobs.filter((j) => j.id !== id);
-        jobs.splice(0, jobs.length, ...keep, ...(deferred ? [] : [job]));
+        jobs.splice(0, jobs.length, ...keep, ...(deferred || refusedQuietly ? [] : [job]));
         saveJobs(w, c, jobs);
         ran.push(job);
       };
@@ -2378,7 +2410,7 @@ export function createFloat(deps: FloatDeps) {
       if (caller) emit(caller, null, 'off', 'done', { scope: 'account', chains: chainsOut });
       return { ok: true, scope: 'account', chains: chainsOut, pending, ...(earnOut ? { earn: { left: earnOut.usd, ...(earnOut.why.length ? { why: earnOut.why } : {}) } } : {}) };
     },
-    jobs: async (o: unknown) => { const a = floatArgs('jobs', o); const w = walletOf(String(a.walletId)); return { ok: true, jobs: allJobs(w) }; },
+    jobs: async (o: unknown) => { const a = floatArgs('jobs', o); const w = walletOf(String(a.walletId)); return { ok: true, jobs: shownJobs(w) }; },
     /**
      * (release 9, owner 2026-11-05) float.convert { walletId, chain, usd, lang? } — `usd` of this wallet's USD balance on `chain`
      * becomes that chain's own coin (ETH on Robinhood, BNB on BNB, SOL on Solana), delivered to the wallet itself and kept there:

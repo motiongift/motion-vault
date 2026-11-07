@@ -347,7 +347,15 @@ export type ChainState = {
   // (its gas floor is never swept) and the sweep's threshold is the one of before (a sell's proceeds above it still join R).
   // A waiting click (hold & fire, a market R cannot buy) still tops W up for itself. Left out = the buffer of before
   directPays?: boolean;
+  // (rel-12) Earn on this chain (src/earnEngine.ts), as its cached status says. earn6: R's dollars in the venue a buy here can take
+  // out now (a click withdraws them first: earnEngine.beforeClick) — they count as this reserve's for a ready move; earnKeep6:
+  // the liquid buffer Earn keeps in R here (B) — a donor never sends below it (Earn would only withdraw again); earnQuiet: an
+  // Earn step here is landing or ran in the last 10 minutes (READY_EARN.quietMs) — no cross-chain move into or out of R here
+  // meanwhile. Left out (no Earn) = the plan of before. Earn itself never leaves its chain; with these, switching it on or off
+  // moves nothing across chains either.
+  earn6?: bigint; earnKeep6?: bigint; earnQuiet?: boolean;
 };
+export const READY_EARN = { quietMs: 600_000 } as const;
 export type PlanInput = {
   now: number; caps: Caps; chains: Partial<Record<FloatChain, ChainState>>; enabled: FloatChain[];
   walletUsd6: bigint;              // the whole wallet in dollars (floats + reserves + coins at mark)
@@ -364,7 +372,9 @@ export type PlanInput = {
   // ready dollars (READY): given = a routine background plan may pre-position the reserves of the chains the user trades.
   // `feesDay6` = what such moves cost this wallet in the last 24 h; `from` = the reserves a public bridge can send from (EVM).
   // Left out (a click, the after-trade refill, older callers, the tests of before) = the plan is exactly as before
-  ready?: { feesDay6: bigint; from: FloatChain[] };
+  // (rel-12) `held`: the routes ("from>to") whose last ready moves were refused before anything was sent and are backing off
+  // (READY_HOLD): no ready move is planned on them until the hold is over
+  ready?: { feesDay6: bigint; from: FloatChain[]; held?: string[] };
   // a click is planned all or nothing (TC-1, 2026-11-04, local usd-scenarios + local usd-buy-final): when everything this frame
   // can reach for it (W here, this chain's reserve, the reserves it can sign a cold top-up from within XCHAIN, and `urgentExtra6`:
   // what the wallet's own native on the other EVM chains can bring, the engine's estimate) cannot pay the bare need (the buy + W's
@@ -411,21 +421,75 @@ export const xchainClickMax6 = (part6: bigint = XCHAIN.part6): bigint => part6 *
 //     bridge does not sign from Solana yet);
 //   - the destination's snapshot must be under 5 minutes old and newer than its last cross-chain arrival, and nothing may be in
 //     flight into it (a second move planned on an old read would move the same dollars twice);
-//   - cost: a move's stated bridge fee may be at most $0.10 + 0.5 % of it (Relay ~ $0.05 + 0.1-0.4 %; deBridge's fixed 0.001
-//     ETH never passes at these sizes), and all of a wallet's ready-dollar moves at most $1 per rolling 24 h. Every such job
+//   - cost: a move's cost is bounded per route (READY_ROUTES below; rel-10 had one bound, the stated fee at most $0.10 + 0.5 %),
+//     and all of a wallet's ready-dollar moves at most $1 per rolling 24 h. Every such job
 //     carries `ready` and reason READY.reason; the ledger states their fees apart (readyFeesOf) and in "upkeep this week".
 // Worst case: the user's own dollars sit in another of the user's own reserves, minus at most $1 a day of bridge fees.
 export const READY = {
   tradedMs: 7 * 86_400_000, min6: 10n * USD, multTenths: 15n, lowPct: 60n,
-  feeBase6: USD / 10n, feeBps: 50n, dayFees6: USD, snapMs: 300_000, reason: 'ready dollars',
+  dayFees6: USD, snapMs: 300_000, reason: 'ready dollars',
 } as const;
 /** The reserve a traded chain keeps (1.5 x the ready size, $10-$250). */
 export const readyTarget6 = (presets6: bigint[], buys6: bigint[]): bigint => {
   const t = (readySize6(presets6, buys6) * READY.multTenths) / 10n;
   return t < RULES.tradingMin6 ? RULES.tradingMin6 : t > RULES.tradingMax6 ? RULES.tradingMax6 : t;
 };
-/** The most a ready-dollar move of `amount6` may cost in stated bridge fees. */
-export const readyFeeMax6 = (amount6: bigint): bigint => READY.feeBase6 + (amount6 * READY.feeBps) / 10_000n;
+// ── (rel-12, 2026-11-06, owner “make it work without failures”) the routes of a ready-dollar move, each with its own quote clock and fee bound.
+// Measured on 2026-11-06 (local rel12/logs; GET only: Relay's public request history on these exact routes, deBridge's quote):
+//   Relay    BNB USDT -> Robinhood USDG: stated fees $0.025 + 0.41 %, and the coin delivered is a further 0.156 % under
+//            "amount - stated fees" counted in units (the way the vault counts a stablecoin): 100 in, 99.41 USDG out.
+//            Robinhood USDG -> BNB USDT / USDC: $0.022 + 0.23 %, nothing beyond the stated fees.
+//   deBridge $0.28-0.43 out of the amount + a fixed 0.005 BNB / 0.001 ETH paid in value: $2.7-5.7 a move at $15-$250.
+//   motion's bridge pays the destination's NATIVE coin into W (a click's cold top-up) and a stablecoin only into Elysium (off):
+//            it does not carry R's stable to R's stable on Robinhood / BNB / Solana, so it is no route for a ready move (yet).
+// Before: one 5 s clock, and Relay was asked for a 0.50 % minimum while the vault's floor is the amount minus the stated fees
+// minus the same 0.50 %: the 0.156 % Relay does not list made every BNB -> Robinhood quote above ~$40 fail that floor ("The quote
+// is below the amount minus fees and slippage") — refused before anything was signed, and planned again on the next tick.
+// Now a ready move asks Relay for a 0.25 % minimum (stable to stable; the vault's floor stays at the permission's slippage, so the
+// safety check is the same), counts its COST as what it takes out of the amount — the larger of the stated fees and the amount
+// minus what is delivered (readyCost6) — and bounds that cost at $0.10 + 0.75 % (BNB -> Robinhood: $1.47 of $1.98 at $250,
+// $0.10 of $0.175 at $10). deBridge has the same bound and never fits at these sizes (asked only after Relay refused).
+// Clocks: nobody waits for a ready move (a background tick). Relay 12 s (its quotes with a swap leg take seconds; a click's 5 s
+// cut them off), deBridge 8 s (its quotes answered in 0.23-1.4 s).
+export const READY_ROUTES = {
+  relay: { quoteMs: 12_000, slipBps: 25, feeBase6: USD / 10n, feeBps: 75n },
+  debridge: { quoteMs: 8_000, slipBps: 25, feeBase6: USD / 10n, feeBps: 75n },
+} as const;
+export type ReadyRoute = keyof typeof READY_ROUTES;
+export const isReadyRoute = (b: string): b is ReadyRoute => b === 'relay' || b === 'debridge';
+// (rel-12) the next buy a chain's reserve is expected to pay: the largest of the last 3 buys there, or (no buy yet) the largest
+// preset. A ready move is skipped while the destination's reserve already holds it with the click's 25 % margin
+// (RULES.clickMarginPct): a user whose presets reach $250 but who buys $20-$30 keeps $40 there without a cross-chain move.
+export function nextBuy6(presets6: bigint[], buys6: bigint[]): bigint {
+  const pick = buys6.length ? buys6.slice(-3) : presets6;
+  const m = pick.reduce((a, b) => (b > a ? b : a), 0n);
+  return m > 0n ? m : READY.min6;
+}
+/** The most a ready-dollar move of `amount6` may cost through `bridge` (readyCost6: the stated fees, or the delivery's shortfall). */
+export const readyFeeMax6 = (amount6: bigint, bridge: ReadyRoute = 'relay'): bigint => READY_ROUTES[bridge].feeBase6 + (amount6 * READY_ROUTES[bridge].feeBps) / 10_000n;
+// ── (rel-12) a ready move refused before anything was sent (no quote fit, the reserve read lower, …) is NOT a move: it leaves no
+// job and no row in the user's history, and its route ("from>to") backs off — 10 min, then 30 min, then 2 h for every refusal
+// after that — counted afresh 24 h after the last refusal. A move that sent anything (an approval, a deposit) is a job as before,
+// with where the funds are and why it stopped. Before (rel-10): a 'failed' job with no hash, which nothing counted (not the day
+// budget, not the "open move" rule), so the next tick planned the same move again: one more failed "Moved …" row per tick.
+export const READY_HOLD = { stepsMs: [600_000, 1_800_000, 7_200_000], resetMs: 86_400_000 } as const;
+export type ReadyHolds = Record<string, { n: number; at: number; why: string }>;
+/** how long the n-th refusal in a row holds a route */
+export const readyHoldMs = (n: number): number => READY_HOLD.stepsMs[Math.min(Math.max(1, Math.floor(n) || 1), READY_HOLD.stepsMs.length) - 1];
+/** the routes held right now */
+export const readyHeldPairs = (h: ReadyHolds, now: number): string[] => Object.entries(h).filter(([, x]) => x && now - x.at >= 0 && now - x.at < readyHoldMs(x.n)).map(([k]) => k);
+/** the holds after one more refusal on `pair` (entries older than READY_HOLD.resetMs are dropped) */
+export function readyRefused(h: ReadyHolds, pair: string, now: number, why: string): ReadyHolds {
+  const out: ReadyHolds = {};
+  for (const [k, x] of Object.entries(h)) if (x && Number.isFinite(x.at) && now - x.at < READY_HOLD.resetMs) out[k] = x;
+  const prev = out[pair];
+  out[pair] = { n: prev ? prev.n + 1 : 1, at: now, why: String(why || '').slice(0, 200) };
+  return out;
+}
+/** a ready job of rel-10 that was refused before anything was sent: not shown (it never moved anything) */
+export const quietRefusal = (j: Pick<FloatJob, 'ready' | 'state' | 'hashes'>): boolean => !!j.ready && j.state === 'failed' && !(j.hashes && j.hashes.length);
+/** A stable-to-stable quote's cost in micro-dollars: the stated fees, or the amount minus what it delivers when that is more. */
+export const readyCost6 = (in6: bigint, out6: bigint, stated6: bigint): bigint => (in6 - out6 > stated6 ? in6 - out6 : stated6);
 /** A wallet's ready-dollar jobs over the last 24 h and 7 days: their fees and what they moved (the ledger line; the day budget). */
 export function readyFeesOf(jobs: readonly FloatJob[], now: number): { day6: bigint; week6: bigint; movedWeek6: bigint; moves: number } {
   let day6 = 0n, week6 = 0n, movedWeek6 = 0n, moves = 0;
@@ -440,7 +504,7 @@ export function readyFeesOf(jobs: readonly FloatJob[], now: number): { day6: big
   return { day6, week6, movedWeek6, moves };
 }
 export type Move = { kind: MoveKind; chain: FloatChain; from?: FloatChain; usd6: bigint; fee6: bigint; reason: string; trimmed?: boolean; ready?: boolean };
-export type Skip = { chain: FloatChain; why: 'stale-price' | 'cap-total' | 'cap-day' | 'cap-fees' | 'no-reserve' | 'below-min' | 'bridge-busy' | 'no-gas' | 'not-traded' };
+export type Skip = { chain: FloatChain; why: 'stale-price' | 'cap-total' | 'cap-day' | 'cap-fees' | 'no-reserve' | 'below-min' | 'bridge-busy' | 'no-gas' | 'not-traded' | 'ready-held' | 'earn' };
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
 const max = (a: bigint, b: bigint) => (a > b ? a : b);
 /** What a click still lacks after every move the plan found. TC-1: `infeasible` = nothing was planned for it (it could not be paid
@@ -485,6 +549,9 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
   const readyRoomNow = () => !!input.ready && !input.urgent && readyFees6 < READY.dayFees6;
   const readyRoom = readyRoomNow();
   const readyTook = () => { readyFees6 += moves[moves.length - 1].fee6; };
+  const readyHeld = (from: FloatChain, to: FloatChain) => !!input.ready?.held?.includes(`${from}>${to}`);
+  // (rel-12) what a reserve may give across chains: its liquid part above Earn's buffer there (none while an Earn step there is fresh)
+  const giveOf = (d: FloatChain) => { const y = stateOf(d); if (y.earnQuiet) return 0n; const l = left.get(d) ?? 0n, k = y.earnKeep6 ?? 0n; return l > k ? l - k : 0n; };
   // the urgent chain first, then the rest in a fixed order
   const order = [...live].sort((a, b) => (a === input.urgent?.chain ? -1 : b === input.urgent?.chain ? 1 : FLOAT_CHAIN_KEYS.indexOf(a) - FLOAT_CHAIN_KEYS.indexOf(b)));
   for (const c of order) {
@@ -603,20 +670,23 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
       // a reserve elsewhere is asked only below the low band (a refill above it never starts a bridge move)
       if (!refillNow && rest >= RULES.sameChainMin6) {
         if (input.crossNeedsTrade && !x.traded) skips.push({ chain: c, why: 'not-traded' });
+        // (rel-12) dollars of R in Earn here, or an Earn step just ran: Earn's own refill brings R's liquid part back (same chain)
+        else if ((x.earn6 ?? 0n) > 0n || x.earnQuiet) skips.push({ chain: c, why: 'earn' });
         else if (x.busyBridge || x.inFlightReserve6 > 0n) skips.push({ chain: c, why: 'bridge-busy' });
         else {
           // the richest other reserve that can send at least the cross-chain chunk: reserves rebalance, the next plan tops up locally
           // (READY: on a chain the user trades, from $10 instead of $100 - from a reserve a public bridge can send from)
           const lowMin = readyRoomNow() && !!x.traded && !!x.readyOk;
           const crossMin = lowMin ? READY.min6 : RULES.crossChainMin6;
-          let donor = live.filter((d) => d !== c && (left.get(d) ?? 0n) >= RULES.crossChainMin6).sort((a, b) => ((left.get(b) ?? 0n) > (left.get(a) ?? 0n) ? 1 : -1))[0];
-          if (!donor && lowMin) donor = live.filter((d) => d !== c && input.ready!.from.includes(d) && (left.get(d) ?? 0n) >= crossMin).sort((a, b) => ((left.get(b) ?? 0n) > (left.get(a) ?? 0n) ? 1 : -1))[0];
+          let donor = live.filter((d) => d !== c && giveOf(d) >= RULES.crossChainMin6).sort((a, b) => (giveOf(b) > giveOf(a) ? 1 : -1))[0];
+          if (!donor && lowMin) donor = live.filter((d) => d !== c && input.ready!.from.includes(d) && giveOf(d) >= crossMin).sort((a, b) => (giveOf(b) > giveOf(a) ? 1 : -1))[0];
           if (!donor) skips.push({ chain: c, why: 'no-reserve' });
           else {
-            const chunk = min(max(rest, crossMin), left.get(donor)!);
+            const chunk = min(max(rest, crossMin), giveOf(donor));
             // a move under the old $100 minimum exists only because of READY: it carries its fee bound and the day budget
             const small = chunk < RULES.crossChainMin6;
-            if (take({ kind: 'rebalance', chain: c, from: donor, usd6: chunk, reason: small ? READY.reason : 'local reserve short', ...(small ? { ready: true } : {}) })) { left.set(donor, left.get(donor)! - moves[moves.length - 1].usd6); if (small) readyTook(); }
+            if (small && readyHeld(donor, c)) skips.push({ chain: c, why: 'ready-held' });
+            else if (take({ kind: 'rebalance', chain: c, from: donor, usd6: chunk, reason: small ? READY.reason : 'local reserve short', ...(small ? { ready: true } : {}) })) { left.set(donor, left.get(donor)! - moves[moves.length - 1].usd6); if (small) readyTook(); }
           }
         }
       }
@@ -635,17 +705,22 @@ export function planMoves(input: PlanInput): { moves: Move[]; skips: Skip[]; sho
   // READY: the reserve of every chain the user trades, back to its ready size once under 60 % of it (after every move above:
   // what this plan already takes from a reserve is not counted twice)
   if (readyRoom) {
-    const keepOf = (d: FloatChain) => { const y = stateOf(d); return y.traded ? readyTarget6(y.presets6, y.buys6) : 0n; };
+    // a donor keeps its own ready size when the user trades there, and Earn's liquid buffer there (rel-12), whichever is more
+    const keepOf = (d: FloatChain) => { const y = stateOf(d); const t = y.traded ? readyTarget6(y.presets6, y.buys6) : 0n; return max(t, y.earnKeep6 ?? 0n); };
     for (const c of order) {
       const x = stateOf(c);
       if (!readyRoomNow()) break;
       if (!x.traded || !x.readyOk) continue;
       if (x.busyBridge || x.inFlightReserve6 > 0n) continue;
+      if (x.earnQuiet) continue;   // (rel-12) an Earn step here is landing or just ran: its read decides on the next tick
       if (moves.some((m) => (m.kind === 'rebalance' || m.kind === 'cold') && m.chain === c)) continue;
-      const tgt = readyTarget6(x.presets6, x.buys6); const have = left.get(c) ?? 0n;
+      // (rel-12) R's dollars here = its liquid part + what Earn holds here that a buy can take out now
+      const tgt = readyTarget6(x.presets6, x.buys6); const have = (left.get(c) ?? 0n) + (x.earn6 ?? 0n);
       if (have * 100n >= tgt * READY.lowPct) continue;
+      // (rel-12) enough for the next expected buy (with the click's margin) is enough: no cross-chain move for it
+      if (have * 100n >= nextBuy6(x.presets6, x.buys6) * RULES.clickMarginPct) continue;
       const want = tgt - have; if (want < READY.min6) continue;
-      const donors = input.ready!.from.filter((d) => d !== c && live.includes(d)).map((d) => ({ d, spare: (left.get(d) ?? 0n) - keepOf(d) }))
+      const donors = input.ready!.from.filter((d) => d !== c && live.includes(d) && !readyHeld(d, c) && !stateOf(d).earnQuiet).map((d) => ({ d, spare: (left.get(d) ?? 0n) - keepOf(d) }))
         .filter((o) => o.spare >= READY.min6).sort((a, b) => (b.spare > a.spare ? 1 : b.spare < a.spare ? -1 : 0));
       if (!donors.length) continue;
       const { d, spare } = donors[0];

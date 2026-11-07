@@ -91,7 +91,8 @@ test('A1 planner: never — on a click\'s plan, on a chain not traded, on an old
   const z = base(); z.sol.busyBridge = true; assert.equal(rebalances(plan(z)).length, 0, 'a cross-chain move into it started under 2 min ago');
   const v = base(); v.sol.inFlightReserve6 = F.usd6(75); assert.equal(rebalances(plan(v)).length, 0, 'a rebalance into it is in flight');
   assert.equal(rebalances(plan(base(), { feesDay6: F.READY.dayFees6 })).length, 0, 'the day budget is spent');
-  assert.equal(F.readyFeeMax6(F.usd6(75)), F.usd6(0.475), '$0.10 + 0.5 %');
+  // rel-12 (READY_ROUTES): the bound is $0.10 + 0.75 % of the move (rel-10: $0.10 + 0.5 % = $0.475 here)
+  assert.equal(F.readyFeeMax6(F.usd6(75)), F.usd6(0.6625), '$0.10 + 0.75 %');
 });
 
 // ══ A1: the engine, a Robinhood frame (the donor) on a mocked chain with Relay / deBridge answering like their APIs ══
@@ -181,7 +182,7 @@ test('A1 engine: the Robinhood frame pre-positions $75 into the reserve of a cha
   const appr = wd.ch.txs.find((t) => lc(t.to) === lc(RH.stable.address));
   assert.equal(decodeFunctionData({ abi: ERC20, data: appr.data }).args[1], usdg(75), 'an exact approval');
   const q = wd.events.find((e) => e.step === 'quote' && e.ready);
-  assert.ok(q && q.usd === 75 && q.from === 'robinhood' && q.chain === 'sol' && Math.abs(q.fee - 0.075) < 1e-9, 'logged with its fee: ' + JSON.stringify(q));
+  assert.ok(q && q.usd === 75 && q.from === 'robinhood' && q.chain === 'sol' && Math.abs(q.fee - 0.08) < 1e-9, 'logged with its cost (rel-12: the delivery is $0.075 under the amount, more than the $0.07 stated; + $0.005 gas): ' + JSON.stringify(q));
   const st = await wd.f.status({ walletId: 'w1' });
   assert.ok(st.usd.readyFeesWeek >= 0.075 && st.usd.readyFeesWeek < 0.2, 'stated apart: ' + st.usd.readyFeesWeek);
   assert.equal(st.usd.readyMovedWeek, 75);
@@ -201,12 +202,14 @@ test('A1 engine: no second move on the same read — open (busy), then arrived b
   assert.equal(wd.ch.deposits.length, 1, 'at its ready size: nothing');
 });
 
-test('A1 engine: a quote over the fee bound is never signed — Relay at $0.505 for $75 (bound $0.475), deBridge with its fixed fee: nothing sent, nothing counted', async () => {
-  const wd = rhWorld({ relayFeeUsd: 0.5 }); await wd.on(); wd.tradedSol(); wd.solSnap(0);
+test('A1 engine: a quote over the fee bound is never signed — Relay at $0.705 for $75 (bound $0.6625 since rel-12), deBridge with its fixed fee: nothing sent, nothing counted', async () => {
+  const wd = rhWorld({ relayFeeUsd: 0.7 }); await wd.on(); wd.tradedSol(); wd.solSnap(0);
   await wd.tick();
   assert.equal(wd.ch.deposits.length, 0); assert.equal(wd.ch.txs.length, 0, 'no approval either');
-  const j = (await wd.jobs()).find((x) => x.kind === 'rebalance');
-  assert.equal(j.state, 'failed'); assert.match(j.error, /Every bridge refused/); assert.equal(j.hashes.length, 0);
+  // rel-12 (READY_HOLD): a refusal before any send is no job (no "Moved …" row); the route backs off with the reason kept
+  assert.equal((await wd.jobs()).find((x) => x.kind === 'rebalance'), undefined);
+  const hold = JSON.parse(wd.store.get(`trenches.float.v1.readyhold.${lc(wd.W)}`) || '{}')['robinhood>sol'];
+  assert.equal(hold.n, 1); assert.match(hold.why, /Every bridge refused/);
   assert.equal(F.readyFeesOf(await wd.jobs(), Date.now()).day6, 0n, 'a refusal costs nothing');
 });
 

@@ -78,7 +78,12 @@ export interface LimitDeps {
   api(): string;
   store: { get(k: string): string | null; set(k: string, v: string): void };
   now(): number;
+  /** (rel-12) a pause between two posts of an order (left out: a real timer) */
+  sleep?(ms: number): Promise<void>;
 }
+// (rel-12, the AIMCAP report 2026-11-06) an order that motion's server did not take is posted again after 1.5 s and 4 s; still not
+// taken, it cannot fill (only the server sends the signed swap) and everything goes back to the main wallet at once
+export const POST_RETRY_MS = [1_500, 4_000] as const;
 
 /** what this browser's vault keeps about an order (no key; the signed bytes are the same ones the server holds).
  *  recovered: found by a recovery scan, its fields (if any) from the server — hints only, never trusted for liveness.
@@ -214,6 +219,24 @@ export function createLimit(d: LimitDeps) {
     ev('sweep', 'done', { hashes: out.hashes });
     return { ...out, invalidated: swapNonce == null ? null : after > swapNonce, empty: !!left && left.eth <= P().dust && left.token === 0n };
   }
+  // (rel-12, the AIMCAP report) what the way back still lacks in gas: the coin's transfer, the zero-value sends up to the swap's
+  // nonce and the native's own send, at the fee now + 20 %, minus what the order wallet holds. 0 = it pays for itself (or there is
+  // nothing but its own native to return); -1 = more than a gas reserve ever is (P().maxReserve): the vault does not top that up
+  async function returnGasShort(ow: Hex, main: Hex, token: Hex | null, swapNonce: number | null, st: { eth: bigint; token: bigint }): Promise<bigint> {
+    let gas = 0n; let work = false;
+    if (token && st.token > 0n) {
+      const g = await pc.estimateGas({ account: ow, to: token, data: transferData(main, st.token) }).then(gasLimitOf, () => null);
+      if (g) { gas += g; work = true; }
+    }
+    const n = (await pc.getTransactionCount({ address: ow, blockTag: 'pending' })) + (work ? 1 : 0);
+    const fillers = swapNonce != null && n < swapNonce ? Math.min(swapNonce - n, MAX_FILLERS) : 0;
+    if (fillers > 0) { gas += BigInt(fillers) * plainGas(await pc.estimateGas({ account: ow, to: ow, value: 0n })); work = true; }
+    if (!work) return 0n;
+    gas += plainGas(await pc.estimateGas({ account: ow, to: main, value: 1n }));
+    const need = (gas * (await d.gasPrice()) * 12n) / 10n;
+    if (st.eth >= need) return 0n;
+    return need - st.eth > P().maxReserve ? -1n : need - st.eth;
+  }
   // what the chain says about an order wallet
   async function chainOf(ow: Hex, token: Hex | '' | null) {
     const [nonce, ethBal, tok] = await Promise.all([pc.getTransactionCount({ address: ow, blockTag: 'latest' }), pc.getBalance({ address: ow }), token ? balanceOf(token as Hex, ow).catch(() => 0n) : Promise.resolve(0n)]);
@@ -235,6 +258,12 @@ export function createLimit(d: LimitDeps) {
     return 'open';
   };
   const isEmpty = (st: { eth: bigint; token: bigint }) => st.eth <= P().dust && st.token === 0n;
+  // (rel-12, the AIMCAP report) a record a recovery scan made without the server's fields (the post never reached it) does not know
+  // the order's coin: its order wallet may hold one (a sell moves the coin in) whatever its native says. Before, such a wallet with
+  // native under the dust was closed as 'cancelled' and its Cancel went away while 605,835 AIMCAP sat in it. Such a record is never
+  // judged empty: it stays 'recovered' with Cancel, flagged coinUnknown (the page asks for the coin; limit.cancel with `token`
+  // returns it and remembers it)
+  const coinUnknown = (rec: LocalOrder | null): boolean => !!rec && !!rec.recovered && !ADDR.test(rec.token || '');
   const view = (rec: LocalOrder, state: string, st: { nonce: number; eth: bigint; token: bigint } | null) => ({
     orderId: rec.id, index: rec.index ?? null, walletId: rec.walletId, wallet: rec.wallet, orderWallet: rec.orderWallet, chain: P().key, native: unit(), token: rec.token || null, symbol: rec.symbol, decimals: rec.decimals,
     side: rec.side, kind: rec.kind, price: rec.price, amount: rec.amount, amountIn: rec.amountIn, minOut: { ...rec.minOut }, slippageBps: rec.slippageBps,
@@ -243,7 +272,8 @@ export function createLimit(d: LimitDeps) {
     ...(st ? { balance: { eth: eth(st.eth), token: fromUnits(st.token, rec.decimals), nonce: st.nonce } } : {}),
     // a sweep with no dialog: only what this vault knows can no longer fill (a recovered order is cancelled instead: it asks)
     sweepable: !!st && !isEmpty(st) && state !== 'open' && state !== 'recovered',
-    cancelable: !!st && (state === 'open' || (state === 'recovered' && !isEmpty(st))),
+    cancelable: !!st && (state === 'open' || (state === 'recovered' && (!isEmpty(st) || coinUnknown(rec)))),
+    ...(coinUnknown(rec) ? { coinUnknown: true } : {}),
     ...(rec.error ? { error: rec.error } : {}),
   });
 
@@ -538,11 +568,23 @@ export function createLimit(d: LimitDeps) {
         ev('sign', 'done', { orderId, checks });
       } catch (e) { if ((e as Error)?.name !== 'LimitRefused') fail(e); throw e; }
       // ── to the keeper ──
+      // (rel-12, the AIMCAP report) before: a post that failed with no 4xx (a 5xx, a timeout, no network) left the funded order
+      // 'open' but not stored, to be sent again only by a later list in THIS browser — a wiped browser or another device never
+      // did, and the order wallet held the funds with nobody to fill or return them. Now: two more posts (1.5 s, 4 s); a refusal
+      // (4xx) or still no answer = the order cannot go live: the funds go back at once (the return burns the swap's nonce, so
+      // a copy the server may have kept can never fill), and the server is told to drop it
       ev('post', 'active', { orderId });
-      const r = await postOrder(w, posted(rec));
-      rec.stage = 'open'; rec.stored = r.ok; put(rec);
-      if (!r.ok && r.status >= 400 && r.status < 500) throw await ret(`motion's server refused the order: ${r.error || r.status}`);
-      ev('post', r.ok ? 'done' : 'failed', { orderId, ...(r.ok ? {} : { note: 'Not stored yet — the next order list sends it again' }) });
+      const sleep = d.sleep ?? ((ms: number) => new Promise<void>((res) => setTimeout(res, ms)));
+      let r = await postOrder(w, posted(rec));
+      for (let i = 0; !r.ok && !(r.status >= 400 && r.status < 500) && i < POST_RETRY_MS.length; i += 1) { await sleep(POST_RETRY_MS[i]); r = await postOrder(w, posted(rec)); }
+      if (!r.ok) {
+        ev('post', 'failed', { orderId });
+        const e = await ret(r.status >= 400 && r.status < 500 ? `motion's server refused the order: ${r.error || r.status}` : `motion's server did not take the order (${r.error || r.status || 'no answer'})`);
+        await deleteOrder(w, rec.id).catch(() => false);
+        throw e;
+      }
+      rec.stage = 'open'; rec.stored = true; put(rec);
+      ev('post', 'done', { orderId });
       const st = await chainOf(ow, token).catch(() => null);
       return { ok: true, order: view(rec, 'open', st) };
     }));
@@ -556,8 +598,11 @@ export function createLimit(d: LimitDeps) {
     const run = (sending: () => void) => d.lock('limit:' + lc(w.address), async () => {
       if (a.idempotencyKey && d.idemSeen?.(a.idempotencyKey)) throw named('LimitUnknown', 'Status unknown — this was started in another tab; check the order before trying again', { unknown: true });
       const ev = (step: string, state: string, x: Record<string, unknown> = {}) => d.emit({ key: a.idempotencyKey || '', walletId: w.id, orderId: a.orderId, step, state, ...(auto ? { auto: true } : {}), ...x });
-      const rec = get(a.orderId);
+      let rec = get(a.orderId);
       if (rec && !same(rec.wallet, w.address)) throw named('LimitRefused', 'This order belongs to another wallet');
+      // (rel-12) the coin named for a recovered order that did not know it: remembered (a hint like the server's: only what is swept)
+      if (rec && coinUnknown(rec) && ADDR.test(String(a.token || ''))) { patch(rec.id, { token: lc(a.token) as Hex }); rec = get(a.orderId); }
+      const unknownNow = coinUnknown(rec);
       // review M2: the token goes back for a buy too (anything may have been sent there); the page's token / swapNonce only
       // matter for an order this browser did not place — hints that decide what is swept and which nonce is burnt, never
       // where anything goes (always back to this main wallet)
@@ -570,12 +615,17 @@ export function createLimit(d: LimitDeps) {
       // can it still fill? Known only for an order this vault placed (review M1); anything else counts as "maybe"
       const live = trusted(rec) ? (rec.stage === 'open' && rec.swapNonce != null && st.nonce <= rec.swapNonce && !rec.closed) : true;
       const expired = trusted(rec) ? d.now() > rec.expiry : false;
+      if (empty && unknownNow) return { ok: true, orderId: a.orderId, state: 'recovered', coinUnknown: true, invalidated: swapNonce == null ? null : st.nonce > swapNonce, returned: { eth: '0', token: '0' }, hashes: [] as string[] };
       if (empty && (!live || !trusted(rec))) {
         if (rec && !rec.closed) { rec.closed = trusted(rec) ? await outcomeOf(rec) : 'cancelled'; }
         if (rec) { rec.emptyAt = d.now(); put(rec); }
         return { ok: true, orderId: a.orderId, state: rec?.closed || 'empty', invalidated: swapNonce == null ? null : st.nonce > swapNonce, returned: { eth: '0', token: '0' }, hashes: [] as string[] };
       }
       if (mode === 'sweep' && live && !expired) throw named('LimitRefused', trusted(rec) ? 'This order can still fill — cancel it instead (limit.cancel asks first)' : 'This vault cannot tell whether this order can still fill — cancel it instead (limit.cancel asks first)');
+      // (rel-12, the AIMCAP report: 605,835 AIMCAP sat in an order wallet with 0.00000032 ETH, so nothing could send them back until
+      // the owner sent it gas by hand) the way back's gas, from the main wallet, when the order wallet cannot pay it; it comes back
+      // with the native at the end of the return, so the user pays only the gas
+      const topUp = await returnGasShort(ow, lc(w.address) as Hex, token, swapNonce, st).catch(() => 0n);
       if (mode === 'cancel' && live) {
         const { esc, sub, muted, addrRow } = d.html;
         const kv = (k: string, v: string) => `<div class="dk-kv"><span>${esc(k)}</span><b>${v}</b></div>`;
@@ -584,6 +634,7 @@ export function createLimit(d: LimitDeps) {
           title: 'Cancel order', ok: 'Cancel order',
           html: `${sub(trusted(rec) ? `${esc(rec.side === 'buy' ? `Buy ${rec.symbol} with ${rec.amount} ${unit()}` : `Sell ${rec.amount} ${rec.symbol}`)} at ${esc(rec.price)} ${unit()}. Everything in its order wallet goes back to ${esc(w.name)}.` : `An order this device did not place. Everything in its order wallet goes back to ${esc(w.name)}.`)}<div class="dk-list">${[
             kv('Returns', esc(`${eth(st.eth)} ${unit()}${st.token > 0n ? ` + ${fromUnits(st.token, rec?.decimals ?? 18)} ${rec?.symbol || 'tokens'}` : ''}`)),
+            ...(topUp > 0n ? [kv('Gas for the way back', esc(`${eth(topUp)} ${unit()} from ${w.name} first (the order wallet has too little; what is left comes back with it)`))] : []),
             ...(token ? [addrRow('Token', token)] : []),
             addrRow('Order wallet', ow), addrRow(w.name, w.address),
           ].join('')}</div>${muted('The return uses the order\'s own nonce, so its signed swap can never go through afterwards. If the price was reached a moment ago, the swap may land first: then the order is filled and only what is left comes back.')}`,
@@ -592,13 +643,26 @@ export function createLimit(d: LimitDeps) {
       }
       sending();
       ev(mode, 'active');
-      const r = await returnAll(w, signer, token, swapNonce, ev);
+      const gasHashes: string[] = [];
+      if (topUp > 0n) {
+        ev('gas', 'active', { value: eth(topUp) });
+        const g = gasLimitOf(await pc.estimateGas({ account: lc(w.address) as Hex, to: ow, value: 1n }));   // a plain send: its gas does not depend on the value
+        if ((await pc.getBalance({ address: lc(w.address) as Hex })) < topUp + g * (await d.gasPrice())) throw named('LimitRefused', `The order wallet needs ${eth(topUp)} ${unit()} of gas to send everything back, and ${w.name} does not have it — add ${unit()} to ${w.name} and try again`);
+        const h = await d.sendTx(w.id, { to: ow, value: topUp }, g);
+        await landed(h as Hex, 'Topping up the order wallet\'s gas');
+        gasHashes.push(h); ev('gas', 'done', { hash: h });
+      }
+      const r0 = await returnAll(w, signer, token, swapNonce, ev);
+      const r = { ...r0, hashes: [...gasHashes, ...r0.hashes] };
       let state: string = 'swept';
       if (r.invalidated === false && trusted(rec)) {
         // review L8: the swap's nonce is still ahead (a return could not take it) — the order stays as it is, on the server too
         state = rec.stage === 'open' ? 'open' : 'placing';
         if (r.empty) rec.error = 'Returned, but the signed swap could not be invalidated yet — cancel again';
         put(rec);
+      } else if (rec && unknownNow) {
+        // (rel-12) its native went back; a coin it may hold is still unknown: the record stays open to "Return a coin"
+        rec.sweptAt = d.now(); put(rec); state = 'recovered';
       } else if (rec) {
         rec.closed = trusted(rec) ? (rec.stage === 'open' ? await outcomeOf(rec) : 'failed') : 'cancelled';
         if (rec.closed === 'cancelled' && expired) rec.closed = 'expired';   // the return after expiry burnt the nonce: it expired
@@ -606,7 +670,7 @@ export function createLimit(d: LimitDeps) {
       } else state = 'cancelled';
       if (mode === 'cancel' && r.invalidated !== false && (live || !trusted(rec))) await deleteOrder(w, a.orderId);
       ev(mode, 'done', { state });
-      return { ok: true, orderId: a.orderId, state, invalidated: r.invalidated, returned: { eth: eth(r.eth), token: rec ? fromUnits(r.token, rec.decimals) : r.token.toString() }, hashes: r.hashes, ...(r.tokenError ? { tokenError: r.tokenError } : {}) };
+      return { ok: true, orderId: a.orderId, state, invalidated: r.invalidated, returned: { eth: eth(r.eth), token: rec ? fromUnits(r.token, rec.decimals) : r.token.toString() }, hashes: r.hashes, ...(r.tokenError ? { tokenError: r.tokenError } : {}), ...(unknownNow ? { coinUnknown: true } : {}) };
     });
     if (mode === 'cancel') return d.once({ idempotencyKey: a.idempotencyKey }, ['limit.cancel', w.id, a.orderId], run);
     return a.idempotencyKey ? d.once({ idempotencyKey: a.idempotencyKey }, ['limit.sweep', w.id, a.orderId], run) : run(() => {});
@@ -626,6 +690,8 @@ export function createLimit(d: LimitDeps) {
     laneOk();
     const ws = a.walletId ? [d.wallet(a.walletId)] : d.wallets();
     const found = a.walletId ? await scan(ws[0]).catch(() => 0) : 0;
+    // (rel-12) a recovered record with no known coin that rel-10 closed as 'cancelled' by its native alone (never swept): open again
+    for (const r of Object.values(readAll())) if (coinUnknown(r) && r.closed === 'cancelled' && r.emptyAt && !r.sweptAt && ws.some((w) => same(w.address, r.wallet))) patch(r.id, { closed: undefined, emptyAt: undefined });
     const mine = Object.values(readAll()).filter((r) => ws.some((w) => same(w.address, r.wallet))).sort((x, y) => y.createdAt - x.createdAt);
     // every record whose wallet was not seen empty; of the emptied ones the 40 newest of the last 3 days
     const show = [...mine.filter((r) => !r.emptyAt), ...mine.filter((r) => r.emptyAt && d.now() - r.emptyAt < 3 * 86400_000).slice(0, 40)];
@@ -633,8 +699,8 @@ export function createLimit(d: LimitDeps) {
       const st = await chainOf(rec.orderWallet, rec.token || null).catch(() => null);
       const state = await stateOf(rec, st);
       if (['filled', 'reverted', 'cancelled'].includes(state) && !rec.closed) patch(rec.id, { closed: state as LocalOrder['closed'] });
-      if (st && isEmpty(st) && !rec.emptyAt && state !== 'open' && state !== 'placing' && state !== 'recovered') patch(rec.id, { emptyAt: d.now() });
-      if (st && isEmpty(st) && state === 'recovered' && !rec.emptyAt && st.nonce > 0) patch(rec.id, { emptyAt: d.now(), closed: 'cancelled' });
+      if (st && isEmpty(st) && !rec.emptyAt && state !== 'open' && state !== 'placing' && state !== 'recovered' && !coinUnknown(rec)) patch(rec.id, { emptyAt: d.now() });
+      if (st && isEmpty(st) && state === 'recovered' && !rec.emptyAt && st.nonce > 0 && !coinUnknown(rec)) patch(rec.id, { emptyAt: d.now(), closed: 'cancelled' });
       if (state === 'open' && !rec.stored && rec.txs.length) {
         const w = ws.find((x) => same(x.address, rec.wallet));
         if (w) { const r = await postOrder(w, posted(rec)).catch(() => null); if (r?.ok) patch(rec.id, { stored: true }); }
