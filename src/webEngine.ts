@@ -1,3 +1,7 @@
+import { verifyTerminalEvm, simulateTerminalEvm, exactTerminalApproval } from './terminal-evm/vault-guard.mjs';
+import { openEvmClaims } from './terminal-evm/claim-store.mjs';
+import { verifyEvmFinality } from './terminal-evm/finality.mjs';
+import { TERMINAL_EVM_POLICY } from './terminalEvmConfig';
 import { assertLegacyTerminalAllowed } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
 // In-browser wallet vault + trading engine for the Trenches terminal.
@@ -6999,6 +7003,7 @@ const engine = {
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
   float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => clickRun(() => usdBuy(o)), convert: float.convert, withdraw: float.withdraw },
   terminalTrade: (request: unknown) => clickRun(() => terminalTrade(request)),
+  terminalTradeEvm: (request: unknown) => clickRun(() => terminalTradeEvm(request)),
   buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('buy', token, amount, accountIds, hint, opts)),
   sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
@@ -7811,6 +7816,101 @@ async function terminalTrade(request: unknown) {
         txEvent({ id, address, state, error: e.message || 'Terminal trade refused', ...(hash ? { hash } : {}) });
         return { ret: { name: account.name, address, ok: false, error: e.message || 'Terminal trade refused', state, ...(hash ? { hash } : {}) }, landed: hash ? follow(hash) : null };
       }
+    });
+  } finally { tradesInFlight--; post({ t: 'busy', v: tradesInFlight > 0 }); }
+}
+
+// Separate policy-authorized EVM lane. No caller-provided raw signing method.
+async function terminalTradeEvm(request: unknown) {
+  const key = CFG.key;
+  const policy = key === 'robinhood' || key === 'bsc' ? TERMINAL_EVM_POLICY?.[key] : null;
+  if (SOL_MODE || NEAR_MODE || !policy || policy.chainId !== chain.id) throw new Error('Terminal EVM execution is not enabled');
+  if (!request || typeof request !== 'object') throw new Error('Invalid terminal EVM request');
+  const r = structuredClone(request) as Record<string, unknown>;
+  if (Object.keys(r).some(k => !['walletId', 'side', 'token', 'size', 'transaction', 'route'].includes(k)) ||
+    typeof r.walletId !== 'string' || !['buy', 'sell'].includes(String(r.side)) || typeof r.token !== 'string' ||
+    !/^0x[0-9a-fA-F]{40}$/.test(r.token) || typeof r.size !== 'number') throw new Error('Invalid terminal EVM intent');
+  const side = r.side as 'buy' | 'sell', token = r.token as `0x${string}`, size = r.size;
+  const bad = tradeSizeProblem(side, size, MAX_BUY[laneKey()] ?? MAX_BUY_ETH); if (bad) throw new Error(bad);
+  const s = tradeSettings(undefined);
+  if (s.turbo || mevOn(s) || !Number.isFinite(s.gasBoost) || s.gasBoost < 1 || s.gasBoost > 5) throw new Error('Terminal candidate requires ordinary public execution with bounded gas');
+  if (!Number.isSafeInteger(policy.finalityBlocks) || policy.finalityBlocks < 1 || BigInt(policy.maxGas) <= 0n || BigInt(policy.maxGasPrice) <= 0n || BigInt(policy.maxGasCost) <= 0n) throw new Error('Invalid terminal execution deployment limits');
+  keepHot();
+  const own = requireUnlocked().find(a => a.id === r.walletId);
+  if (!own || own.archived || own.hop || own.ext || !own.key) throw new Error('Own active EVM wallet required');
+  const account = accountOf(own), address = account.address, id = clickId(undefined);
+  // Existing rel12 has no trade 2FA action. This new lane explicitly uses the transfer gate.
+  await gate('transfer');
+  tradesInFlight++; post({ t: 'busy', v: true }); txEvent({ id, address, state: 'preparing' });
+  try {
+    return await tradeGuard<Result>(`${side}:${token}:${address}`, () => ({ name: own.name, address, ok: false, error: 'Trade already pending', state: 'not_started' }), async () => {
+      return laneLock(address, async () => {
+        const journal = await openEvmClaims({ name: `motion-terminal-evm-${chain.id}-${policy.router.toLowerCase()}`,
+          verifyFinal: row => verifyEvmFinality({ client: publicClient, chainId: policy.chainId, row, confirmations: policy.finalityBlocks }) });
+        let claimId: string | null = null;
+        try {
+          const held = await journal.pending(address);
+          if (held) {
+            await journal.reconcile(held.id);
+            if ((await journal.get(held.id))?.status === 'idle') await journal.cancelIdle(held.id); // prior approval finalized; old quote stays consumed
+            if (await journal.pending(address)) throw new Error('Previous terminal transaction is unresolved; no new signature will be made');
+          }
+          const balance = side === 'sell' ? await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [address] }) : 0n;
+          const amount = side === 'buy' ? parseEther(String(size)) : balance * BigInt(Math.round(size * 100)) / 10000n;
+          if (amount <= 0n) throw new Error('No positive terminal input');
+          const intent = { trader: address, token, side, amount: amount.toString(), slippageBps: Math.round(s.slippage * 100) };
+          const check = () => verifyTerminalEvm({ config: policy, client: publicClient, transaction: r.transaction, route: r.route, intent });
+          let verified = await check();
+          await tradeLimits(side, size, s, 1);
+          verified = await check(); // dialogs cannot silently extend receipt validity
+          if (!await journal.claim(verified.claim)) throw new Error('Terminal receipt, reservation or nonce is already consumed');
+          claimId = verified.claim.id;
+          const sendExact = async (tx: { to: `0x${string}`; data: `0x${string}`; value: bigint }, phase: 'approve-zero' | 'approve-exact' | 'swap') => {
+            await check();
+            const [gasPrice, estimate, nonce, funds] = await Promise.all([feeFor(s.gasBoost), publicClient.estimateGas({ account: address, ...tx }), nextNonce(address, true), publicClient.getBalance({ address })]);
+            const gas = (estimate * 125n + 99n) / 100n;
+            if (gas > BigInt(policy.maxGas) || gasPrice > BigInt(policy.maxGasPrice) || gas * gasPrice > BigInt(policy.maxGasCost) ||
+              (CFG.maxGasPrice && gasPrice > CFG.maxGasPrice * 5n) || (CFG.maxFeeWei && gas * gasPrice > CFG.maxFeeWei) || funds < tx.value + gas * gasPrice) throw new Error('Terminal gas or balance guard refused');
+            await check();
+            if (Math.floor(Date.now() / 1000) >= verified.quote.deadline) throw new Error('Terminal receipt expired before signing');
+            const raw = await account.signTransaction({ ...tx, chainId: chain.id, nonce, gas, gasPrice, type: 'legacy' } as any);
+            if (Math.floor(Date.now() / 1000) >= verified.quote.deadline) throw new Error('Terminal receipt expired during signing; nothing broadcast');
+            const hash = keccak256(raw);
+            await journal.signed(claimId!, hash, phase); // durable BEFORE first broadcast
+            noteNonceUsed(address, nonce);
+            try { const sent = await broadcast(raw, 0, false, { from: address, nonce }); if (sent !== hash) throw new Error('Broadcast hash mismatch'); }
+            catch { throw Object.assign(new Error('Terminal send outcome is unknown; do not resubmit'), { name: 'TerminalEvmUnknown', unknown: true, hash }); }
+            return hash;
+          };
+          const approve = async (amount: bigint, phase: 'approve-zero' | 'approve-exact') => {
+            const hash = await sendExact(exactTerminalApproval(verified, amount), phase);
+            const rc = await publicClient.waitForTransactionReceipt({ hash, confirmations: policy.finalityBlocks, timeout: 30000, pollingInterval: 500 });
+            await journal.reconcile(claimId!);
+            if (rc.status !== 'success' || (await journal.get(claimId!))?.status !== 'idle') throw new Error('Exact terminal approval did not finalize');
+            const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [address, policy.router] });
+            if (allowance !== amount) throw new Error('Token did not retain the exact terminal allowance');
+          };
+          if (verified.approval) {
+            const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [address, policy.router] });
+            if (allowance !== amount) { if (allowance !== 0n) await approve(0n, 'approve-zero'); await approve(amount, 'approve-exact'); }
+          }
+          verified = await check();
+          await simulateTerminalEvm({ client: publicClient, verified, config: policy });
+          const hash = await sendExact(verified.transaction, 'swap');
+          txEvent({ id, address, state: 'submitted', hash }); scheduleWatch(1500);
+          const landed = watchReceipt(hash, id, address).finally(async () => { try { await journal.reconcile(claimId!); } finally { journal.close(); } });
+          return { ret: { name: own.name, address, ok: true, hash, state: 'submitted' as TxState }, landed };
+        } catch (error) {
+          const saved = claimId ? await journal.get(claimId) : null;
+          if (claimId && saved?.status === 'idle') await journal.cancelIdle(claimId);
+          const uncertain = saved?.status === 'signed', hash = uncertain ? saved?.hash as `0x${string}` : undefined;
+          journal.close();
+          const state = uncertain ? 'unknown' as const : 'not_started' as const;
+          const message = uncertain && saved?.phase !== 'swap' ? `Approval outcome unknown; the swap was not sent. ${shortError(error)}` : shortError(error);
+          txEvent({ id, address, state, error: message, ...(hash ? { hash } : {}) });
+          return { ret: { name: own.name, address, ok: false, error: message, state, ...(hash ? { hash } : {}) }, landed: hash && saved?.phase === 'swap' ? watchReceipt(hash, id, address) : null };
+        }
+      });
     });
   } finally { tradesInFlight--; post({ t: 'busy', v: tradesInFlight > 0 }); }
 }
