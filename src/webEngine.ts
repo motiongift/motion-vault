@@ -1,3 +1,4 @@
+import { assertLegacyTerminalAllowed } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
 // In-browser wallet vault + trading engine for the Trenches terminal.
 //
@@ -3085,6 +3086,7 @@ async function tradeGuard<T>(key: string, busy: () => T, fn: () => Promise<{ ret
   catch (e) { releaseInFlight(key); throw e; }
 }
 async function trade(side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown, opts?: unknown) {
+  assertLegacyTerminalAllowed(laneKey(), 'trade');
   tradesInFlight += 1; post({ t: 'busy', v: true });
   try {
     // V13 VA-2: the size is checked before anything is recorded or asked (`buy(t, -1e300)` zeroed the hourly ledger)
@@ -5832,6 +5834,7 @@ function unrecordBuy(since: number, total: number) {
 }
 const nothingSent = (results: Result[]) => results.length > 0 && results.every((x) => !x.ok && x.state === 'not_started');
 async function usdBuy(o: unknown) {
+  assertLegacyTerminalAllowed(laneKey(), 'float.buy');
   const a = usdBuyArgs(o);
   if (!SOL_MODE && !NEAR_MODE && (CFG.key === 'robinhood' || CFG.key === 'bsc')) return usdBuyEvm(a);
   if (!SOL_MODE) throw new Error('A buy straight from the USD balance is not available on this chain yet');
