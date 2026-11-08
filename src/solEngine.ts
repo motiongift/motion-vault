@@ -1,3 +1,6 @@
+import { createTerminalVaultConsumer } from './terminal-fee/vault-consumer.mjs';
+import { openTerminalReceiptStore } from './terminal-fee/receipt-store.mjs';
+import { TERMINAL_SOL_POLICY } from './terminalFeeConfig.ts';
 // Solana in the vault: the same trading wallets get a Solana identity, and the
 // vault builds, signs and sends pump.fun trades itself — straight to the
 // programs, no third-party trade API in between.
@@ -2332,4 +2335,62 @@ export async function solDirectBuy(rAcct: SolAcct, w: string, r: SolRoute, usdcI
   try { await sendSigned(b.tx, b.hash, b.lvh, R, { mode: b.mode, click, venue: 'jupiter', protect: b.protect }); }
   catch (e) { if (!(e instanceof SolSendUnknown)) sentSigs.delete(b.hash); throw e; }
   return { hash: b.hash, minOut: b.minOut, route: b.route, timing: b.timing };
+}
+
+// Candidate append-only method: current buy/sell/direct paths are unchanged.
+export async function solTerminalTrade(a: SolAcct, request: {
+  side: 'buy' | 'sell'; token: string; size: number; envelope: unknown; serialized: string;
+}, s: SolSettings, beforeSign: () => Promise<void>): Promise<{ hash: string; receiptId: string }> {
+  const policy = TERMINAL_SOL_POLICY;
+  if (!policy) throw new Error('Terminal fee execution is not configured');
+  if (!a.key || a.ext || !SOL_ADDR.test(request.token)) throw new Error('Own Solana wallet and valid mint required');
+  // This first adapter supports an exact no-tip message. Do not silently ignore custom execution settings.
+  if (s.turbo || (s.solTip || 0) > 0 || (s.solPriority || 0) > 0 || s.mev?.sol) throw new Error('This terminal quote does not support custom tips, priority or protected mode yet');
+  const keys = solKeys(a.key), user = keys.address;
+  await solHoldGate(user);
+  const route = await solRoute(request.token);
+  let amount: bigint;
+  if (request.side === 'buy') amount = BigInt(Math.floor(request.size * 1e9));
+  else {
+    const [account] = await accounts([ataOf(user, route.mint, route.tokenProgram)]);
+    if (account === undefined) throw new Error('Could not read wallet token balance');
+    const balance = tokState(account)?.amount ?? 0n;
+    amount = balance * BigInt(Math.round(Math.min(100, Math.max(0, request.size)) * 100)) / 10000n;
+  }
+  if (amount <= 0n) throw new Error('Trade amount is below precision');
+  const store = await openTerminalReceiptStore({
+    verifySettlement: async row => {
+      const genesis = await solRpc<string>('getGenesisHash', []);
+      if (row.signature) {
+        const statuses = await solSigStatusesBoth([row.signature]);
+        const status = statuses[0];
+        if (status?.confirmationStatus === 'finalized') return { genesis, status: status.err ? 'failed' : 'finalized', finalized: true, signature: row.signature };
+      }
+      const blockHeight = await solRpc<number>('getBlockHeight', [{ commitment: 'finalized' }]);
+      return { genesis, status: 'expired', blockHeight };
+    },
+  });
+  try {
+    const pending = await store.pending(user);
+    if (pending) await store.reconcile(pending.receiptId);
+    const consumer = createTerminalVaultConsumer({
+      config: { ...policy, trader: user }, rpc: (method, params) => solRpc(method, params), store,
+      signExact: async message => { await solHoldGate(user); return signMessage(message, keys.seed).sig; },
+      sendExact: async (transaction, metadata) => {
+        // No budget, tip, blockhash or account-list rebuilding here.
+        await sendSigned(transaction, metadata.signature, metadata.lastValidBlockHeight, user, { venue: 'terminal-jupiter' });
+        return { signature: metadata.signature };
+      },
+      verifyMarket: async ({ payload }) => {
+        const reason = jupPriceCheck({ side: request.side, amount, minOut: BigInt(payload.minOut), decimals: route.decimals,
+          priceSol: await motionPriceSol(route.mint), feeBps: route.fee?.lowBps });
+        if (reason) return false;
+        await beforeSign();
+        return true;
+      },
+    });
+    const result = await consumer.consume({ envelope: request.envelope, serialized: request.serialized,
+      intent: { trader: user, token: route.mint, side: request.side, amount: amount.toString(), slippageBps: Math.round(s.slippage * 100) } });
+    return { hash: result.signature, receiptId: result.receiptId };
+  } finally { store.close(); }
 }

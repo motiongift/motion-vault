@@ -1,3 +1,4 @@
+import { solTerminalTrade } from './solEngine';
 // In-browser wallet vault + trading engine for the Trenches terminal.
 //
 // Runs without the extension and without any confirmation step: like a
@@ -6994,6 +6995,7 @@ const engine = {
   limit: limitApi,
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
   float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => clickRun(() => usdBuy(o)), convert: float.convert, withdraw: float.withdraw },
+  terminalTrade: (request: unknown) => clickRun(() => terminalTrade(request)),
   buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('buy', token, amount, accountIds, hint, opts)),
   sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
@@ -7767,3 +7769,45 @@ if (HOST) {
   document.dispatchEvent(new CustomEvent('trench:engine'));
 }
 export {};
+
+// Separate terminal quote lane. It does not replace or fall through to buy()/sell().
+import { TERMINAL_SOL_POLICY } from './terminalFeeConfig';
+async function terminalTrade(request: unknown) {
+  // Default-OFF flag: with no pinned policy this lane refuses before any busy/txEvent/click-clock/RPC side effect.
+  if (!TERMINAL_SOL_POLICY) throw Object.assign(new Error('Terminal fee execution is not configured'), { code: 'TerminalFeeDisabled' });
+  if (!SOL_MODE || !request || typeof request !== 'object') throw new Error('SOL terminal trade required');
+  const r = request as Record<string, unknown>;
+  if (Object.keys(r).some(k => !['walletId', 'side', 'token', 'size', 'envelope', 'serialized'].includes(k)) ||
+    typeof r.walletId !== 'string' || !['buy', 'sell'].includes(String(r.side)) || typeof r.token !== 'string' ||
+    !SOL_ADDR.test(r.token) || typeof r.size !== 'number' || typeof r.serialized !== 'string' || r.serialized.length > 1644) throw new Error('Invalid terminal trade');
+  const side = r.side as 'buy' | 'sell', token = r.token, size = r.size;
+  const bad = tradeSizeProblem(side, size, MAX_BUY[laneKey()] ?? MAX_BUY_ETH); if (bad) throw new Error(bad);
+  keepHot();
+  const account = requireUnlocked().find(a => a.id === r.walletId);
+  if (!account || account.archived || account.hop || account.ext || !account.key) throw new Error('Own active wallet required');
+  const address = solAddressOf(account), id = clickId(undefined), settings = tradeSettings(undefined);
+  if (!address) throw new Error('This wallet has no Solana key');
+  const follow = (hash: string) => (async () => {
+    for (let i = 0; i < 98; i++) {
+      await new Promise(ok => setTimeout(ok, i < 25 ? 400 : 1500));
+      const receipt = await solReceipt(hash).catch(() => null);
+      if (receipt && !receipt.pending) { txEvent({ id, address, state: receipt.status === 'success' ? 'confirmed' : 'reverted', hash }); return; }
+    }
+  })();
+  tradesInFlight++; post({ t: 'busy', v: true }); txEvent({ id, address, state: 'preparing' });
+  try {
+    return await tradeGuard<Result>(`${side}:${token}:${address}`, () => ({ name: account.name, address, ok: false, error: 'Trade already pending', state: 'not_started' }), async () => {
+      try {
+        const result = await solTerminalTrade(account, { side, token, size, envelope: r.envelope, serialized: r.serialized as string }, settings,
+          () => tradeLimits(side, size, settings, 1));
+        txEvent({ id, address, state: 'submitted', hash: result.hash }); scheduleWatch(1500);
+        return { ret: { name: account.name, address, ok: true, hash: result.hash, state: 'submitted' }, landed: follow(result.hash) };
+      } catch (error) {
+        const e = error as { unknown?: boolean; hash?: string; message?: string };
+        const hash = e.unknown && e.hash ? e.hash : undefined, state = e.unknown ? 'unknown' as const : 'not_started' as const;
+        txEvent({ id, address, state, error: e.message || 'Terminal trade refused', ...(hash ? { hash } : {}) });
+        return { ret: { name: account.name, address, ok: false, error: e.message || 'Terminal trade refused', state, ...(hash ? { hash } : {}) }, landed: hash ? follow(hash) : null };
+      }
+    });
+  } finally { tradesInFlight--; post({ t: 'busy', v: tradesInFlight > 0 }); }
+}
