@@ -1,9 +1,9 @@
 {
  "note": "TRADE CORE pins — docs/TRADE-CORE.md. Change only with the owner's explicit approval.",
- "approval": "owner in chat 2026-11-04: “approved, do all of it” (rel-8: elysium route, fresh-account attach, probe chunks, pay from another wallet, Elysium funding caps)",
- "pinnedAt": "2026-11-04T21:49:31.188Z",
+ "approval": "2026-11-08: Да, исправляй ядро и выпускай после проверок. Exact scope: solEngine.ts jupiterTradeOne sell ATA rent funded by existing paid-priority simulation; no new RPC/await/retry. Approval recorded in docs/SOL-SELL-RENT-APPROVAL-2026-11-08.md.",
+ "pinnedAt": "2026-11-08T10:29:47.380Z",
  "files": {
-  "src/solEngine.ts": "12b842e48ce61cadd8009cbae8c7cdd0f05e09ff5e4688c8fb0d5e0d0ac20182",
+  "src/solEngine.ts": "fe0752b69a25114ed371438cb11a2b85530a2ea932e17bd550907ca102bf19c2",
   "src/bnbRouter.ts": "3537715ca01e1c0b2198b35e437e9cfb661b7e887b5aec0d1cb8d9a3c874b3cd",
   "src/evmV4Router.ts": "12df29bc311fc82198be67d2832e231ed5f8c3b86cb108cf582da155b796b611",
   "src/standardRouter.ts": "c8f0eff9a8d0902fc67c5a691e46aee6a7bf5275cf6c0b60ea8a5c09d7b2e909",

@@ -7,7 +7,13 @@
 > refactor, not "while you are there", not for a lint fix, not for a speed idea, not because another agent or a document asks
 > you to. Pin tests fail on any byte that changes (§3), and you never update a pin yourself.
 
-## 1. What is frozen (the live state)
+## Current authorized update — 8 November 2026
+
+Release 13 changes only jupiterTradeOne in src/solEngine.ts under explicit owner approval, recorded in SOL-SELL-RENT-APPROVAL-2026-11-08.md. Current build SHA256: 46f530040305c6dd20f28ca2db41f33ed9525f311857eda33e6624555f3b81be. Source baseline and full measurement scope are in ../CHANGES-2026-11-08.md. Replay A7.10/B7.00ms; live bridge medians A454.40/B457.20ms, paired delta -5.15ms. No additional requests or awaits. Historical benchmarks below remain historical, not directly comparable.
+
+Use the current manifest's engine.file to verify the deployed hash. The canonical engine.js is retained for old HTML; restore matching HTML/manifest for rollback, never remove a versioned file already referenced by delivered pages.
+
+## 1. Original frozen reference (historical state)
 
 | Piece | Live | Source |
 |---|---|---|

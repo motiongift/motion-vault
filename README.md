@@ -1,9 +1,12 @@
 # motion-vault
 
+> **Release 13, 2026-11-08:** Jupiter sell affordability correction; see [CHANGES-2026-11-08.md](CHANGES-2026-11-08.md). Verify the currently deployed release using the manifest and `npm run verify`.
+
 The in-browser vault and trading engine of [motion.gift](https://motion.gift), a non-custodial
 trading terminal for Robinhood Chain, BNB Chain, Solana, NEAR and Elysium.
 
-This repository is the exact source of `https://vault.motion.gift/vendor/engine.js` — the one script
+This repository is the source of the engine identified by `engine.file` in
+`https://vault.motion.gift/releases.json` — the one script
 that runs inside the isolated vault frame, creates and stores the trading keys, and signs every
 trade. It is published so that anyone can build it, get byte-identical output and compare the hash
 with what motion.gift serves. Nothing here is needed to *use* motion; it is here to be read and
@@ -147,10 +150,13 @@ npm run hash                # sha384 / sha256 of your build, compared with the p
 The build of this commit produces:
 
 ```
-bytes   1474685
-sha384  sha384-zCBCQllqmAt1vl9qiQa7jBZ7L73HM5We5iQ5zLvdjRXhbtvTPF0NfnAYwfvv0EVm
-sha256  f47f01360bea36cd3d3287d4ef53ba15ea777f9d765fbc895a22fa4b7a125e5e
+bytes   1474784
+sha384  sha384-0YjJvOo6ak6b6nVTk88xSsrmmabqu7o8kQStcdPLG7CXGmuL9yy3Bb5FsfDsrRKA
+sha256  46f530040305c6dd20f28ca2db41f33ed9525f311857eda33e6624555f3b81be
 ```
+
+The legacy canonical URL remains the previous release for in-flight old pages; use
+`engine.file` from the live manifest for the current engine.
 
 The sha384 is the `integrity` attribute of the script tag in `server/web/vault.html`.
 
@@ -163,7 +169,7 @@ npm run verify              # fetches the live engine, vault.html and releases.j
 Or by hand:
 
 ```sh
-curl -s https://vault.motion.gift/vendor/engine.js | openssl dgst -sha384 -binary | base64
+curl -s https://vault.motion.gift/vendor/engine-46f530040305c6dd20f28ca2db41f33ed9525f311857eda33e6624555f3b81be.js | openssl dgst -sha384 -binary | base64
 curl -s https://vault.motion.gift/vault.html | grep -o 'integrity="[^"]*"'
 curl -s https://vault.motion.gift/releases.json
 ```

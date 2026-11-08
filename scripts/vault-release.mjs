@@ -1,6 +1,6 @@
 // Pins the vault frame to the exact engine it ships with and publishes the hashes.
 //   node scripts/vault-release.mjs
-// - server/web/vault.html gets integrity="sha384-…" of server/web/vendor/engine.js
+// - the local engine build gets an immutable hash-named copy; vault.html pins that URL and its sha384
 //   (the browser refuses to run any other bytes under that tag);
 // - server/web/releases.json lists the hashes of the engine and of every frame
 //   file present in this tree, so anyone can fetch what the server serves and
@@ -18,19 +18,29 @@ const sha = (algo, buf, enc = 'hex') => createHash(algo).update(buf).digest(enc)
 
 const engine = read('server/web/vendor/engine.js');
 const sri = 'sha384-' + sha('sha384', engine, 'base64');
+const engineFile = '/vendor/engine-' + sha('sha256', engine) + '.js';
+const versionPath = new URL('server/web' + engineFile, root);
+if (existsSync(versionPath)) {
+  if (!readFileSync(versionPath).equals(engine)) throw new Error('Immutable engine file differs');
+} else writeFileSync(versionPath, engine, { flag: 'wx' });
 const htmlPath = new URL('server/web/vault.html', root);
 let html = readFileSync(htmlPath, 'utf8');
 if (!/integrity="sha384-[^"]*"/.test(html)) throw new Error('vault.html has no integrity attribute to pin');
-html = html.replace(/integrity="sha384-[^"]*"/, `integrity="${sri}"`);
+const tags = [...html.matchAll(/<script\b[^>]*\ssrc="\/vendor\/engine(?:-[a-f0-9]{64})?\.js"[^>]*>/g)];
+if (tags.length !== 1 || !/\sintegrity="sha384-[^"]*"/.test(tags[0][0])) throw new Error('vault.html has no unique pinned engine script');
+const pinnedTag = tags[0][0].replace(/\ssrc="[^"]*"/, ` src="${engineFile}"`).replace(/\sintegrity="sha384-[^"]*"/, ` integrity="${sri}"`);
+html = html.replace(tags[0][0], pinnedTag);
 writeFileSync(htmlPath, html);
 
 const frameFiles = ['vault.css', 'vault-client.js', 'bridge.js'].filter((f) => existsSync(new URL('server/web/' + f, root)));
 const files = { 'vault.html': Buffer.from(html), ...Object.fromEntries(frameFiles.map((f) => [f, read('server/web/' + f)])) };
+const previous = existsSync(new URL('server/web/releases.json', root)) ? JSON.parse(read('server/web/releases.json')) : {};
 const out = {
+  ...previous,
   v: 1,
   builtAt: new Date().toISOString(),
-  engine: { file: '/vendor/engine.js', bytes: engine.length, sha384: sri, sha256: sha('sha256', engine), source: 'src/webEngine.ts (built with vite.web-engine.config.ts: npm run build:engine)' },
-  frame: Object.fromEntries(Object.entries(files).map(([k, b]) => [k, { file: '/' + k, bytes: b.length, sha256: sha('sha256', b) }])),
+  engine: { file: engineFile, bytes: engine.length, sha384: sri, sha256: sha('sha256', engine), source: 'src/webEngine.ts (built with vite.web-engine.config.ts: npm run build:engine)' },
+  frame: { ...previous.frame, ...Object.fromEntries(Object.entries(files).map(([k, b]) => [k, { file: '/' + k, bytes: b.length, sha256: sha('sha256', b) }])) },
   note: 'Fetch each file from the vault origin, hash it, compare. The engine hash is also the SRI the frame pins in its script tag.',
 };
 writeFileSync(new URL('server/web/releases.json', root), JSON.stringify(out, null, 2) + '\n');

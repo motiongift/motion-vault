@@ -1598,11 +1598,14 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   const microAt = (units: number) => Math.min(plan.micro, Number(((JUP_FEE_CEIL - (plan.tipLamports > JUP_FEE_CEIL ? JUP_FEE_CEIL : plan.tipLamports)) * 1_000_000n) / BigInt(units)));
   const feesAt = (units: number) => plan.tipLamports + (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n + SIG_FEE + 10_000n;
   const rentMax = BigInt(opens) * RENT_ATA22;
-  const have = BigInt(uAcc?.lamports || 0), need = (side === 'buy' ? amount + RENT_WALLET : 0n) + feesAt(JUP_UNITS_MAX) + rentMax;
+  const have = BigInt(uAcc?.lamports || 0), need = (side === 'buy' ? amount + RENT_WALLET + rentMax : 0n) + feesAt(JUP_UNITS_MAX);
   if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees + account rent)`);
-  // simulate once (no priority in the trial: the fee is counted separately), with the inner instructions — every move of this
-  // wallet's funds is checked from them; the slow list of all its token accounts only when the node does not return them
-  const trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, 0), ...ixs, ...tip], P.system, tables));
+  // A sell proves its real account-rent funding in the existing simulation, with the maximum priority charge already paid.
+  // Every move is checked from inner instructions; the slow token-account list is read only when the node omits them.
+  // Idempotent ATA instructions for existing accounts consume no rent. Do not reserve their nominal rent twice.
+  const trialMicro = side === 'sell' ? microAt(JUP_UNITS_MAX) : 0;
+  const trialPriority = (BigInt(trialMicro) * BigInt(JUP_UNITS_MAX) + 999_999n) / 1_000_000n;
+  const trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, trialMicro), ...ixs, ...tip], P.system, tables));
   let sim = await simulateSeeing(trial, [user, coinAta, wsolAta]);
   if (sim.err) throw new Error(errText(sim, side, 'jupiter'));
   let others: { address: string; state: TokState }[] = [];
@@ -1639,9 +1642,11 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   }
   // the compute it really used (+25 %), and the priority price at THAT limit (it was clamped at a 700k ceiling before)
   const units = Math.min(JUP_UNITS_MAX, Math.ceil(Number(sim.unitsConsumed || JUP_UNITS_MAX) * 1.25) + 5_000);
+  // Solana rounds the priority charge up; normalize the simulated sell to the smaller signed limit exactly once.
+  const finalPriority = (BigInt(microAt(units)) * BigInt(units) + (side === 'sell' ? 999_999n : 0n)) / 1_000_000n;
   const why = jupBalanceGuard({
     side, amount, minOut, feesMax: feesAt(units), rentMax: rentSeen, user,
-    solBefore: have, solAfter: BigInt(post[0]?.lamports ?? 0) - (BigInt(microAt(units)) * BigInt(units)) / 1_000_000n, coinBefore, coinAfter: post[1] ? tokState(post[1])?.amount ?? null : (side === 'sell' ? 0n : null),
+    solBefore: have, solAfter: BigInt(post[0]?.lamports ?? 0) + trialPriority - finalPriority, coinBefore, coinAfter: post[1] ? tokState(post[1])?.amount ?? null : (side === 'sell' ? 0n : null),
     wsolBefore, wsolAfter: tokState(post[2]),
     others: others.map((t, i) => ({ address: t.address, before: t.state, after: tokState(post[3 + i]) })),
     wsolLamportsBefore: BigInt(wAcc?.lamports || 0), wsolLamportsAfter: BigInt(post[2]?.lamports || 0),
