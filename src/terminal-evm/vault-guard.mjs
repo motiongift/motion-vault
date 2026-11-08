@@ -2,6 +2,7 @@
 import { decodeFunctionData, decodeFunctionResult, encodeFunctionData, hashTypedData, keccak256, parseAbi, stringToHex, verifyTypedData } from 'viem';
 import { ZERO, ZERO_HASH, TERMINAL_EXECUTE_ABI, TERMINAL_TYPES, TERMINAL_PURPOSE, terminalRouteHash } from './quote-authorization.mjs';
 import { buildEvmCalls, verifyEvmRoute } from './routes/api-swap-evm-routes.mjs';
+import { STANDARD, sameHop } from './routes/api-swap-evm-standardRouter.mjs';
 export const ROUTER_READ_ABI = parseAbi([
     'function owner() view returns(address)', 'function signer() view returns(address)',
     'function feeRecipient() view returns(address)', 'function wrappedNative() view returns(address)',
@@ -19,8 +20,27 @@ const uint = x => { if (typeof x !== 'bigint' && (typeof x !== 'string' || !/^(0
     refuse('amount bounds'); return n; };
 const sorted = x => Array.isArray(x) ? x.map(sorted) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, sorted(x[k])])) : typeof x === 'string' ? x.toLowerCase() : x;
 export const terminalMarketKey = (token, route) => keccak256(stringToHex(JSON.stringify(sorted({ token, route }))));
+// Venues each chain may enable. 'standard-pool' = Standard (standardreserve.xyz) coin AFTER graduation, traded through
+// the Universal Router V4 path ETH -> USDG -> stock -> coin. The Standard bonding curve ('standard-curve') stays refused.
+export const SUPPORTED_VENUES = Object.freeze({ bsc: Object.freeze(['v2']), robinhood: Object.freeze(['v4', 'standard-pool']) });
+const DEFAULT_VENUES = Object.freeze({ bsc: Object.freeze(['v2']), robinhood: Object.freeze(['v4']) });
+export const terminalVenue = route => route?.type === 'standard' ? (route.stage === 'pool' ? 'standard-pool' : 'standard-curve') : route?.type;
+const STANDARD_POOL_KEYS = ['type', 'chainId', 'stage', 'router', 'factory', 'curve', 'stock', 'poolKey', 'stockPool', 'ethPool', 'feeBps', 'creatorTaxBps', 'snipeTaxBps', 'quoteSymbol'];
+const isAddr = x => typeof x === 'string' && /^0x[0-9a-fA-F]{40}$/.test(x);
+// Shape and pinned-constant checks before any RPC read. On-chain registry equality is verifyEvmRoute's job.
+function standardPoolShape(r, token) {
+    const pk = r.poolKey;
+    if (Object.keys(r).some(k => !STANDARD_POOL_KEYS.includes(k)) || r.stage !== 'pool' || !same(r.router, STANDARD.router) || !same(r.factory, STANDARD.factory) ||
+        !isAddr(r.curve) || !isAddr(r.stock) || !STANDARD.stocks[String(r.stock).toLowerCase()] ||
+        !sameHop(STANDARD.stocks[String(r.stock).toLowerCase()], r.stockPool) || !sameHop(STANDARD.ethPool, r.ethPool) ||
+        !pk || typeof pk !== 'object' || Object.keys(pk).some(k => !['currency0', 'currency1', 'fee', 'tickSpacing', 'hooks'].includes(k)) ||
+        !isAddr(pk.currency0) || !isAddr(pk.currency1) || !same(pk.hooks, STANDARD.hook) ||
+        !((same(pk.currency0, r.stock) && same(pk.currency1, token)) || (same(pk.currency1, r.stock) && same(pk.currency0, token))) ||
+        !Number.isInteger(pk.fee) || pk.fee < 0 || pk.fee > 100000 || !Number.isInteger(pk.tickSpacing) || pk.tickSpacing < 1 || pk.tickSpacing > 32767)
+        refuse('standard pool route');
+}
 /** `client` is the vault's pinned-chain client, never supplied by the caller.
- * Initial supported matrix is deliberately V2 BNB and V4 RH, own native wallet.
+ * Default matrix is V2 BNB and V4 RH, own native wallet; RH Standard graduated pools only when config.venues lists them.
  * The EIP712 quote is the server policy receipt; exact calldata must reproduce it.
  */
 export async function verifyTerminalEvm({ config, client, transaction, route, intent, now = Date.now() }) {
@@ -31,9 +51,20 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
         typeof transaction.data !== 'string' || transaction.data.length > 131074)
         refuse('transaction destination or shape');
     const chain = config.chainId === 56 ? 'bsc' : 'robinhood';
-    if (route?.chainId !== config.chainId || route.type !== (chain === 'bsc' ? 'v2' : 'v4'))
+    // Venue scope is deployment configuration. Absent `venues` == the original candidate (BNB v2 / RH v4) exactly.
+    const venues = config.venues === undefined ? DEFAULT_VENUES[chain] : config.venues;
+    if (!Array.isArray(venues) || venues.length < 1 || venues.some(v => !SUPPORTED_VENUES[chain].includes(v)) ||
+        (config.standardPoolRegistry !== undefined && config.standardPoolRegistry !== true && config.standardPoolRegistry !== false))
+        refuse('venue configuration');
+    const venue = terminalVenue(route);
+    if (route?.chainId !== config.chainId || !venues.includes(venue))
         refuse('venue not enabled in this candidate');
-    if (!config.marketKeys?.includes(terminalMarketKey(intent.token, route)))
+    if (venue === 'standard-pool')
+        standardPoolShape(route, intent.token);
+    // A Standard graduated pool is fully derived from the pinned Standard factory/curve registry (checked on chain
+    // by verifyEvmRoute below), so the deployment may accept it without a per-coin key. Every other market needs a key.
+    const registryMarket = venue === 'standard-pool' && config.standardPoolRegistry === true;
+    if (!registryMarket && !config.marketKeys?.includes(terminalMarketKey(intent.token, route)))
         refuse('market is not deployment-approved');
     if (!['buy', 'sell'].includes(intent.side) || !Number.isInteger(intent.slippageBps) || intent.slippageBps < 1 || intent.slippageBps > 3000)
         refuse('intent');
