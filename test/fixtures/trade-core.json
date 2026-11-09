@@ -1,7 +1,7 @@
 {
  "note": "TRADE CORE pins — docs/TRADE-CORE.md. Change only with the owner's explicit approval.",
- "approval": "2026-11-08: Да, исправляй ядро и выпускай после проверок. Exact scope: solEngine.ts jupiterTradeOne sell ATA rent funded by existing paid-priority simulation; no new RPC/await/retry. Approval recorded in docs/SOL-SELL-RENT-APPROVAL-2026-11-08.md.",
- "pinnedAt": "2026-11-08T10:29:47.380Z",
+ "approval": "2026-11-09, owner in chat about the \"Large buy\" modal: «это я тоже просил убрать нахуй» (remove it). Exact scope: src/webEngine.ts buy-limit defaults only (CAP_DEFAULT raised to robinhood 25 ETH / bsc 100 BNB / sol 500 SOL / elysium+hyperevm 500 HYPE, near unchanged; CAP_OLD + buyCap: a stored cap equal to the old default reads as unset); only the verifyCache…REASONS region pin moved (e0943002 -> 9e859d02); no other pin touched (the solEngine.ts pin stays as it was). Previous approval: 2026-11-08: Да, исправляй ядро и выпускай после проверок. Exact scope: solEngine.ts jupiterTradeOne sell ATA rent funded by existing paid-priority simulation; no new RPC/await/retry. Approval recorded in docs/SOL-SELL-RENT-APPROVAL-2026-11-08.md.",
+ "pinnedAt": "2026-11-09T13:54:28.985Z",
  "files": {
   "src/solEngine.ts": "fe0752b69a25114ed371438cb11a2b85530a2ea932e17bd550907ca102bf19c2",
   "src/bnbRouter.ts": "3537715ca01e1c0b2198b35e437e9cfb661b7e887b5aec0d1cb8d9a3c874b3cd",
@@ -50,6 +50,6 @@
   "src/webEngine.ts#MEV_FALLBACK_MS": "ec0b21419df25ed74f4fd2dc0dbd941587d698b1345ed4ee6e036e99d0994c0e",
   "src/webEngine.ts#MEV_HOLD_MS": "c896091aee01b1c06c90287db4756b84ad8d40b7242ec96ccaafa28d3c5d7124",
   "src/webEngine.ts#MEV_SHARED_HOLD_MS": "eb9cdd30cb9bf1b6cd509032f488c70b26bef9a10e25e570c339d0ef7d1931c8",
-  "src/webEngine.ts#verifyCache…REASONS": "e09430025ade5a0493bb078fad298aac4a1eaae54a0f745cbe0695a6b3719b59"
+  "src/webEngine.ts#verifyCache…REASONS": "9e859d0274bd8a4e4357921218190c7672f08005ee113ff3ce364278b957e569"
  }
 }

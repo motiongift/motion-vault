@@ -3008,13 +3008,17 @@ let tradesInFlight = 0;   // a page must not navigate away while a trade is bein
 // a buy above the per-wallet cap asks once (that buy), and a slippage setting above 15 % (V13; 22 % before) asks once (then it is
 // remembered up to that value). Inside them nothing is asked — normal trading pays no extra step.
 const LIMITS_KEY = 'trenches.engine.limits';
-const CAP_DEFAULT: Record<string, number> = { robinhood: 1, bsc: 5, sol: 25, near: 1000 };
+// (2026-11-09) the per-wallet cap is a last-resort guard against a hostile page, not a step in normal trading: defaults in
+// each lane's native unit (ETH, BNB, SOL, NEAR, HYPE). A stored cap equal to its lane's OLD default (1 ETH, 5 BNB, 25 SOL,
+// 1000 NEAR, 1 elsewhere) was never the user's choice (Settings stores only a change from the default): it reads as unset.
+const CAP_DEFAULT: Record<string, number> = { robinhood: 25, bsc: 100, sol: 500, near: 1000, elysium: 500, hyperevm: 500 };
+const CAP_OLD: Record<string, number> = { robinhood: 1, bsc: 5, sol: 25, near: 1000 };
 const laneKey = () => (SOL_MODE ? 'sol' : NEAR_MODE ? 'near' : CFG.key);
 const laneUnit = () => (SOL_MODE ? 'SOL' : NEAR_MODE ? 'NEAR' : NATIVE);
 type Limits = { cap?: Record<string, number>; slipOk?: number; buys?: Record<string, [number, number][]>; hourOk?: Record<string, { upTo: number; at: number }> };
 const loadLimits = (): Limits => { try { const v = JSON.parse(localStorage.getItem(LIMITS_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } };
 const saveLimits = (l: Limits) => { try { localStorage.setItem(LIMITS_KEY, JSON.stringify(l)); } catch {} };
-const buyCap = () => { const v = Number(loadLimits().cap?.[laneKey()]); return v > 0 ? v : CAP_DEFAULT[laneKey()] ?? 1; };
+const buyCap = () => { const k = laneKey(), v = Number(loadLimits().cap?.[k]); return v > 0 && v !== (CAP_OLD[k] ?? 1) ? v : CAP_DEFAULT[k] ?? 25; };
 // F-70 (V12): a rolling one-hour ledger of what every buy has spent on this lane (per-wallet size × wallet count),
 // so a cluster of individually-under-cap buys from a hostile page cannot drain a wallet set without ever asking.
 // Recorded BEFORE the trade goes out; re-read right before the write and the new entry APPENDED (old entries are
