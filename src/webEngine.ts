@@ -7837,7 +7837,9 @@ async function terminalTrade(request: unknown) {
   // Default-OFF flag: with no pinned policy this lane refuses before any busy/txEvent/click-clock/RPC side effect.
   if (!TERMINAL_SOL_POLICY) throw Object.assign(new Error('Terminal fee execution is not configured'), { code: 'TerminalFeeDisabled' });
   if (!SOL_MODE || !request || typeof request !== 'object') throw new Error('SOL terminal trade required');
-  const r = request as Record<string, unknown>;
+  // (review-engine 2026-11-09) own copy BEFORE the fee-policy check: the caller kept a reference to `request`, and the receipt
+  // was only cloned inside solTerminalTrade after several awaits — a swapped/mutated envelope would be checked here and signed there
+  const r = structuredClone(request) as Record<string, unknown>;
   if (Object.keys(r).some(k => !(TERMINAL_FEE_POLICY ? ['walletId', 'side', 'token', 'size', 'envelope', 'serialized', 'feePolicy'] : ['walletId', 'side', 'token', 'size', 'envelope', 'serialized']).includes(k)) ||
     typeof r.walletId !== 'string' || !['buy', 'sell'].includes(String(r.side)) || typeof r.token !== 'string' ||
     !SOL_ADDR.test(r.token) || typeof r.size !== 'number' || typeof r.serialized !== 'string' || r.serialized.length > 1644) throw new Error('Invalid terminal trade');
@@ -7857,7 +7859,13 @@ async function terminalTrade(request: unknown) {
       amount: typeof p.amount === 'string' ? p.amount : '', seen: FEE_POLICY_SEEN });
     assertQuoteMatchesDecision(decision, { pinned: TERMINAL_FEE_POLICY, quoteBps: p.feeBps, reservation: p.reservationId, quoteIssuedAtMs: Number(p.issuedAt) });
     if (decision.nonce) FEE_POLICY_SEEN!.add(decision.nonce, decision.expiresAtMs!);
+  } else {
+    // (review-engine 2026-11-09) no pinned fee-policy key = no discount: the quote signer alone must not lower the rate
+    const p = (r.envelope && typeof r.envelope === 'object' ? (r.envelope as { payload?: Record<string, unknown> }).payload : null) || {};
+    if (p.feeBps !== 20) throw Object.assign(new Error('Fee discount could not be verified; request a new quote at the standard rate'), { name: 'FeePolicyMismatch', code: 'rate' });
   }
+  // (review-engine 2026-11-09) one collector per chain: the Solana receipt policy and the limit fee leg must name the same treasury
+  if (TERMINAL_FEE_LEG.collectors.sol !== null && TERMINAL_FEE_LEG.collectors.sol !== TERMINAL_SOL_POLICY.feeRecipient) throw new Error('Terminal fee collector is not configured for this chain');
   const follow = (hash: string) => (async () => {
     for (let i = 0; i < 98; i++) {
       await new Promise(ok => setTimeout(ok, i < 25 ? 400 : 1500));
@@ -7904,6 +7912,9 @@ async function terminalTradeEvm(request: unknown) {
     const collector = TERMINAL_FEE_POLICY.collectors?.[key as 'robinhood' | 'bsc'];
     if (!collector || collector !== String(policy.feeRecipient).toLowerCase()) throw new Error('Terminal fee collector is not configured for this chain');
   }
+  // (review-engine 2026-11-09) one collector per chain: the router's pinned feeRecipient and the limit fee leg's collector must agree
+  const legCollector = TERMINAL_FEE_LEG.collectors[key as 'robinhood' | 'bsc'];
+  if (legCollector !== null && legCollector.toLowerCase() !== String(policy.feeRecipient).toLowerCase()) throw new Error('Terminal fee collector is not configured for this chain');
   keepHot();
   const own = requireUnlocked().find(a => a.id === r.walletId);
   if (!own || own.archived || own.hop || own.ext || !own.key) throw new Error('Own active EVM wallet required');
@@ -7940,6 +7951,9 @@ async function terminalTradeEvm(request: unknown) {
             assertQuoteMatchesDecision(decision, { pinned: TERMINAL_FEE_POLICY, quoteBps: Number(verified.quote.motionFeeBps),
               reservation: verified.claim.reservation, quoteIssuedAtMs: Number(verified.quote.issuedAt) * 1000 });
             if (decision.nonce) FEE_POLICY_SEEN!.add(decision.nonce, decision.expiresAtMs!);
+          } else if (Number(verified.quote.motionFeeBps) !== 20) {
+            // (review-engine 2026-11-09) no pinned fee-policy key = no discount: the quote signer alone must not lower the rate
+            throw Object.assign(new Error('Fee discount could not be verified; request a new quote at the standard rate'), { name: 'FeePolicyMismatch', code: 'rate' });
           }
           await tradeLimits(side, size, s, 1);
           verified = await check(); // dialogs cannot silently extend receipt validity
