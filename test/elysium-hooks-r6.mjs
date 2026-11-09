@@ -85,9 +85,10 @@ test('the rules: selectors and word layouts per hook (read on chain), on BUYS on
   assert.deepEqual(R(KLEOS_HOOK), [[KLEOS_HOOK, '0xbbb356a6' + w(SENDU), LE, 2, 0, 0, 1000n], [KLEOS_HOOK, '0xbbb356a6' + w(SENDU), LE, 3, 0, 0, 1000n], [KLEOS_HOOK, '0x8652edf9' + w(SENDU), HASH, 0, 0, 0, BigInt(id)]]);
   assert.deepEqual(R(KLEOS_HOOK2).map((r) => r.slice(2)), R(KLEOS_HOOK).map((r) => r.slice(2)), 'the mutable-tax Kleos hook: the same reads at every buy');
   const bcc1 = '0xbcc1f22d137c1d98dfa5548e4d4261d7aee06acc', b3e2 = '0xb3e25cdf4a2f42e7f37ab3ae43bfb90ee8052acc';
-  assert.deepEqual(R(bcc1), [[bcc1, '0xb5217bb4' + w(id), LE, 8, 0, 0, 100000n], [bcc1, '0xb5217bb4' + w(id), LE, 9, 0, 0, 100000n], [bcc1, '0xb5217bb4' + w(id), AFTER, 7, 0, 0, 60n]]);
-  assert.deepEqual(R(b3e2).map((r) => [r[2], r[3], r[6]]), [[LE, 9, 100000n], [LE, 10, 100000n], [AFTER, 8, 60n]]);
-  assert.deepEqual(R('0xd2f8e16ba85e9d160724e893b3ebce53d00e6acc').map((r) => [r[2], r[3], r[6]]), [[LE, 9, 100000n], [LE, 10, 100000n], [AFTER, 8, 60n]]);
+  // release 20 (ely-boxa-1109, owner variant B): the BOXA family has no launch-window (AFTER) rule; the fee caps stay
+  assert.deepEqual(R(bcc1), [[bcc1, '0xb5217bb4' + w(id), LE, 8, 0, 0, 100000n], [bcc1, '0xb5217bb4' + w(id), LE, 9, 0, 0, 100000n]]);
+  assert.deepEqual(R(b3e2).map((r) => [r[2], r[3], r[6]]), [[LE, 9, 100000n], [LE, 10, 100000n]]);
+  assert.deepEqual(R('0xd2f8e16ba85e9d160724e893b3ebce53d00e6acc').map((r) => [r[2], r[3], r[6]]), [[LE, 9, 100000n], [LE, 10, 100000n]]);
   const a073 = '0xa07345953c6efaf223676dabfe05421583a0e8cc';
   assert.deepEqual(R(a073).map((r) => [r[1].slice(0, 10), r[2], r[3], r[6]]), [['0x0eb1b8aa', LE, 0, 1000n], ['0x0eb1b8aa', LE, 1, 1000n], ['0x1daf62d6', LE, 0, 0n], ['0x55d1cb60', HASH, 0, BigInt(id)]]);
   const eleos = '0x8680965555dcea2a4c0ed3a29e59a8aa424e6acc';

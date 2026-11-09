@@ -179,9 +179,15 @@ const kleosRules = (h: string, token: Hex, poolId: Hex): ElyRule[] => {
   const t = callOf('0xbbb356a6', token);
   return [rule(h, t, ELY_RULE.LE, 2, ELY_HOOK_MAX_BPS), rule(h, t, ELY_RULE.LE, 3, ELY_HOOK_MAX_BPS), rule(h, callOf('0x8652edf9', token), ELY_RULE.HASH, 0, BigInt(poolId))];
 };
+// release 20 (ely-boxa-1109, owner 2026-11-09, variant B): the BOXA family (0xb3e2 / 0xd2f8 / 0xbcc1, and BOXA2 0x00c0 below) has NO
+// launch-window rule any more. "No buy before launchedAt + 60 s" made every BOXA launch "no pool" for its first minute (701 BOXA coins
+// answered "No pool of this token fills a buy" in 3 hours) while read-only sims inside the window showed the same fixed fee, no
+// surcharge and no revert, through BOXA's own router and motion's alike (B:\tmp\ely-boxa-1109\REPORT-RU.txt). The hard rules stay:
+// each side's fee <= 10 % read from the hook's own record of THIS pool (pools(poolId)). The click's own simulation still catches a
+// revert. Eleos (600 s), Volta / Flaunch (anti-snipe <= 10 %) and BOZO keep their windows.
 const boxaRules = (h: string, poolId: Hex, at: number): ElyRule[] => {
   const d = callOf('0xb5217bb4', poolId);
-  return [rule(h, d, ELY_RULE.LE, at + 1, ELY_HOOK_MAX_PIPS), rule(h, d, ELY_RULE.LE, at + 2, ELY_HOOK_MAX_PIPS), rule(h, d, ELY_RULE.AFTER, at, 60n)];
+  return [rule(h, d, ELY_RULE.LE, at + 1, ELY_HOOK_MAX_PIPS), rule(h, d, ELY_RULE.LE, at + 2, ELY_HOOK_MAX_PIPS)];
 };
 export const ELY_HOOK_RULES: Readonly<Record<string, (x: { token: Hex; poolId: Hex }) => ElyRule[]>> = {
   // poolFees(poolId) 0x2cb79b72: [baseFeeBps, antiSnipeFeeBps, antiSnipeSecs, launchedAt, …]: base ≤ 500; inside the window the fee ≤ 10 %
@@ -192,7 +198,7 @@ export const ELY_HOOK_RULES: Readonly<Record<string, (x: { token: Hex; poolId: H
   // taxOf(coin) 0xbbb356a6: words 2, 3 = buy / sell bps; poolKeyOf(coin) 0x8652edf9 = exactly this pool
   '0xd5068e7f4e2d70d5efbac6fd28a8407252e1eacc': ({ token, poolId }) => kleosRules('0xd5068e7f4e2d70d5efbac6fd28a8407252e1eacc', token, poolId),
   '0x0c835e6a51717a514144d95c7f0a1c640179e0cc': ({ token, poolId }) => kleosRules('0x0c835e6a51717a514144d95c7f0a1c640179e0cc', token, poolId),
-  // pools(poolId) 0xb5217bb4: words 7 / 8 / 9 = launchedAt / buyFee / sellFee (pips); no buy before launchedAt + 60 s
+  // pools(poolId) 0xb5217bb4: words 7 / 8 / 9 = launchedAt / buyFee / sellFee (pips); the fees <= 10 % (release 20: no launch window)
   '0xbcc1f22d137c1d98dfa5548e4d4261d7aee06acc': ({ poolId }) => boxaRules('0xbcc1f22d137c1d98dfa5548e4d4261d7aee06acc', poolId, 7),
   // the same at words 8 / 9 / 10
   '0xb3e25cdf4a2f42e7f37ab3ae43bfb90ee8052acc': ({ poolId }) => boxaRules('0xb3e25cdf4a2f42e7f37ab3ae43bfb90ee8052acc', poolId, 8),
@@ -281,7 +287,8 @@ const isHash = (h: unknown): h is string => typeof h === 'string' && /^0x[0-9a-f
 const ascRules = (h: string, poolId: Hex): ElyRule[] => [rule(h, callOf('0xcaa93ee8', poolId), ELY_RULE.LE, 0, ELY_HOOK_MAX_PIPS)];
 const boxa2Rules = (h: string, token: Hex, poolId: Hex): ElyRule[] => {
   const f = callOf('0x04d4d864', poolId);
-  return [rule(h, f, ELY_RULE.LE, 0, ELY_HOOK_MAX_PIPS), rule(h, f, ELY_RULE.LE, 1, ELY_HOOK_MAX_PIPS), rule(h, callOf('0xb5217bb4', poolId), ELY_RULE.AFTER, 10, 60n),
+  // release 20 (variant B, see boxaRules): no launch window; fees <= 10 % and the coin's own record of exactly this pool stay
+  return [rule(h, f, ELY_RULE.LE, 0, ELY_HOOK_MAX_PIPS), rule(h, f, ELY_RULE.LE, 1, ELY_HOOK_MAX_PIPS),
     rule(h, callOf('0x988b1fa7', token), ELY_RULE.HASH, 0, BigInt(keccak256(poolId)))];
 };
 const bozoRules = (h: string, poolId: Hex): ElyRule[] => {
@@ -357,6 +364,29 @@ export type ElyRoute = {
 // release 17: `via` = the HYPE leg of a two-hop candidate (poolKey / pin / rules above are then the coin's leg; tier = the weaker of the two)
 export type ElyViaLeg = { token: Hex; poolKey: V4PoolKey; pool: Hex; check: { target: Hex; data: Hex }; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier; coinTier?: ElyHookTier };
 export type ElyCandidate = { venue: ElyVenue; pair: 'native' | 'weth'; router: Hex; routerPin: Hex; poolKey?: V4PoolKey; fee?: number; pool: Hex; check: { target: Hex; data: Hex }; hinted?: boolean; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier; via?: ElyViaLeg };
+
+// release 20 (ely-boxa-1109): why no candidate filled a buy, from the probe's own revert data (err = its first 256 bytes) — '' when not
+// known. Used by the lane's /route answer instead of the bare "No pool of this token fills a buy". Pure.
+const EMPTY_POOL_ERRS = ['0x5212cba1', '0x316cf0eb', '0x7c9c6e8f'];   // CurrencyNotSettled (exact-in ran out of liquidity) / V3InvalidSwap / PriceLimitAlreadyExceeded
+const ALLOWLIST_ERRS = ['0x5306d7f8', '0x6f7a5275'];                 // OnlySwingRouterDuringLaunch(address) / NotAllowlisted(address)
+export function elyRevertWhy(err: string): string {
+  const e = lc(err), sel = e.slice(0, 10);
+  if (EMPTY_POOL_ERRS.includes(sel)) return 'the pool has no liquidity to buy from (empty, or all of it on the HYPE side)';
+  if (sel !== '0x90bfb865') return '';   // WrappedError(address target, bytes4 selector, bytes reason, bytes details)
+  const call = '0x' + e.slice(10 + 64, 10 + 64 + 8), off = parseInt(e.slice(10 + 128, 10 + 192) || 'x', 16);
+  const inner = Number.isFinite(off) && off < 0x1000 ? '0x' + e.slice(10 + off * 2 + 64, 10 + off * 2 + 72) : '';
+  if (inner === '0xe09f0331') return 'the launchpad has not opened trading on this pool yet (its hook answers TradingNotOpen)';
+  if (ALLOWLIST_ERRS.includes(inner)) return 'this pool\'s hook lets only its launchpad\'s own router trade (an allow-list); motion does not route through third-party routers';
+  if (inner === '0x629d4d94') return 'this pool\'s hook wants swapper data in hookData, which motion\'s router does not send';
+  if (inner === '0xe450d38c') return 'the pool has no liquidity to buy from (it holds no coins)';
+  if (call === '0x575e24b4' || call === '0xb47b2fb1') return `this pool's hook refused the buy${inner === '0x4e487b71' ? ' (a Panic in its code)' : inner.length === 10 ? ' (error ' + inner + ')' : ''}`;
+  if (call === '0xa9059cbb' || call === '0x23b872dd') return 'the coin refused the transfer out of the pool';
+  return '';
+}
+export function elyNoFillWhy(seen: (ElySeen | null | undefined)[]): string {
+  for (const s of seen) if (s && s.ran && !s.buyOk && s.err) { const w = elyRevertWhy(s.err); if (w) return w; }
+  return '';
+}
 
 // ── release 17: two hops through one listed token (owner in chat 2026-11-09: the ~100 Volta / Montra / Ascend coins quoted in VOLTA /
 // KNTQ / USDC become tradeable; B:\tmp\ely-2hop) ──
