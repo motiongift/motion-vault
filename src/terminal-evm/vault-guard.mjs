@@ -4,6 +4,7 @@ import { ZERO, ZERO_HASH, TERMINAL_EXECUTE_ABI, TERMINAL_TYPES, TERMINAL_PURPOSE
 import { buildEvmCalls, verifyEvmRoute, EVM_CHAINS } from './routes/api-swap-evm-routes.mjs';
 import { STANDARD, sameHop } from './routes/api-swap-evm-standardRouter.mjs';
 import { enabledTerminalVenueTypes, verifyBnbVenue, BNB_EXTRA_VENUES } from './bnb-venues.mjs';
+import { registryClass, registryScope, verifyRegistryMarket } from './venue-registry.mjs';
 export const ROUTER_READ_ABI = parseAbi([
     'function owner() view returns(address)', 'function signer() view returns(address)',
     'function feeRecipient() view returns(address)', 'function wrappedNative() view returns(address)',
@@ -93,7 +94,12 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
     // TERMINAL_EVM_BNB_VENUES (default empty) may add v3/inf/four/flap on BNB only; empty = original v2 (bsc venues can only be ['v2']).
     const allowed = chain === 'bsc' ? enabledTerminalVenueTypes('bsc', bnbVenues) : venues;
     const pons = route?.type === 'pons' && ponsV2Enabled(config, chain);
-    if (route?.chainId !== config.chainId || (!allowed.includes(venue) && !pons))
+    // Release 20: a venue class the deployment lists in `registry` (venue-registry.mjs) needs no per-coin market key; it is proven
+    // on chain below (pinned code hashes + factory / registry reads). Absent `registry` = release-19 scope exactly.
+    const registry = registryScope(chain, config.registry);
+    const cls = !pons && registry.length ? registryClass(chain, route, intent?.token) : null;
+    const registryOn = cls !== null && registry.includes(cls);
+    if (route?.chainId !== config.chainId || (!allowed.includes(venue) && !pons && !registryOn))
         refuse('venue not enabled in this candidate');
     if (pons) {
         if (!same(config.ponsV2.factory, EVM_CHAINS.robinhood.ponsFactory) || typeof config.ponsV2.factoryCodeHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(config.ponsV2.factoryCodeHash))
@@ -110,7 +116,7 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
             standardPoolShape(route, intent.token);
         // A Standard graduated pool is fully derived from the pinned Standard factory/curve registry (checked on chain
         // by verifyEvmRoute below), so the deployment may accept it without a per-coin key. Every other market needs a key.
-        const registryMarket = venue === 'standard-pool' && config.standardPoolRegistry === true;
+        const registryMarket = (venue === 'standard-pool' && config.standardPoolRegistry === true) || registryOn;
         if (!registryMarket && !config.marketKeys?.includes(terminalMarketKey(intent.token, route)))
             refuse('market is not deployment-approved');
     }
@@ -160,6 +166,8 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
     await verifyEvmRoute({ chain, route, token: intent.token, client });
     if (chain === 'bsc' && BNB_EXTRA_VENUES.includes(route.type))
         await verifyBnbVenue({ route, token: intent.token, side: intent.side, amount, client });
+    if (registryOn)
+        await verifyRegistryMarket({ chain, cls, route, token: intent.token, client });
     const executor = await read('executorFor', [q.trader, q.nonce]);
     const plan = buildEvmCalls({ chain, route, token: intent.token, side: intent.side, amount: buy ? amount - amount * BigInt(q.motionFeeBps) / 10000n : amount, executor, deadline: q.deadline });
     if (pons) {

@@ -1,0 +1,2841 @@
+{
+ "source": "GET https://motion.gift{,/bsc}/api/token/<t>/route, 2026-11-09 ~17:30 UTC: analytics top coins + board sample (B:/tmp/fee-coverage/measure)",
+ "routes": [
+  {
+   "chain": "robinhood",
+   "token": "0x061732dc141e0a2d37f5fa91cf5343f24064e60f",
+   "symbol": "MOTION",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x061732dc141e0a2d37f5fa91cf5343f24064e60f",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xa41eeaeba92f79b25237d05244e81e528b3f2062",
+   "symbol": "ORGENT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0xa41eeaeba92f79b25237d05244e81e528b3f2062",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x0ddcab9ae04bda0c87ecc1640636fa11e8e613e8",
+   "symbol": "TEXEL",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x0ddcab9ae04bda0c87ecc1640636fa11e8e613e8",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x0cfa417ee7748a13de76389d861abd1307ae1fa2",
+   "symbol": "IFSO",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x0cfa417ee7748a13de76389d861abd1307ae1fa2",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x9f4ba41f91a59a34e17ee8c9eb3a51363b11abd5",
+   "symbol": "GRIFT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x9f4ba41f91a59a34e17ee8c9eb3a51363b11abd5",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x000de658153f47f23e92973c8eb1e89762703676",
+   "symbol": "FOBO",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "USDG",
+    "quoteDecimals": 6,
+    "pool": "0xea65a9fa9ff9ac91e16eb5e4c19ab6f4563a7961",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xc4f730335fb9e439ca5552f7b52b8e638c4245b0",
+   "symbol": "NOTE",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0xc4f730335fb9e439ca5552f7b52b8e638c4245b0",
+     "fee": 10000,
+     "tickSpacing": 200,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x88f219e1dabf38027e7381f6317b71b7161ab736",
+   "symbol": "BURZO",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x642ea41182469a67407633e6b53652874bbf9148",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 200,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xa2753fd0bc86b8ceb55ffd2698679c7f214785f1",
+   "symbol": "LETRO",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0xa2753fd0bc86b8ceb55ffd2698679c7f214785f1",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xec243bbae17a826462b0bf006705feca0959c703",
+   "symbol": "KSTX",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x08b63a97228afdb21d9752388bbb26d1cb0a80e4",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 289,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "bsc",
+   "token": "0x975faed559b45feb8a5c5ceb940e614302947777",
+   "symbol": "招财猫",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xb574b9a4ac85a588e66f4cb8fa4edf30ca066172",
+    "quoteToken": "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+     "0x975faed559b45feb8a5c5ceb940e614302947777"
+    ],
+    "quoteSymbol": "XAUt",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x72be1277e198d0c476869253cb4e62807e14533c",
+   "symbol": "RAETO",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "USDG",
+    "quoteDecimals": 6,
+    "pool": "0xbefcc1140c2cc155c6acdd9c88ddfbed5b5fa54c",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xedbf91223639800bcd5756815caf908df3b890be",
+   "symbol": "PRIORS",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0xedbf91223639800bcd5756815caf908df3b890be",
+     "fee": 10000,
+     "tickSpacing": 100,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xfce34d21a92069100e3226638140706cf03a266e",
+   "symbol": "GLDSTN",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0xfce34d21a92069100e3226638140706cf03a266e",
+     "fee": 10000,
+     "tickSpacing": 100,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x6511c233790ec10f7d673c64dc82c3f941d57828",
+   "symbol": "OAK",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x6511c233790ec10f7d673c64dc82c3f941d57828",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x39dbed3a2bd333467115de45665cc57f813c4571",
+   "symbol": "PONS",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0xed50bdeea8adc232f159486192a4157281d722ff",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xacc8de336f5d2366fa7334383d8fab73499f582a",
+   "symbol": "FOREVER",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0xacc8de336f5d2366fa7334383d8fab73499f582a",
+     "fee": 10000,
+     "tickSpacing": 100,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x63b5c2b1eb93ad62ea06560370f4f317ee1b97d3",
+   "symbol": "LMNI",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x63b5c2b1eb93ad62ea06560370f4f317ee1b97d3",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x9862d6478cb8098645815ff27f91efbc659f7777",
+   "symbol": "BINF",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x25ee4fa4bff5363d47496e68377b1241e8e21a47",
+    "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+     "0x9862d6478cb8098645815ff27f91efbc659f7777"
+    ],
+    "quoteSymbol": "NVDAB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+   "symbol": "NVDAB",
+   "route": {
+    "type": "v3",
+    "chainId": 56,
+    "fee": 500,
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteSymbol": "USDT",
+    "quoteDecimals": 18,
+    "pool": "0xcc2bffaec373a6004bb6ccc8a62cdd66061f7c6a",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x113d68c8cca4fe5ba25f49c00784079d168e7777",
+   "symbol": "うさぎ",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xd6fe21107c05a153d419edc3d93072066d52dff9",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x113d68c8cca4fe5ba25f49c00784079d168e7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb2971c7f6251c50d2f9854dad8ff0717032a7777",
+   "symbol": "A畜",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x24b518b332543a4e1c3649d063dab199d103760a",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 0,
+    "sellTaxBps": 100,
+    "quoteSymbol": "oANTHROPIC",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0x24b518b332543a4e1c3649d063dab199d103760a"
+    ],
+    "bridgeFees": [
+     100,
+     2500
+    ]
+   },
+   "cls": null
+  },
+  {
+   "chain": "bsc",
+   "token": "0x3f15b50f4631ca33ebf06bef7b6f9ad2448d7777",
+   "symbol": "WIN界",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x35f8b07934a1eb33d23dcbd113c4fef6ab257710",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x3f15b50f4631ca33ebf06bef7b6f9ad2448d7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+   "symbol": "BNCB",
+   "route": {
+    "type": "v3",
+    "chainId": 56,
+    "fee": 2500,
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "quoteSymbol": "WBNB",
+    "quoteDecimals": 18,
+    "pool": "0x320e8096e5e7a46e43446141a5b15d801fc596f5",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x7de1606230aa70802caecf1a3e90039a6265b1c4",
+   "symbol": "Burn",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x53895464c524c6fdd82ad5189bf92d9b798c6a51",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x7de1606230aa70802caecf1a3e90039a6265b1c4"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xcfd5f0f51eba4151f9a593279d77cefedd187777",
+   "symbol": "FOM",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xf23c1cf81d9914f82283d65a7688128eac8cd716",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+     "0xcfd5f0f51eba4151f9a593279d77cefedd187777"
+    ],
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xc0a7c16e54ad236b7f07fd3dd6187780a4db7777",
+   "symbol": "安小将",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xde27e01ef32005dd9764625e300924f5f4ddc192",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+     "0xc0a7c16e54ad236b7f07fd3dd6187780a4db7777"
+    ],
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3",
+   "symbol": "ORBIO",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x34f73f488309208b8cb6012eb47ffeb086ca1c2d",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xb5c8efc168e1832357fa90c2e9b45c2dce8b78fa",
+   "symbol": "QQQ",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0xfb4c5223f2bc9caca95669b36b768305f8283855",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 200,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "bsc",
+   "token": "0x5b1910eaad6450e50f816082aa078c41f10c292f",
+   "symbol": "TSLAB",
+   "route": {
+    "type": "v3",
+    "chainId": 56,
+    "fee": 2500,
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteSymbol": "USDT",
+    "quoteDecimals": 18,
+    "pool": "0xb0f5e5400e8f0f7c242f2b7740c004f020579c41",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+   "symbol": "XAUt",
+   "route": {
+    "type": "v3",
+    "chainId": 56,
+    "fee": 500,
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteSymbol": "USDT",
+    "quoteDecimals": 18,
+    "pool": "0x83a0a8a723262651ae9c54bbba929f167443bc59",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb0c2ab5af4028461ace3f6e1c33a4ee1404e7777",
+   "symbol": "CETS",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xdabbd019c0174bdae6354f32b158d42e4a0e7489",
+    "quoteToken": "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+     "0xb0c2ab5af4028461ace3f6e1c33a4ee1404e7777"
+    ],
+    "quoteSymbol": "XAUt",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x14f6a94909c407854390aa2d2462a3095d317777",
+   "symbol": "旺柴",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x223c585c50d4747653a57d577707b1eadbb2cfb0",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x14f6a94909c407854390aa2d2462a3095d317777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xf49725118cb0707b8706ffffe895f3ab16da7777",
+   "symbol": "b-money",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xbae8327deb97de23940d877134cd16f1bed0f83d",
+    "quoteToken": "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
+     "0xf49725118cb0707b8706ffffe895f3ab16da7777"
+    ],
+    "quoteSymbol": "BTCB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x2cb3e25df8c79e1b2645c9bedd143c38b4f10aac",
+   "symbol": "LASTTRUCK",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x2cb3e25df8c79e1b2645c9bedd143c38b4f10aac",
+     "currency1": "0x322f0929c4625ed5bad873c95208d54e1c003b2d",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "other",
+    "quoteToken": "0x322f0929c4625ed5bad873c95208d54e1c003b2d",
+    "quoteSymbol": "TSLA",
+    "bridgeFee": 3000,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x322f0929c4625ed5bad873c95208d54e1c003b2d"
+    ],
+    "bridgeFees": [
+     3000
+    ]
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x04e26330bc053d7e03b23ecc67f759c085b17aac",
+   "symbol": "MausBot",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x04e26330bc053d7e03b23ecc67f759c085b17aac",
+     "currency1": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "other",
+    "quoteToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "quoteSymbol": "NVDA",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x9180ac0514f041ce01a6d95b69f195a746841e18",
+   "symbol": "WIFE",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x9180ac0514f041ce01a6d95b69f195a746841e18",
+     "currency1": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+     "fee": 8388608,
+     "tickSpacing": 8,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "other",
+    "quoteToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "quoteSymbol": "NVDA",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xc011581a62964627878f259478eec4b40b0f9aac",
+   "symbol": "baewatch",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0xc011581a62964627878f259478eec4b40b0f9aac",
+     "currency1": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "other",
+    "quoteToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "quoteSymbol": "NVDA",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x8a76e8c488510e785ebf0b73be8f042c2d87c616",
+   "symbol": "SKILRY",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x2823dc020795d23e6d770d2084ae27ae72f70880",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xf214b7d09625ac523b9e2dc23645c80ee55d201f",
+   "symbol": "GNOSIS",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0xfcbec02d8d4aeede42573279da63e083b070e9dd",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xef4f82552381679a71861566a813bbdb7ab90fe5",
+   "symbol": "SI",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x1c5ad763e7a6f9d318ceb90db7b2acb40d7001fb",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x586f78180bee8370b1e14d81947c0a3128237cee",
+   "symbol": "SI",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x775f0bdc7d4b99807db0f0e200d63f8b635959ae",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x9082432e1c9286cbf47c1434636ff9325f7adf93",
+   "symbol": "EXCLNT",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x4cacf95a5a99fdcac7c8ea7c2fe93de233d13c97",
+    "pairToken": "0x0000000000000000000000000000000000000000",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": [],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x4cd383aed9ab1b2d307e099f97e9f6cc61dbbaac",
+   "symbol": "DEBTOCT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "currency1": "0x4cd383aed9ab1b2d307e099f97e9f6cc61dbbaac",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "weth",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x22bd7f59f3fee51f7520a34ad399d29b1e01baac",
+   "symbol": "Propipe ",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "currency1": "0x22bd7f59f3fee51f7520a34ad399d29b1e01baac",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "weth",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x100765a16f42636bd84ee1e86bc5107b84bcdba3",
+   "symbol": "CHOP",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "currency1": "0x100765a16f42636bd84ee1e86bc5107b84bcdba3",
+     "fee": 8388608,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "weth",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x95773cdcecad005e9da3d45779432e9c5ca101e9",
+   "symbol": "POLLY",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x49490b6dee7a251489827ed04c60235549679aec",
+    "pairToken": "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3",
+    "feeBps": 100,
+    "creatorTaxBps": 150,
+    "bridgeFee": 3000,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3"
+    ],
+    "bridgeFees": [
+     3000
+    ],
+    "quoteSymbol": "ORBIO"
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x0837db3e38bbdd4c64f99e7cfa9d1a128c340ee8",
+   "symbol": "POLLY",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x062c50409baa105c69de08a7444ae7df44714f8a",
+    "pairToken": "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3",
+    "feeBps": 100,
+    "creatorTaxBps": 150,
+    "bridgeFee": 3000,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3"
+    ],
+    "bridgeFees": [
+     3000
+    ],
+    "quoteSymbol": "ORBIO"
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xa0489149e96da7e1da4bfade9e70508fe29e6b7b",
+   "symbol": "NVDAC",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x83189c09c276c2eadcb5e2ffc883a523c948729e",
+    "pairToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "feeBps": 100,
+    "creatorTaxBps": 100,
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ],
+    "quoteSymbol": "NVDA"
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x09b0f00e38c9b6f0d71c009395061bc6b89294d7",
+   "symbol": "QUACK",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0xae2071f0601893291fc65aee6f8a313e3ee6a1ba",
+    "pairToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ],
+    "quoteSymbol": "NVDA"
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x1f474ea201cb5401eac990784d0149f729c9e922",
+   "symbol": "BTC4",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x1f474ea201cb5401eac990784d0149f729c9e922",
+     "currency1": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "fee": 10000,
+     "tickSpacing": 200,
+     "hooks": "0x4e3468951d49f2eea976ed0d6e75ffcb44a9a544"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-doppler"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x7bae7a90c7328969614b3efbee8c4a9026befea8",
+   "symbol": "FLORA",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0x7bae7a90c7328969614b3efbee8c4a9026befea8",
+     "fee": 9000,
+     "tickSpacing": 90,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x66dc887bf4f13ae237f8ac0864a4e067957b8e91",
+   "symbol": "AI",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x518b3fcea147d55d28f83bf478dda54493337e53",
+    "pairToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x59efa08f11d36461c10707fcf685f8f98a8dae37",
+   "symbol": "IDEA",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0xbf1bb614bb731b8a0e24d7b55a3a302d1e5bc1ad",
+    "pairToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "feeBps": 100,
+    "creatorTaxBps": 100,
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x0491343a2f4fc4f3992b3965622da79b6ead353e",
+   "symbol": "AI",
+   "route": {
+    "type": "pons",
+    "chainId": 4663,
+    "curve": "0x3ca793955f892d4077c4f75587029c9870a71908",
+    "pairToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "feeBps": 100,
+    "creatorTaxBps": 0,
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ],
+    "quoteSymbol": ""
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xaaeddafaea5d4529e671649aeaf521122d0c7777",
+   "symbol": "KIMJONGUN",
+   "route": {
+    "type": "flap",
+    "chainId": 4663,
+    "portal": "0x26605f322f7ff986f381bb9a6e3f5dab0beaeb09",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 1000,
+    "sellTaxBps": 1000,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": null
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xbfb5d4d39cbd098b191f425aa60e4badfcafd6a4",
+   "symbol": "ANUBIS",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0xbfb5d4d39cbd098b191f425aa60e4badfcafd6a4",
+     "fee": 9000,
+     "tickSpacing": 90,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x688d8c004af3c292330fea8af8a594adc8c3b0c8",
+   "symbol": "AGENTDOM",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x688d8c004af3c292330fea8af8a594adc8c3b0c8",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x608de3e89a6506b881125f67463623d7eb063fba",
+   "symbol": "NOVASI",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x608de3e89a6506b881125f67463623d7eb063fba",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x8c214b77f7ededa453ebd43df848cc02ecc1b431",
+   "symbol": "LGND",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x8c214b77f7ededa453ebd43df848cc02ecc1b431",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xf6de8b3b7db6eaba4d0ecdc374e56be5eeb6b2f2",
+   "symbol": "AGI",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+     "currency1": "0xf6de8b3b7db6eaba4d0ecdc374e56be5eeb6b2f2",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "other",
+    "quoteToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "quoteSymbol": "NVDA",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x859d1a7ce265c24996a95630dc35a4fecb5a5ad0",
+   "symbol": "HEAT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5e81213613b6b86eab4c6c50d718d34359459786",
+     "currency1": "0x859d1a7ce265c24996a95630dc35a4fecb5a5ad0",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "other",
+    "quoteToken": "0x5e81213613b6b86eab4c6c50d718d34359459786",
+    "quoteSymbol": "TTWO",
+    "bridgeFee": 3000,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5e81213613b6b86eab4c6c50d718d34359459786"
+    ],
+    "bridgeFees": [
+     3000
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xdb4aa5e5a6c050adcb7ec973ee6bab5599243892",
+   "symbol": "DIGIT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+     "currency1": "0xdb4aa5e5a6c050adcb7ec973ee6bab5599243892",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "other",
+    "quoteToken": "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec",
+    "quoteSymbol": "NVDA",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x51d1abab4d1e7b50642a25d3f7b2823067ebf9d7",
+   "symbol": "CRCL",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x51d1abab4d1e7b50642a25d3f7b2823067ebf9d7",
+     "currency1": "0xdf0992e440dd0be65bd8439b609d6d4366bf1cb5",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "other",
+    "quoteToken": "0xdf0992e440dd0be65bd8439b609d6d4366bf1cb5",
+    "quoteSymbol": "CRCL",
+    "bridgeFee": 10000,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0xdf0992e440dd0be65bd8439b609d6d4366bf1cb5"
+    ],
+    "bridgeFees": [
+     10000
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xef67e3064bef1a27e81925ec7132f23e533bd5f6",
+   "symbol": "GME",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x1b0e319c6a659f002271b69db8a7df2f911c153e",
+     "currency1": "0xef67e3064bef1a27e81925ec7132f23e533bd5f6",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "other",
+    "quoteToken": "0x1b0e319c6a659f002271b69db8a7df2f911c153e",
+    "quoteSymbol": "GME",
+    "bridgeFee": 500,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x1b0e319c6a659f002271b69db8a7df2f911c153e"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xe4119a9bfcc86915368502b598bbed4745f7051d",
+   "symbol": "WOFL",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0xe4119a9bfcc86915368502b598bbed4745f7051d",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xb1f1c8d98efb58389cd019d6708d17a2e8f50a13",
+   "symbol": "WFNT",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0xb1f1c8d98efb58389cd019d6708d17a2e8f50a13",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x94641b97010608c3827fb058074889f19868ff33",
+   "symbol": "VRAX",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "currency1": "0x94641b97010608c3827fb058074889f19868ff33",
+     "fee": 0,
+     "tickSpacing": 200,
+     "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-launcher"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xbf3e53713a53e9c3d5d1ddc25dd2c65669244663",
+   "symbol": "PCC",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x01d861dcc34cb22d7b520c54ba147baa9e8df894",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x79bbf4508b1391af3a0f4b30bb5fc4aa9ab0e07c",
+   "symbol": "Anon",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x9b5a506b26a4d0710046401e98c3fde6f7da8029",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x1d11f0496982706c5e14a514d4e79f2e6bde4516",
+   "symbol": "DJT",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x81b4caac5d313ea0c831c4d16f8c23937602dcf1",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x0e0d2c89a5a019fe1cf762e5e33187631dacc21b",
+   "symbol": "CHUMP",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x714442e9a611f8561a7df108d6d925132937cfb8",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xc72f232a6869e6cf34dc06129affd07f8a2a246a",
+   "symbol": "MANCER",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x543127d6a1932689faacc1afad4a81146d9ccf54",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xd7321801caae694090694ff55a9323139f043b88",
+   "symbol": "JUGGERNAUT",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x588b0785f50063260003b7790c42f1ef74902746",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xe934e36a439c94017b64a3fece66af12099abf50",
+   "symbol": "STONKBROKER",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x9cd74d5980a4bf60408b9ba2b0f6a3d368ebf594",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x20024e485c0b22b42855589700721b28320a7777",
+   "symbol": "PRISM",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0xf1d6b8ecaf2271233bed626fb1962bc0c39cb1f3",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18",
+   "symbol": "AI",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0xc4a21f9d6485fc5893dd4a491b320a83daf4da1d",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x2fc6de9c65a620f918ca7d1191d3afa495ca2898",
+   "symbol": "LOCKRA",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x2fc6de9c65a620f918ca7d1191d3afa495ca2898",
+     "currency1": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "fee": 99999,
+     "tickSpacing": 1000,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+   "symbol": "SPCX",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 500,
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "USDG",
+    "quoteDecimals": 6,
+    "pool": "0xc61284332117c3fb23a2a56cceffd07f7af60029",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0xf44702b17d9abd53815f703e772f35e9c71a53af",
+   "symbol": "RAXOL",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "USDG",
+    "quoteDecimals": 6,
+    "pool": "0x3f350f6c0ac7ad8dc500e6a920b30e689ba1c6b0",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x8ff92566f2e81bdd68edfaa8cde73942a723796b",
+   "symbol": "VEX",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x0000000000000000000000000000000000000000",
+     "currency1": "0x8ff92566f2e81bdd68edfaa8cde73942a723796b",
+     "fee": 99000,
+     "tickSpacing": 990,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "native",
+    "quoteToken": "",
+    "quoteSymbol": "",
+    "bridgeFee": 0,
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x32ac8c1d7672667d5ebdea22935f7b06fc8d496f",
+   "symbol": "HOOD",
+   "route": {
+    "type": "v4",
+    "chainId": 4663,
+    "poolKey": {
+     "currency0": "0x32ac8c1d7672667d5ebdea22935f7b06fc8d496f",
+     "currency1": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+     "fee": 2000,
+     "tickSpacing": 20,
+     "hooks": "0x0000000000000000000000000000000000000000"
+    },
+    "pair": "usdg",
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v4-hookless"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x116f00968269b7bfbad4109ce591d6e74c0601d4",
+   "symbol": "NET",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 3000,
+    "quoteToken": "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    "quoteSymbol": "USDG",
+    "quoteDecimals": 6,
+    "pool": "0xa9caebb1b2fb2b954f192572b309aef1caf6a330",
+    "bridgeFee": 100,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+     "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x451b42a15100c340ca12f7c66de06fac5ea2d751",
+   "symbol": "BOW",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0xdaf8038e8eab4a56bd1c0485d414241622384fef",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "robinhood",
+   "token": "0x18e674231a58c239dc7daedcffe15ec3a24cff5c",
+   "symbol": "HOOKR",
+   "route": {
+    "type": "v3",
+    "chainId": 4663,
+    "fee": 10000,
+    "quoteToken": "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    "quoteSymbol": "WETH",
+    "quoteDecimals": 18,
+    "pool": "0x42b19e5e3f28c4148c518444546f102f6ba87ab1",
+    "bridgeFee": 0,
+    "bridgeHops": [
+     "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+    ],
+    "bridgeFees": []
+   },
+   "cls": "v3"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x5c63148ca001c744d0b55432d7dcbc7179c47777",
+   "symbol": "SKILRY",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 900,
+    "sellTaxBps": 900,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb6a28126422dcf1fa1e456d3df677dfbe44e7777",
+   "symbol": "牛逼飞天",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 400,
+    "sellTaxBps": 600,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xd85392675835aae749872352a4c40d0993507777",
+   "symbol": "LASTTRUCK",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 900,
+    "sellTaxBps": 900,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb1e87b2d9085dbe66e0e9e803364c71008457777",
+   "symbol": "TMAP",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 900,
+    "sellTaxBps": 900,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xc8f2bccabde5647a84aadb7ce20a2a9b5d0e7777",
+   "symbol": "Tmap",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "nativeToQuote": false,
+    "buyTaxBps": 1000,
+    "sellTaxBps": 1000,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xcc7c37047f014cd59488675f1ff679a2032bffff",
+   "symbol": "Osaru",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x0ea3198799118be83cbed6877f06b36fc3c8ffff",
+   "symbol": "TAPES",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xfe833b2ec5abd5f1508f85e6f2c9b62a375fffff",
+   "symbol": "BabyPunch",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x3e3b422702c58e7db2e0fefe244949c7afc4ffff",
+   "symbol": "$SPHERE",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x3915947f302422458d7b5f6d3165bc96ea19ffff",
+   "symbol": "IOS",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x0000000000000000000000000000000000000000",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x274f9a41e950d67f6bc3f0886a914cadda1fffff",
+   "symbol": "DOGE",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x80d7d26bf9d5dd4e0e22855959d1de1d1123ffff",
+   "symbol": "DOGE",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb3bb4be6b3de7b2be1b55162d8212667d5afffff",
+   "symbol": "DOGE",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x1c4262fbb57923144d3032f5f968efcff59b7777",
+   "symbol": "DOGE",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 300,
+    "sellTaxBps": 300,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xf94f3f871ca0e126aeb5fd4c2d0a85f5dde17777",
+   "symbol": "DOGE",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 100,
+    "sellTaxBps": 100,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x8f015701af18953c47b0ccdd22c3f2bd46247777",
+   "symbol": "SI",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 0,
+    "sellTaxBps": 100,
+    "quoteSymbol": "USD1",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d"
+    ],
+    "bridgeFees": [
+     500
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb131a3d3200dc4c07f52f1d5c06e49921a1a7777",
+   "symbol": "pain",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 300,
+    "sellTaxBps": 300,
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
+    ],
+    "bridgeFees": [
+     2500
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xf161181f2061ca3a1b72ac2709c4324969c97777",
+   "symbol": "pain",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 100,
+    "sellTaxBps": 0,
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
+    ],
+    "bridgeFees": [
+     2500
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x1021f188e49c9890d3666bafb8ce3bc410b34444",
+   "symbol": "英伟达",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xcced31530a9c0a71a174dc2720b4ae5478314444",
+   "symbol": "中文 X 牛逼",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x3b2cf389314ae390bd33cc398f8215ae95ec4444",
+   "symbol": "牛逼人生",
+   "route": {
+    "type": "four",
+    "chainId": 56,
+    "manager": "0x5c952063c7fc8610ffdb798152d69f0b9550762b",
+    "helper": "0xf251f83e40a78868fcfa3fa4599dad6494e46034",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteDecimals": 18,
+    "feeBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "four"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xa245b899f47c41d369b35e13abd10600e3ea7777",
+   "symbol": "三羊开泰",
+   "route": {
+    "type": "flap",
+    "chainId": 56,
+    "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "quoteDecimals": 18,
+    "nativeToQuote": true,
+    "buyTaxBps": 0,
+    "sellTaxBps": 100,
+    "quoteSymbol": "",
+    "bridgeHops": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955"
+    ],
+    "bridgeFees": [
+     100
+    ]
+   },
+   "cls": "flap"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xaefe66ee4d70d5aa2037600db00f43b5ac377777",
+   "symbol": "Max",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xdc61deaf7a9b494f6c26ffb98af6e8b8b72bfc43",
+    "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+     "0xaefe66ee4d70d5aa2037600db00f43b5ac377777"
+    ],
+    "quoteSymbol": "SPCXB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xe6c2021a443efb5d18c8cabb0cd930aa81ee7777",
+   "symbol": "ELON2028",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x1038ff735b384d7181837a9cfe8f1058cd00d915",
+    "quoteToken": "0x1fa4a73a3f0133f0025378af00236f3abdee5d63",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x1fa4a73a3f0133f0025378af00236f3abdee5d63",
+     "0xe6c2021a443efb5d18c8cabb0cd930aa81ee7777"
+    ],
+    "quoteSymbol": "NEAR",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x407b323dec2cbf839f8f7c94dd16e8c29a867777",
+   "symbol": "我不是中国间谍",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x6aa1d0ffdf78c5924c188d271987898bbce2ab87",
+    "quoteToken": "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+     "0x407b323dec2cbf839f8f7c94dd16e8c29a867777"
+    ],
+    "quoteSymbol": "FXIon",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x0da27398e363adb801300b4d36d600631fae7777",
+   "symbol": "spyless",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xdfdebba9e90286032837dd9fd6a84c2197d2e396",
+    "quoteToken": "0x7138b48df7d98d7e3cc221bfe7192d0a178182d8",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x7138b48df7d98d7e3cc221bfe7192d0a178182d8",
+     "0x0da27398e363adb801300b4d36d600631fae7777"
+    ],
+    "quoteSymbol": "SPYB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x5f9dd0474eaa64eea2eeb70580ac1ea77df67777",
+   "symbol": "未来",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xa76fd0004e7986165d6681df93f69ba21a68b6c1",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+     "0x5f9dd0474eaa64eea2eeb70580ac1ea77df67777"
+    ],
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xf80e4db5f779788c66e9186e03f5e0c12262ffff",
+   "symbol": "真诚",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xb7f46f38dd432fd160b0c7965771309838ae5c7c",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xf80e4db5f779788c66e9186e03f5e0c12262ffff"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x1a72fd7d075acea148f7ec63e24a21baa5cbffff",
+   "symbol": "NB",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x1e23c41a0aa6bc1f9c210acfb28e8cda5eb4e40a",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x1a72fd7d075acea148f7ec63e24a21baa5cbffff"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x78fd41e3c3fecbbfc04c399672ad37a16b99ffff",
+   "symbol": "牛X",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x8505345601acf0765ffe44787bdd8c98db701329",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x78fd41e3c3fecbbfc04c399672ad37a16b99ffff"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xbca41e58dc9282964c43c9a5b565e280e4c1ffff",
+   "symbol": "NB",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xc1f4ea8fbf45de0ac756da8d794794dafc22b0cb",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xbca41e58dc9282964c43c9a5b565e280e4c1ffff"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x4d3bec623ab04e6f8c79691f8dcb872a4740ffff",
+   "symbol": "NB",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x8d3e7df151a01b0caf84b996ee86ffcf0b600767",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4d3bec623ab04e6f8c79691f8dcb872a4740ffff"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xf11fc9da76be9a0804f2f47d6fd2dc4a22e87777",
+   "symbol": "克罗心",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x8e785fc3b18b68bbefba865fb89b19fb8edad936",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xf11fc9da76be9a0804f2f47d6fd2dc4a22e87777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x45fca1d82dd61f7e0cf15ce0ee9d115ef0ff7777",
+   "symbol": "真诚",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xefee9ea75f5163c3d51d479bf8f1c6e522b36aa2",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x45fca1d82dd61f7e0cf15ce0ee9d115ef0ff7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xed45f05b44aa04d74bf1a93233443b9e59ef7777",
+   "symbol": "真诚",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x1ffd6f1211807eeacbc57982e799287d18822950",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xed45f05b44aa04d74bf1a93233443b9e59ef7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x2eae4fdb10afe10e0f315190f0ccfa911e9b7777",
+   "symbol": "真诚",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xaa0f5c32859d788a847c3a40f789488dbbc2b727",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x2eae4fdb10afe10e0f315190f0ccfa911e9b7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xdb4828a709bb2888a796cc774f5e50ae6acc7777",
+   "symbol": "羊公主",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x29ba65f1c38c25857de94c052b3492ec5f6f86f2",
+    "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0xdb4828a709bb2888a796cc774f5e50ae6acc7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xb84a69219443d278bbab801ba19380eee6cc7777",
+   "symbol": "老母鸡",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x4bb30b4d615a653d48f9bab264bacf7e78c26d51",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0xb84a69219443d278bbab801ba19380eee6cc7777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x579de142402e670ccb4c63cc250dfe5b68d27777",
+   "symbol": "奥斯卡",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xacac0a8a7c0f773b0d7d09993646e58f3f3fb082",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0x579de142402e670ccb4c63cc250dfe5b68d27777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x6bb7acac10f3d69de136579641bf4d467a397777",
+   "symbol": "大拳头",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0xeba3a9285d83f8fb23fc5cd83118c722fd56b833",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0x6bb7acac10f3d69de136579641bf4d467a397777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0xe6abc844653c20482a0c45c3cd6e203d62267777",
+   "symbol": "牛逼",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x8d85ecc41138b546b2fd4d99c780be3017660bea",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0xe6abc844653c20482a0c45c3cd6e203d62267777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x806321269b9d1e7a90fd859bc07fca250e257777",
+   "symbol": "牛逼",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x88ed8c04b8ff33a287e06c7b10ade3cec7ad9cc1",
+    "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x55d398326f99059ff775485246999027b3197955",
+     "0x806321269b9d1e7a90fd859bc07fca250e257777"
+    ],
+    "quoteSymbol": "",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  },
+  {
+   "chain": "bsc",
+   "token": "0x94c4a633309f5e7e521d1b2d2cba67950dedffff",
+   "symbol": "Mai",
+   "route": {
+    "type": "v2",
+    "chainId": 56,
+    "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+    "pool": "0x4eb590988980c4ad05d38047bc9b49773ac514a9",
+    "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+    "path": [
+     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+     "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+     "0x94c4a633309f5e7e521d1b2d2cba67950dedffff"
+    ],
+    "quoteSymbol": "BNCB",
+    "bridgeHops": [],
+    "bridgeFees": []
+   },
+   "cls": "v2"
+  }
+ ]
+}

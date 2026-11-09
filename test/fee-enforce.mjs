@@ -61,9 +61,10 @@ test('evmCovered: table coin covered on any route; Pons native curve covered on 
   assert.equal(nativePonsRoute({ ...PONS, bridgeFee: 100 }), false);
 });
 
-test('solCovered: Jupiter only', () => {
-  assert.equal(solCovered({ venue: 'jupiter' }), true);
-  for (const venue of ['pump', 'pumpswap', 'pumphop', 'dlmm', undefined]) assert.equal(solCovered({ venue }), false, String(venue));
+// release 20: + pump.fun curve and PumpSwap (the Jupiter fee path routes them; test/fee-coverage.mjs)
+test('solCovered: Jupiter, pump.fun curve, PumpSwap', () => {
+  for (const venue of ['jupiter', 'pump', 'pumpswap']) assert.equal(solCovered({ venue }), true, venue);
+  for (const venue of ['pumphop', 'dlmm', undefined]) assert.equal(solCovered({ venue }), false, String(venue));
   assert.equal(solCovered(null), false);
 });
 
@@ -136,15 +137,24 @@ test('engine.buy on Robinhood Pons: decided on the vault\'s own route, the hint 
   assert.deepEqual(v4.calls.trade, [['buy', OTHER]], 'a V4 coin outside the table stays fee-free');
 });
 
-test('engine.buy on BNB: table coins refused, everything else trades with no read', async () => {
+// release 20: a BNB coin outside the table is decided on the vault's own route (registry classes), like a Robinhood Pons coin
+test('engine.buy on BNB: table coins refused with no read; other coins by the vault own route (registry class refused, the rest trades)', async () => {
   const w = world({ lane: 'bsc' });
   await assert.rejects(w.buy(BSC_FLAP, 0.1), { code: 'TerminalPolicyRequired' });
+  assert.equal(w.calls.reads, 0, 'a table coin needs no route read');
   await w.buy(OTHER, 0.1);
-  assert.deepEqual(w.calls.trade, [['buy', OTHER]]);
-  assert.equal(w.calls.reads, 0);
+  assert.deepEqual(w.calls.trade, [['buy', OTHER]], 'no route: the legacy trade decides');
+  assert.equal(w.calls.reads, 1, "cold: the vault's own read (shared with the click)");
+  const V2 = { type: 'v2', chainId: 56, router: '0x10ed43c718714eb63d5aa57b78b54704e256024e', pool: '0x' + '3'.repeat(40), quoteToken: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', path: ['0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', OTHER], quoteSymbol: '', bridgeHops: [], bridgeFees: [] };
+  const v2 = world({ lane: 'bsc', own: V2 });
+  await assert.rejects(v2.buy(OTHER, 0.1), { code: 'TerminalPolicyRequired' });
+  assert.equal(v2.calls.reads, 0, 'warm copy: no read');
+  const inf = world({ lane: 'bsc', own: { type: 'inf', chainId: 56 } });
+  await inf.buy(OTHER, 0.1);
+  assert.deepEqual(inf.calls.trade, [['buy', OTHER]], 'Infinity stays fee-free');
 });
 
-test('engine.buy on Solana: Jupiter route refused, pump.fun / PumpSwap / DLMM trade; sells never read the route', async () => {
+test('engine.buy on Solana: Jupiter / pump.fun / PumpSwap routes refused, pumphop / DLMM trade; sells never read the route', async () => {
   const MINT = 'So1aNaMintXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'.replace(/X/g, '2');
   const jup = world({ mode: 'sol', solRoute: async () => ({ venue: 'jupiter' }) });
   await assert.rejects(jup.buy(MINT, 0.1), { code: 'TerminalPolicyRequired' });
@@ -152,7 +162,12 @@ test('engine.buy on Solana: Jupiter route refused, pump.fun / PumpSwap / DLMM tr
   await jup.sell(MINT, 50);
   assert.deepEqual(jup.calls.trade, [['sell', MINT]]);
   assert.equal(jup.calls.sol, 1, 'only the buy asked for the route');
-  for (const venue of ['pump', 'pumpswap', 'pumphop', 'dlmm']) {
+  for (const venue of ['pump', 'pumpswap']) {
+    const w = world({ mode: 'sol', solRoute: async () => ({ venue }) });
+    await assert.rejects(w.buy(MINT, 0.1), { code: 'TerminalPolicyRequired' }, venue);
+    assert.deepEqual(w.calls.trade, [], venue);
+  }
+  for (const venue of ['pumphop', 'dlmm']) {
     const w = world({ mode: 'sol', solRoute: async () => ({ venue }) });
     await w.buy(MINT, 0.1);
     assert.deepEqual(w.calls.trade, [['buy', MINT]], venue);

@@ -7,6 +7,8 @@ export interface TerminalEvmConfig {
   venues?: readonly ('v2' | 'v4' | 'standard-pool')[];
   /** true = Standard graduated pools validated against the pinned on-chain registry need no per-coin market key. */
   standardPoolRegistry?: boolean;
+  /** Release 20: venue classes (venue-registry.mjs REGISTRY_CLASSES) covered without a per-coin market key. Absent = none. */
+  registry?: readonly string[];
   finalityBlocks: number; maxGas: string; maxGasPrice: string; maxGasCost: string;
   /** PONS-V2 (default OFF): Robinhood Pons V2 native-pair curves. Absent or enabled !== true = refused. */
   ponsV2?: { enabled: boolean; factory: Hex; factoryCodeHash: Hex };

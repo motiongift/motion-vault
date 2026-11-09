@@ -14,6 +14,8 @@
 // was built (a new table = a new engine build).
 //   routes-robinhood.json sha256 dc02d813e0246019240682c67caac39f23a201b13cd184e9f5f99f4b5252decc (= /etc/motion-terminal-quote on the box, 2026-11-09)
 //   routes-bsc.json       sha256 300f4f925e7f050f5b0f70f1e20e26df23b9e41caba39870f4aa17a6c07f3988
+// Release 20: route-based coverage by venue class (src/terminal-evm/venue-registry.mjs), see evmCovered / solCovered below.
+import { registryClass } from './terminal-evm/venue-registry.mjs';
 export const COVERED_TOKENS: Readonly<Record<'robinhood' | 'bsc', ReadonlySet<string>>> = Object.freeze({
   robinhood: new Set<string>([
   '0x0203d6032fd529c888c9d79cbdf2e169611f091f',
@@ -196,18 +198,37 @@ export function nativePonsRoute(route: unknown): boolean {
   return !!r && typeof r === 'object' && r.type === 'pons' && lower(r.pairToken) === ZERO &&
     (r.bridgeHops == null || (Array.isArray(r.bridgeHops) && r.bridgeHops.length === 0)) && !Number(r.bridgeFee || 0);
 }
-export type CoverageSwitches = { ponsV2: boolean; tokens?: Readonly<Record<'robinhood' | 'bsc', ReadonlySet<string>>> };
-/** EVM: the token alone decides when it is in the table; otherwise only a native Pons curve (Robinhood, ponsV2 on) is covered.
- *  route === undefined: the route is not known yet (the caller reads it and asks again). */
+// Release 20 (coverage by venue, src/terminal-evm/venue-registry.mjs): `registry` = the venue classes the deployment lists in
+// TERMINAL_EVM_POLICY[chain].registry. A coin outside the table is covered when the route the vault itself would trade (its own
+// /route copy) is of an enabled class — the same registryClass() the vault guard and the quote service use, so a coin launched
+// after the build is covered without a new table. Absent / empty registry = the release-19 decision exactly.
+export type CoverageSwitches = {
+  ponsV2: boolean;
+  tokens?: Readonly<Record<'robinhood' | 'bsc', ReadonlySet<string>>>;
+  registry?: Readonly<Partial<Record<'robinhood' | 'bsc', readonly string[]>>>;
+};
+/** EVM: the token alone decides when it is in the table; otherwise the vault's own route decides (native Pons curve on Robinhood
+ *  with ponsV2 on, or an enabled registry class). route === undefined: the route is not known yet (the caller reads it and asks
+ *  again); with no route-based coverage switched on for the chain the answer is false at once (no read). */
 export function evmCovered(chain: string, token: unknown, route: unknown, sw: CoverageSwitches): boolean | undefined {
   if (chain !== 'robinhood' && chain !== 'bsc') return false;
   if (typeof token !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(token)) return false;
   if ((sw.tokens ?? COVERED_TOKENS)[chain].has(token.toLowerCase())) return true;
-  if (chain !== 'robinhood' || !sw.ponsV2) return false;
+  const reg = sw.registry?.[chain] ?? [];
+  const pons = chain === 'robinhood' && sw.ponsV2;
+  if (!pons && reg.length === 0) return false;
   if (route === undefined) return undefined;
-  return nativePonsRoute(route);
+  if (pons && nativePonsRoute(route)) return true;
+  const cls = reg.length ? registryClass(chain, route, token) : null;
+  return cls !== null && reg.includes(cls);
 }
-/** Solana: covered iff the vault's own route is Jupiter */
-export function solCovered(route: unknown): boolean {
-  return !!route && typeof route === 'object' && (route as { venue?: unknown }).venue === 'jupiter';
+// Solana: the terminal quote is a Jupiter swap with motion's platform fee (one Jupiter instruction, the vault's receipt path).
+// Release 20: Jupiter also routes pump.fun curves ("Pump.fun") and PumpSwap pools ("Pump.fun Amm") — measured 2026-11-09 on the
+// coins motion traded (B:/tmp/fee-coverage/measure/jupiter-sol.json) — so those venues can take the fee path too. Which of the
+// vault's own venues count as covered is deployment-pinned here. 'dlmm' and 'pumphop' stay fee-free (not measured enough).
+export const SOL_COVERED_VENUES: readonly string[] = Object.freeze(['jupiter', 'pump', 'pumpswap']);
+/** Solana: covered iff the vault's own route venue is one the terminal Jupiter quote takes */
+export function solCovered(route: unknown, venues: readonly string[] = SOL_COVERED_VENUES): boolean {
+  const v = !!route && typeof route === 'object' ? (route as { venue?: unknown }).venue : undefined;
+  return typeof v === 'string' && venues.includes(v);
 }

@@ -5369,7 +5369,8 @@ const hintRoute = (hint: unknown): unknown => { const j = hint && typeof hint ==
 function buyCovered(token: unknown, hint: unknown): boolean | Promise<boolean> {
   if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then(solCovered, () => false) : false;
   if (NEAR_MODE) return false;
-  const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true };
+  const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true,
+    registry: { robinhood: TERMINAL_EVM_POLICY?.robinhood?.registry ?? [], bsc: TERMINAL_EVM_POLICY?.bsc?.registry ?? [] } };
   const first = evmCovered(lane, token, undefined, sw);
   if (first !== undefined) return first;
   const key = lc(token as string), own = ownRouteNow(key);

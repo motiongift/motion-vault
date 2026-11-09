@@ -1,10 +1,14 @@
 import type { TerminalEvmConfig } from './terminal-evm/vault-guard.mjs';
+// Release 20 (coverage by venue): each chain's `registry` lists the venue classes of src/terminal-evm/venue-registry.mjs whose
+// markets need no per-coin market key (proven on chain by pinned code hashes + factory reads). The per-coin marketKeys stay
+// valid (a table market keeps its route); src/terminalFeeCoverage.ts reads the same lists for the fee gate.
 // Reviewed deployment/runtime + finite market registry, never supplied by the app.
 // Null means unsupported: this candidate must not be advertised as ready or silently fall back.
 // BNB venues beyond Pancake V2 for the terminal-fee lane. Empty = OFF (original candidate: BNB V2 only).
 // Allowed values: 'v3' (Pancake V3 SmartRouter), 'inf' (Pancake Infinity CL, hookless pools only), 'four' (four.meme TokenManager2), 'flap' (Flap Portal).
 // Deployment-pinned; never set from a request, account or network response. Each market must still be in policy.marketKeys.
-export const TERMINAL_EVM_BNB_VENUES: readonly ('v3' | 'inf' | 'four' | 'flap')[] = Object.freeze(['flap']);
+// Release 20: + 'v3' and 'four' (each market still needs a market key or a registry class, see venue-registry.mjs).
+export const TERMINAL_EVM_BNB_VENUES: readonly ('v3' | 'inf' | 'four' | 'flap')[] = Object.freeze(['flap', 'v3', 'four']);
 // PONS-V2 (default OFF): Robinhood Pons V2 native-pair curves through TerminalRouter. Even a reviewed policy with
 // ponsV2.enabled cannot route Pons unless this reviewed constant is also true in the published engine build.
 export const TERMINAL_EVM_PONS_V2: boolean = true;
@@ -53,6 +57,7 @@ export const TERMINAL_EVM_POLICY: Readonly<Partial<Record<'robinhood' | 'bsc', T
       "v4",
       "standard-pool"
     ],
+    "registry": ["v4-launcher", "v3", "v4-hookless", "v4-doppler", "standard-pool", "standard-curve"],
     "ponsV2": {
       "enabled": true,
       "factory": "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e",
@@ -223,6 +228,7 @@ export const TERMINAL_EVM_POLICY: Readonly<Partial<Record<'robinhood' | 'bsc', T
     "maxGasCost": "9000000000000000",
     "venues": [
       "v2"
-    ]
+    ],
+    "registry": ["v2", "flap", "v3", "four"]
   }
 });
