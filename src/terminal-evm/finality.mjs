@@ -49,34 +49,60 @@ export async function verifyEvmL2Receipt({ client, chainId, row, confirmations }
 }
 
 // F3: a signed transaction that never lands (dropped from the mempool, or its account nonce consumed by another lane).
-// Its outcome is KNOWN only when the account nonce it was signed with is already consumed at the chosen finality
-// (confirmations === null: the L1 'finalized' tag, the default; a number: the F2 option's latest-(N-1) block) AND no
-// receipt and no mined transaction exist for the exact persisted hash. Same nonce, consumed: this transaction can never
-// be included any more. Every read error, mismatch or missing field is "not dropped" (the wallet stays held).
-// The verdict only lets the journal release the wallet lock for NEW trades. Nothing is rebuilt, replaced or re-sent.
+// Its outcome is KNOWN only when the account nonce it was signed with is consumed in the state of a block that is at or
+// below the chosen finality (confirmations === null: the L1 'finalized' tag, the default; a number: the F2 option's
+// latest-(N-1)) AND no receipt and no mined transaction exist for the exact persisted hash. Same nonce, consumed in final
+// state: this transaction can never be included any more. Every read error, mismatch or missing field is "not dropped".
+// engine-review 2026-11-09 (R1): the nonce is NOT read at the finalized height. Both default Robinhood nodes refuse state
+// that deep (publicnode keeps ~64-127 blocks, rpc.mainnet.chain.robinhood.com ~6,000-7,000; finalized lags ~9,500), so the
+// old read failed closed for ever there. Two steps instead:
+//   1. ANCHOR (row.dropAnchor absent): the nonce is read in the state of the current head BY BLOCK HASH (EIP-1898), so the
+//      answer is bound to that exact block whichever fallback node serves it. Consumed + no receipt -> { anchor } to persist.
+//   2. PROOF (row.dropAnchor present, a later reconcile): the anchor height is now at/below the chosen finality and the
+//      canonical header at that height still has the anchor's hash (headers only, no historical state). State of a final
+//      canonical block is final. Then no receipt and no mined transaction for the exact hash -> dropped.
+// A pending or unreadable proof keeps the anchor (it is re-proven from scratch every time); a reorged anchor or a receipt
+// voids it. The verdict only lets the journal release the wallet lock for NEW trades. Nothing is rebuilt, replaced or re-sent.
+const anchorShape = (a, txNonce) => !!a && typeof a === 'object' && typeof a.blockNumber === 'string' && /^\d{1,20}$/.test(a.blockNumber) &&
+  typeof a.blockHash === 'string' && /^0x[a-f0-9]{64}$/.test(a.blockHash) && typeof a.accountNonce === 'string' && /^\d{1,16}$/.test(a.accountNonce) &&
+  BigInt(a.accountNonce) > BigInt(txNonce);
 export async function verifyEvmDropped({ client, chainId, row, confirmations = null }) {
   if (!row?.hash || !/^0x[a-f0-9]{40}$/.test(String(row.trader)) || typeof row.txNonce !== 'string' || !/^\d{1,16}$/.test(row.txNonce)) return { dropped: false };
   if (confirmations !== null && (!Number.isSafeInteger(confirmations) || confirmations < 1)) return { dropped: false };
+  const anchor = row.dropAnchor == null ? null : row.dropAnchor;
+  if (anchor !== null && !anchorShape(anchor, row.txNonce)) return { dropped: false };
+  const keep = anchor ? { anchor: { blockNumber: anchor.blockNumber, blockHash: anchor.blockHash, accountNonce: anchor.accountNonce } } : {};
   try {
-    if (await client.getChainId() !== chainId) return { dropped: false };
-    let ref;
+    if (await client.getChainId() !== chainId) return { dropped: false, ...keep };
+    if (!anchor) {
+      const head = await client.getBlock({ blockTag: 'latest' });
+      if (!head?.hash || typeof head.number !== 'bigint' || !/^0x[a-fA-F0-9]{64}$/.test(head.hash)) return { dropped: false };
+      const blockHash = head.hash.toLowerCase();
+      const count = BigInt(await client.request({ method: 'eth_getTransactionCount', params: [row.trader, { blockHash }] }));
+      if (count <= BigInt(row.txNonce)) return { dropped: false };
+      if (await receiptOrNull(client, row.hash)) return { dropped: false };
+      return { dropped: false, anchor: { blockNumber: head.number.toString(), blockHash, accountNonce: count.toString() } };
+    }
+    const at = BigInt(anchor.blockNumber);
+    let final;
     if (confirmations === null) {
       const finalized = await client.getBlock({ blockTag: 'finalized' });
-      if (!finalized?.hash || typeof finalized.number !== 'bigint') return { dropped: false }; // no 'latest' substitute
-      ref = finalized.number;
+      if (!finalized?.hash || typeof finalized.number !== 'bigint') return { dropped: false, ...keep }; // no 'latest' substitute
+      final = finalized.number;
     } else {
-      ref = (await client.getBlockNumber()) - BigInt(confirmations - 1);
-      if (ref < 0n) return { dropped: false };
+      final = (await client.getBlockNumber()) - BigInt(confirmations - 1);
     }
-    const count = BigInt(await client.getTransactionCount({ address: row.trader, blockNumber: ref }));
-    if (count <= BigInt(row.txNonce)) return { dropped: false };
-    // Read AFTER the nonce: had this exact transaction consumed the nonce at or below `ref`, its receipt exists now.
-    const [receipt, transaction, head] = await Promise.all([receiptOrNull(client, row.hash), transactionOrNull(client, row.hash), client.getBlockNumber()]);
-    if (receipt || head < ref) return { dropped: false };
+    if (final < at) return { dropped: false, ...keep }; // anchor not final yet
+    const canonical = await client.getBlock({ blockNumber: at });
+    if (!canonical?.hash || canonical.number !== at) return { dropped: false, ...keep };
+    if (canonical.hash.toLowerCase() !== anchor.blockHash) return { dropped: false }; // reorged away: the anchor is void
+    // Read AFTER finality: had this exact transaction consumed the nonce at or below the anchor, its receipt exists now.
+    const [receipt, transaction] = await Promise.all([receiptOrNull(client, row.hash), transactionOrNull(client, row.hash)]);
+    if (receipt) return { dropped: false };
     if (transaction && (transaction.blockNumber != null || String(transaction.hash).toLowerCase() !== row.hash.toLowerCase() ||
       String(transaction.from).toLowerCase() !== row.trader || BigInt(transaction.nonce) !== BigInt(row.txNonce))) return { dropped: false };
-    return { dropped: true, hash: row.hash, accountNonce: count.toString(), atBlock: ref.toString() };
+    return { dropped: true, hash: row.hash, accountNonce: anchor.accountNonce, atBlock: anchor.blockNumber, atBlockHash: anchor.blockHash };
   } catch {
-    return { dropped: false };
+    return { dropped: false, ...keep };
   }
 }

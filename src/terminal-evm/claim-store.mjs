@@ -28,31 +28,45 @@ export async function openEvmClaims({ indexedDB = globalThis.indexedDB, name, ve
     const keys = r => [`wallet:${r.trader}`, `nonce:${r.trader}:${r.nonce}`, ...(r.reservation ? [`reservation:${r.reservation}`] : [])];
     const get = id => tx('readonly', c => req(c.get(id)));
     // F3: release a held wallet whose signed transaction provably never landed. The status becomes 'dropped' (terminal; the
-    // approval -> swap continuation of that trade is over). Two consecutive proofs >= dropConfirmMs apart (one read of a
-    // lagging load-balanced node cannot release); a non-proof in between resets the first sighting.
+    // approval -> swap continuation of that trade is over).
+    // engine-review 2026-11-09 (R1-R3): verifyDropped first returns an ANCHOR (the signed nonce consumed in the state of one
+    // block, bound by its hash); it is persisted with the time it was first seen. A later proof must name exactly that
+    // anchor, now final and still canonical, and come at least dropConfirmMs after it. A void verdict (reorged anchor,
+    // receipt seen) clears it; a pending or unreadable one keeps it. The proof is re-derived from chain data on every call,
+    // so a stale tab, a lagging node or a bad clock reading cannot release on its own.
+    const anchorOf = (x, txNonce) => (x && typeof x === 'object' && typeof x.blockNumber === 'string' && /^\d{1,20}$/.test(x.blockNumber) &&
+        typeof x.blockHash === 'string' && /^0x[a-f0-9]{64}$/.test(x.blockHash) && typeof x.accountNonce === 'string' && /^\d{1,16}$/.test(x.accountNonce) &&
+        BigInt(x.accountNonce) > BigInt(txNonce)) ? { blockNumber: x.blockNumber, blockHash: x.blockHash, accountNonce: x.accountNonce } : null;
+    const sameAnchor = (x, y) => x == null ? y == null : y != null && x.blockNumber === y.blockNumber && x.blockHash === y.blockHash && x.accountNonce === y.accountNonce;
     const reconcileDrop = async (id, r) => {
         if (!verifyDropped || r.txNonce == null)
             return 'signed';
-        const d = await verifyDropped(Object.freeze({ ...r }));
-        const proven = d?.dropped === true && d.hash === r.hash, at = now();
-        if (!proven && r.dropSeenAt == null)
+        const held = r.dropAnchor ?? null;
+        const d = await verifyDropped(Object.freeze({ ...r, dropAnchor: held ? Object.freeze({ ...held }) : null }));
+        const at = now();
+        if (!Number.isFinite(at))
+            return 'signed';
+        const proven = held !== null && d?.dropped === true && d.hash === r.hash && d.atBlock === held.blockNumber &&
+            d.atBlockHash === held.blockHash && d.accountNonce === held.accountNonce;
+        const anchor = proven ? held : d?.dropped === false ? anchorOf(d.anchor, r.txNonce) : null;
+        if (!proven && sameAnchor(anchor, held) && (anchor === null ? r.dropSeenAt == null : Number.isFinite(r.dropSeenAt)))
             return 'signed';
         return tx('readwrite', async (c, l) => {
             const current = await req(c.get(id));
             if (current?.hash !== r.hash || current.status !== 'signed' || current.txNonce !== r.txNonce)
                 throw Error('Journal changed');
+            if (!sameAnchor(current.dropAnchor ?? null, held))
+                return 'signed'; // another tab moved the anchor meanwhile: its state stands, re-checked next time
             if (!proven) {
-                await req(c.put({ ...current, dropSeenAt: null }));
+                const seen = anchor === null ? null : sameAnchor(anchor, held) && Number.isFinite(current.dropSeenAt) ? current.dropSeenAt : at;
+                await req(c.put({ ...current, dropAnchor: anchor, dropSeenAt: seen }));
                 return 'signed';
             }
-            if (current.dropSeenAt == null || !Number.isFinite(at) || at - current.dropSeenAt < dropConfirmMs) {
-                if (current.dropSeenAt == null)
-                    await req(c.put({ ...current, dropSeenAt: at }));
+            if (!Number.isFinite(current.dropSeenAt) || at - current.dropSeenAt < dropConfirmMs)
                 return 'signed';
-            }
             const history = [...(current.history || []), { hash: r.hash, phase: r.phase, success: false, dropped: true, txNonce: r.txNonce,
-                    accountNonce: String(d.accountNonce), atBlock: String(d.atBlock) }];
-            await req(c.put({ ...current, history, status: 'dropped', dropSeenAt: null }));
+                    accountNonce: held.accountNonce, atBlock: held.blockNumber, atBlockHash: held.blockHash }];
+            await req(c.put({ ...current, history, status: 'dropped', dropSeenAt: null, dropAnchor: null }));
             await req(l.delete(`wallet:${r.trader}`));
             return 'dropped';
         });
@@ -76,7 +90,7 @@ export async function openEvmClaims({ indexedDB = globalThis.indexedDB, name, ve
             if (!r || r.status !== 'idle' || !/^0x[a-fA-F0-9]{64}$/.test(hash) || !['approve-zero', 'approve-exact', 'swap'].includes(phase) ||
                 (txNonce !== undefined && (!Number.isSafeInteger(txNonce) || txNonce < 0)))
                 throw Error('Journal refuses another signature');
-            await req(c.put({ ...r, status: 'signed', hash, phase, txNonce: txNonce === undefined ? null : String(txNonce), dropSeenAt: null }));
+            await req(c.put({ ...r, status: 'signed', hash, phase, txNonce: txNonce === undefined ? null : String(txNonce), dropSeenAt: null, dropAnchor: null }));
         }),
         // Only exact persisted hash is eligible. No byte rebuild, transaction replacement or resend API.
         reconcile: async (id) => {
@@ -96,7 +110,7 @@ export async function openEvmClaims({ indexedDB = globalThis.indexedDB, name, ve
                         ...(current.txNonce != null ? { txNonce: current.txNonce } : {}),
                         ...(p.soft === true ? { soft: true, blockNumber: String(p.blockNumber), blockHash: String(p.blockHash) } : {}) }];
                 const next = { ...current, history, status: terminal ? 'finished' : 'idle', hash: terminal ? r.hash : null, phase: terminal ? r.phase : null,
-                    ...(current.dropSeenAt != null ? { dropSeenAt: null } : {}) };
+                    ...(current.dropSeenAt != null || current.dropAnchor != null ? { dropSeenAt: null, dropAnchor: null } : {}) };
                 await req(c.put(next));
                 if (terminal)
                     await req(l.delete(`wallet:${r.trader}`));

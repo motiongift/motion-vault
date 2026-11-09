@@ -1,4 +1,5 @@
-export interface EvmClaim { id: string; trader: string; nonce: string; reservation: string | null; status?: string; hash?: string | null; phase?: string | null; txNonce?: string | null; dropSeenAt?: number | null }
+export interface EvmClaim { id: string; trader: string; nonce: string; reservation: string | null; status?: string; hash?: string | null; phase?: string | null; txNonce?: string | null; dropSeenAt?: number | null; dropAnchor?: EvmDropAnchor | null }
+export interface EvmDropAnchor { blockNumber: string; blockHash: string; accountNonce: string }
 export interface EvmClaims {
   close(): void; get(id: string): Promise<EvmClaim | undefined>; pending(trader: string): Promise<EvmClaim | null>;
   claim(row: EvmClaim): Promise<boolean>; signed(id: string, hash: string, phase: 'approve-zero' | 'approve-exact' | 'swap', txNonce?: number): Promise<void>;
@@ -6,5 +7,5 @@ export interface EvmClaims {
 }
 export function openEvmClaims(args: { indexedDB?: IDBFactory; name: string;
   verifyFinal(row: Readonly<EvmClaim>): Promise<{ final: boolean; hash?: string; success?: boolean; soft?: true; blockNumber?: string; blockHash?: string }>;
-  verifyDropped?: ((row: Readonly<EvmClaim>) => Promise<{ dropped: boolean; hash?: string; accountNonce?: string; atBlock?: string }>) | null;
+  verifyDropped?: ((row: Readonly<EvmClaim>) => Promise<{ dropped: boolean; hash?: string; accountNonce?: string; atBlock?: string; atBlockHash?: string; anchor?: EvmDropAnchor }>) | null;
   now?: () => number; dropConfirmMs?: number }): Promise<EvmClaims>;

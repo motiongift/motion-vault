@@ -7944,7 +7944,7 @@ async function terminalTradeEvm(request: unknown) {
             await journal.reconcile(held.id);
             if ((await journal.get(held.id))?.status === 'idle') await journal.cancelIdle(held.id); // prior approval finalized; old quote stays consumed
             const still = await journal.pending(address);
-            if (still) throw new Error(`Previous terminal transaction is unresolved; no new signature will be made${still.dropSeenAt != null ? ' (it looks dropped; re-checking, try again in a minute)' : ''}`);
+            if (still) throw new Error(`Previous terminal transaction is unresolved; no new signature will be made${still.dropAnchor != null ? ' (it looks dropped; re-checking once that is final, try again in a few minutes)' : ''}`);
           }
           const balance = side === 'sell' ? await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [address] }) : 0n;
           const rawSell = side === 'buy' ? 0n : balance * BigInt(Math.round(size * 100)) / 10000n;
