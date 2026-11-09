@@ -1726,6 +1726,14 @@ const v3SellUnwrapCall = (router: `0x${string}`, args: { tokenIn: `0x${string}`;
     encodeFunctionData({ abi: V3_SELL_UNWRAP_ABI, functionName: 'unwrapWETH9', args: [min, to] }),
   ]] as const,
 });
+// (2026-11-09, owner «ну так делай все») the same for the bridged sell (a coin quoted in USDG or a stock token): one
+// multicall([exactInput(path ending in WETH, recipient = the router, the floor), unwrapWETH9(the same floor, this wallet)]).
+const v3SellUnwrapPathCall = (router: `0x${string}`, path: `0x${string}`, amountIn: bigint, min: bigint, to: `0x${string}`) => ({
+  address: router, abi: V3_SELL_UNWRAP_ABI, functionName: 'multicall' as const, args: [[
+    encodeFunctionData({ abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ path, recipient: V3_ROUTER_SELF, amountIn, amountOutMinimum: min }] }),
+    encodeFunctionData({ abi: V3_SELL_UNWRAP_ABI, functionName: 'unwrapWETH9', args: [min, to] }),
+  ]] as const,
+});
 async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings, click: Shared = makeShared([acct.address])): Promise<`0x${string}`> {
   if (CFG.key === 'elysium' || route.type === 'ely') return elyTradeOne(acct, side, token, size, route, s, click);   // (trade-core.patch E8)
   const account = accountOf(acct);
@@ -2622,25 +2630,19 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
     const path = side === 'buy' ? encodeV3Path([...bridge.hops, token], [...bridge.fees, route.fee])
       : encodeV3Path([token, ...[...bridge.hops].reverse()], [route.fee, ...[...bridge.fees].reverse()]);
     const base = { path, recipient: account.address, amountIn, amountOutMinimum: 0n };
-    // F-57 (V12): the wrapped gas token held BEFORE the sell — only what this sell delivers gets unwrapped (overlaps the quote).
-    const beforeWethP = side === 'sell' ? publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : Promise.resolve(0n);
     // V13 (speed): the tier comparison runs beside the quote, not behind it (one round trip fewer on a BSC V3 sell)
     const guard = v3TierGuard(route.quoteToken); guard.catch(() => {});
+    // (2026-11-09) a sell's early gas proof: its one-tx swap + unwrap at floor 0, beside the quote (the gas does not depend on the floor)
+    const early = side === 'sell' && !s.turbo ? bscEstimate('sell', v3SellUnwrapPathCall(UNISWAP_V3_ROUTER, path, amountIn, 0n, account.address)) : null;
     const quoted = (await quoteV3Path(path, amountIn, side === 'buy')).result;
     if (quoted <= 0n) throw new Error('V3 quote returned zero');
     if (side === 'sell') { await guard; await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn); }
-    const beforeWeth = await beforeWethP;
-    const bridged = await sim({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ ...base, amountOutMinimum: applySlippage(quoted) }], value: side === 'buy' ? amountIn : undefined });
-    const hash = await send(bridged.request);
-    // a sell lands in WETH: unwrap what the sell actually delivered (never `quoted`: a
-    // fill under quote would make the withdraw revert, or unwrap pre-held WETH)
-    if (side === 'sell') landed(hash, 90_000).then(async (r) => {
-      if (r.status !== 'success') return;
-      const afterWeth = await publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-      const got = afterWeth - beforeWeth;
-      if (got > 0n) await unwrap(acct.id, got).catch(() => {});
-    }).catch(() => {});
-    return hash;
+    // a sell: the path ends in WETH inside the router and is unwrapped there, both at the same floor, in one transaction
+    // (native lands with the swap; wallet-held WETH is never touched). Before, the WETH landed in the wallet and a separate
+    // withdraw went out behind the receipt (90 s window, errors swallowed) and could be lost.
+    const bridged = await (side === 'sell' ? simEarly(v3SellUnwrapPathCall(UNISWAP_V3_ROUTER, path, amountIn, applySlippage(quoted), account.address), early)
+      : sim({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ ...base, amountOutMinimum: applySlippage(quoted) }], value: amountIn }));
+    return send(bridged.request);
   }
   const tokenIn = side === 'buy' ? WETH : token, tokenOut = side === 'buy' ? token : route.quoteToken;
   const args = v3SingleArgs(tokenIn, tokenOut, route.fee, amountIn);
@@ -2938,6 +2940,8 @@ async function previewOne(acct: Account, side: 'buy' | 'sell', token: `0x${strin
     if (side === 'sell') {
       const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, UNISWAP_V3_ROUTER] });
       if (allowance < amountIn) { notes.push('an approve() transaction runs first'); out.simulated = 'skipped'; out.error = 'approval needed before the sell can be simulated'; return out; }
+      notes.push(`the swap and the unwrap to ${NATIVE} in the same transaction`);
+      return run(v3SellUnwrapPathCall(UNISWAP_V3_ROUTER, path, amountIn, applySlippage(q3), account.address));   // the call the sell sends
     }
     return run({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_ABI, functionName: 'exactInput', args: [{ ...base, amountOutMinimum: applySlippage(q3) }], value: side === 'buy' ? amountIn : undefined });
   }
