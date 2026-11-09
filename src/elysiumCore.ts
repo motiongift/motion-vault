@@ -20,6 +20,8 @@
 // (every sell approves EXACTLY its amount, to Permit2 and from Permit2 to the router, for 15 minutes; leftovers are reset),
 // a buy sends exactly its HYPE, and every swap carries a floor computed from a simulation of the exact call on the live
 // chain. No platform fee: the calldata has no fee leg (0% platform fees).
+// Release 17: a coin quoted in KNTQ / USDC / VOLTA (ELY_VIA_TOKENS) trades in two hops on Uniswap's PoolManager, one router call, both
+// legs' hooks pinned and ruled exactly as a one-pool route's (ELY_VIA_TOKENS below). webEngine.ts is unchanged: it signs what these build.
 import { encodeAbiParameters, encodeFunctionData, decodeFunctionResult, encodePacked, keccak256, getCreate2Address, toHex, type Hex } from 'viem';
 import { encodeV4BuyNative, encodeV4BuyViaWeth, encodeV4Sell, UNIVERSAL_ROUTER_ABI, PERMIT2_ABI, MAX_STATIC_FEE, DYNAMIC_FEE_FLAG, type V4PoolKey } from './evmV4Router.ts';
 
@@ -347,9 +349,52 @@ export type ElyRoute = {
   pool?: string;         // v3 pool address / v4 pool id (informative; the vault computes its own)
   quoteSymbol?: string;
   hook?: { codeHash?: string; tier?: string };   // release 7: the hook's runtime keccak as the lane read it (a CLAIM: ELY_GUARD checks it on chain)
+  // release 17: a TWO-HOP route — poolKey is then the coin's pool against `via.token` (one of ELY_VIA_TOKENS) and via.poolKey that
+  // token's own pool against native HYPE, both on Uniswap's PoolManager (venue 'uni-v4', pair 'native'); via.hook = the claim of its hook
+  via?: { token: string; poolKey: V4PoolKey; hook?: { codeHash?: string; tier?: string } };
 };
 // release 6: routerPin = the router's pinned code hash (every case goes through ELY_GUARD); rules = the hook's buy-time reads
-export type ElyCandidate = { venue: ElyVenue; pair: 'native' | 'weth'; router: Hex; routerPin: Hex; poolKey?: V4PoolKey; fee?: number; pool: Hex; check: { target: Hex; data: Hex }; hinted?: boolean; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier };
+// release 17: `via` = the HYPE leg of a two-hop candidate (poolKey / pin / rules above are then the coin's leg; tier = the weaker of the two)
+export type ElyViaLeg = { token: Hex; poolKey: V4PoolKey; pool: Hex; check: { target: Hex; data: Hex }; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier; coinTier?: ElyHookTier };
+export type ElyCandidate = { venue: ElyVenue; pair: 'native' | 'weth'; router: Hex; routerPin: Hex; poolKey?: V4PoolKey; fee?: number; pool: Hex; check: { target: Hex; data: Hex }; hinted?: boolean; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier; via?: ElyViaLeg };
+
+// ── release 17: two hops through one listed token (owner in chat 2026-11-09: the ~100 Volta / Montra / Ascend coins quoted in VOLTA /
+// KNTQ / USDC become tradeable; B:\tmp\ely-2hop) ──
+// A buy is ONE Universal Router execute on Uniswap's PoolManager 0xe2e1 through Uniswap's router 0x1b34:
+//   V4_SWAP[ SWAP_EXACT_IN_SINGLE(HYPE → token, exactly amountIn, no per-hop minimum),
+//            SWAP_EXACT_IN_SINGLE(token → coin, OPEN_DELTA = the whole credit of the first swap, minimum = the floor),
+//            SETTLE(native, amountIn, from the router = this msg.value), TAKE(coin → wallet, the open delta) ]
+// and a sell its mirror (coin → token exactly amountIn, token → HYPE OPEN_DELTA, SETTLE_ALL coin ≤ amountIn via Permit2, TAKE_ALL native
+// ≥ the floor). The token never leaves the PoolManager's books: a hook that takes or leaves a different amount on either leg leaves a
+// non-zero delta, and the PoolManager reverts the whole call (CurrencyNotSettled). The floor sits on what the WALLET gets (coin on a buy,
+// HYPE on a sell), from a simulation of the exact call, as for one pool. Both hooks are checked: code pins on both legs in ELY_GUARD (the
+// coin leg's guard wraps the HYPE leg's guard), each leg's buy-time rules on a buy, tiers combined (the weaker one decides: an
+// 'unverified' leg = an 'unverified' route with its 3 HYPE cap and the click's ≥ 80 % buy-and-sell-back). Sells are never refused for a tier.
+// The middle tokens are exactly these three (addresses as on chain; the lane's elysium-config.mjs quoteTokens):
+export const ELY_VIA_TOKENS: readonly string[] = [
+  '0xe45a355d9e9cad2ad85f2d03e3ee3102a036acf0',   // KNTQ, Kinetiq's governance token (18 dec)
+  '0xb47c4c8f73f009cc0c0d3f92b388d13e293f0b65',   // USDC as bridged to Elysium (6 dec)
+  '0x0f79931689af199e7cf868ed1107bba2c83c68f7',   // VOLTA, volta.family's coin (18 dec)
+];
+export const ELY_VIA_VENUE = 'uni-v4' as const;   // both legs on Uniswap's PoolManager, one router call
+export const ELY_VIA_MAX_LEGS = 5;                // HYPE legs tried per coin leg: the route's own + up to 4 canonical hookless ones
+const worseTier = (a?: ElyHookTier, b?: ElyHookTier): ElyHookTier | undefined => {
+  const rank = (x?: ElyHookTier) => (x === 'unverified' ? 3 : x === 'auto' ? 2 : x === 'reviewed' ? 1 : 0);
+  return rank(a) >= rank(b) ? a : b;
+};
+// a two-hop route's own checks (pure): venue / pair / middle token, then each leg exactly as a one-pool route's key and hook
+function viaRouteProblem(t: string, route: Partial<ElyRoute>): string {
+  if (route.venue !== ELY_VIA_VENUE) return 'a two-hop route goes through Uniswap V4 only';
+  if (route.pair !== 'native') return 'a two-hop route is paid in native HYPE only';
+  const via = route.via;
+  if (!via || typeof via !== 'object') return 'bad two-hop route';
+  const q = lc(via.token);
+  if (!ELY_VIA_TOKENS.includes(q)) return 'the route goes through a token this vault does not route through';
+  if (ELY_VIA_TOKENS.includes(t)) return 'a listed middle token is not bought through another one';
+  if (!route.poolKey || typeof route.poolKey !== 'object' || !via.poolKey || typeof via.poolKey !== 'object') return 'no pool key';
+  const pm = ELY_VENUES[ELY_VIA_VENUE].manager;
+  return v4LegProblem(t, route.poolKey, pm, q, route.hook) || v4LegProblem(q, via.poolKey, pm, ELY_ZERO, via.hook);
+}
 
 // '' when the route is one this path signs for, otherwise why not. Pure; no chain read (the probe proves the pool exists).
 export function elyRouteProblem(token: string, r: unknown): string {
@@ -362,6 +407,7 @@ export function elyRouteProblem(token: string, r: unknown): string {
   const v = (ELY_VENUES as Record<string, (typeof ELY_VENUES)[ElyVenue]>)[String(route.venue)];
   if (!v) return 'the route names a venue this vault does not trade through on Elysium';
   if (route.pair !== 'native' && route.pair !== 'weth') return 'unknown pair';
+  if (route.via != null) return viaRouteProblem(t, route);   // release 17
   if (v.kind === 'v3') {
     if (route.pair !== 'weth') return 'a V3 pool is always quoted in WHYPE';
     // release 7: launchpad factories enable 2 %, 3 %, 4 %, 5 % … tiers (ILLUSIONIST 2 %, Stockium 2-5 %). A V3 pool's fee is fixed for life
@@ -375,12 +421,16 @@ export function elyRouteProblem(token: string, r: unknown): string {
   return v4KeyProblem(t, pk, v.manager, route.pair, route.hook);
 }
 export function v4KeyProblem(token: string, pk: V4PoolKey, manager: string, pair: 'native' | 'weth', claim?: { codeHash?: string; tier?: string } | null): string {
+  return v4LegProblem(token, pk, manager, pair === 'native' ? ELY_ZERO : ELY_WHYPE, claim);
+}
+// release 17: one leg — `quote` = native HYPE / WHYPE for a one-pool route, or the middle token for a two-hop route's coin leg
+function v4LegProblem(token: string, pk: V4PoolKey, manager: string, quote: string, claim?: { codeHash?: string; tier?: string } | null): string {
   const c0 = lc(pk.currency0), c1 = lc(pk.currency1), t = lc(token);
   if (!/^0x[0-9a-f]{40}$/.test(c0) || !/^0x[0-9a-f]{40}$/.test(c1) || !/^0x[0-9a-f]{40}$/.test(lc(pk.hooks))) return 'bad pool key';
   if (!(c0 < c1)) return 'pool key currencies are not sorted';
   if (c0 !== t && c1 !== t) return 'the pool does not contain this token';
   const other = c0 === t ? c1 : c0;
-  if (pair === 'native' ? other !== ELY_ZERO : other !== ELY_WHYPE) return 'the pool is not quoted in HYPE';
+  if (other !== lc(quote)) return quote === ELY_ZERO || quote === ELY_WHYPE ? 'the pool is not quoted in HYPE' : 'the coin\'s pool is not quoted in the route\'s middle token';
   const fee = Number(pk.fee), ts = Number(pk.tickSpacing);
   if (!Number.isInteger(fee) || !Number.isInteger(ts) || ts < 1 || ts > 32767) return 'bad pool key';
   const hooks = lc(pk.hooks);
@@ -429,7 +479,8 @@ export function elyCandidates(token: string, hint?: ElyRoute | null): ElyCandida
     const [c0, c1] = lc(other) < t ? [other, t] : [t, other];
     out.push(v4('uni-v4', { currency0: c0 as Hex, currency1: c1 as Hex, fee, tickSpacing: ts, hooks: ELY_ZERO }, pair));
   }
-  if (hint && !elyRouteProblem(t, hint)) {
+  if (hint && hint.via != null && !elyRouteProblem(t, hint)) out.push(...viaCandidates(t, hint));   // release 17: two hops
+  else if (hint && !elyRouteProblem(t, hint)) {
     const v = ELY_VENUES[hint.venue];
     if (v.kind === 'v3') { const c = out.find((x) => x.venue === hint.venue && x.fee === Number(hint.fee)); if (c) c.hinted = true; else out.push(v3(hint.venue, Number(hint.fee), true)); }
     else {
@@ -437,6 +488,38 @@ export function elyCandidates(token: string, hint?: ElyRoute | null): ElyCandida
       const id = v4PoolId(pk); const c = out.find((x) => x.venue === hint.venue && x.pool === id);
       if (c) c.hinted = true; else out.push(v4(hint.venue, pk, hint.pair, true, hint.hook));
     }
+  }
+  return out;
+}
+// release 17: one V4 leg on a PoolManager — its slot, id, existence check, hook pin (when the hook touches swaps), buy-time rules, tier
+type ElyLeg = { id: Hex; slot: Hex; check: { target: Hex; data: Hex }; pin?: { manager: Hex; slot: Hex; hook: Hex; codeHash: Hex }; rules?: ElyRule[]; tier?: ElyHookTier };
+function v4Leg(manager: string, pk: V4PoolKey, token: string, claim?: ElyRoute['hook']): ElyLeg {
+  const slot = v4StateSlot(pk), id = v4PoolId(pk);
+  const vd = hookSwapFlags(pk.hooks) ? elyHookVerdict(manager, pk.hooks, Number(pk.fee), claim) : null;
+  const codeHash = vd && vd.ok ? vd.codeHash : '', rules = codeHash && vd!.tier === 'reviewed' ? elyHookCodeRules(pk.hooks, codeHash, lc(token), id) : [];
+  return { id, slot, check: { target: lc(manager) as Hex, data: encodeFunctionData({ abi: EXTSLOAD, functionName: 'extsload', args: [slot] }) },
+    ...(codeHash ? { pin: { manager: lc(manager) as Hex, slot, hook: lc(pk.hooks) as Hex, codeHash }, tier: vd!.tier as ElyHookTier } : {}), ...(rules.length ? { rules } : {}) };
+}
+const keyOf = (k: V4PoolKey): V4PoolKey => ({ currency0: lc(k.currency0) as Hex, currency1: lc(k.currency1) as Hex, fee: Number(k.fee), tickSpacing: Number(k.tickSpacing), hooks: lc(k.hooks) as Hex });
+// the identity of a two-hop candidate (what the lane's readings and the vault's memos key on): keccak(coin leg id ‖ HYPE leg id)
+export const elyViaPathId = (coinLeg: V4PoolKey, hypeLeg: V4PoolKey): Hex => keccak256(encodePacked(['bytes32', 'bytes32'], [v4PoolId(keyOf(coinLeg)), v4PoolId(keyOf(hypeLeg))]));
+// release 17: the two-hop candidates of a valid two-hop hint: its coin leg × (its own HYPE leg [hinted], then the middle token's
+// canonical hookless native pools at the standard fee / tick-spacing pairs), at most ELY_VIA_MAX_LEGS. The page names the coin leg (the
+// probe proves it exists and fills); it cannot add a HYPE leg the rules refuse, and the canonical ones need no page at all.
+function viaCandidates(t: Hex, hint: ElyRoute): ElyCandidate[] {
+  const v = ELY_VENUES[ELY_VIA_VENUE], q = lc(hint.via!.token) as Hex, pk = keyOf(hint.poolKey!);
+  const coin = v4Leg(v.manager, pk, t, hint.hook);
+  const legs: { k: V4PoolKey; claim?: ElyRoute['hook'] }[] = [{ k: keyOf(hint.via!.poolKey), claim: hint.via!.hook }];
+  for (const [fee, ts] of V4_STD) legs.push({ k: { currency0: ELY_ZERO, currency1: q, fee, tickSpacing: ts, hooks: ELY_ZERO } });
+  const out: ElyCandidate[] = [], ids = new Set<string>();
+  for (const { k, claim } of legs) {
+    if (out.length >= ELY_VIA_MAX_LEGS) break;
+    const leg = v4Leg(v.manager, k, q, claim);
+    if (ids.has(leg.id)) continue; ids.add(leg.id);
+    const tier = worseTier(coin.tier, leg.tier);
+    out.push({ venue: ELY_VIA_VENUE, pair: 'native', router: v.router as Hex, routerPin: elyRouterPin(v.router) as Hex, poolKey: pk, pool: elyViaPathId(pk, k), check: coin.check, hinted: out.length === 0,
+      ...(coin.pin ? { pin: coin.pin } : {}), ...(coin.rules ? { rules: coin.rules } : {}), ...(tier ? { tier } : {}),
+      via: { token: q, poolKey: k, pool: leg.id, check: leg.check, ...(leg.pin ? { pin: leg.pin } : {}), ...(leg.rules ? { rules: leg.rules } : {}), ...(leg.tier ? { tier: leg.tier } : {}), ...(coin.tier ? { coinTier: coin.tier } : {}) } });
   }
   return out;
 }
@@ -475,8 +558,18 @@ const v4Actions = (actions: number[], params: Hex[]) => encodeAbiParameters([{ t
 //               amountIn; the old final UNWRAP_WETH(wallet, 0) unwrapped the router's whole WHYPE balance to the wallet.
 const settleOf = (cur: string, n: bigint) => encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }, { type: 'bool' }], [cur as Hex, n, false]);
 const takeOf = (cur: string, to: string) => encodeAbiParameters([{ type: 'address' }, { type: 'address' }, { type: 'uint256' }], [cur as Hex, to as Hex, 0n]);
+// release 17: OPEN_DELTA (ActionConstants.OPEN_DELTA = 0) as a swap's amountIn = the whole credit the previous swap left in that currency
+const OPEN_DELTA = 0n;
 export function elyBuyEnc(c: ElyCandidate, token: string, amountIn: bigint, min: bigint): Enc {
   const t = lc(token);
+  if (c.via && c.poolKey) {
+    // two hops: HYPE → middle token (exactly amountIn) → coin (all of it; the floor on the coin), HYPE settled from msg.value
+    const q = lc(c.via.token), h = c.via.poolKey;
+    const v4 = v4Actions([ACT.SWAP_EXACT_IN_SINGLE, ACT.SWAP_EXACT_IN_SINGLE, ACT.SETTLE, ACT.TAKE], [
+      swapSingle(h, lc(h.currency0) === ELY_ZERO, amountIn, 0n), swapSingle(c.poolKey, lc(c.poolKey.currency0) === q, OPEN_DELTA, min),
+      settleOf(ELY_ZERO, amountIn), takeOf(t, MSG_SENDER)]);
+    return { commands: toHex(new Uint8Array([CMD.V4_SWAP])), inputs: [v4] };
+  }
   if (c.poolKey) {
     const pay = c.pair === 'native' ? ELY_ZERO : ELY_WHYPE;
     const v4 = v4Actions([ACT.SWAP_EXACT_IN_SINGLE, ACT.SETTLE, ACT.TAKE], [swapSingle(c.poolKey, lc(c.poolKey.currency0) === pay, amountIn, min), settleOf(pay, amountIn), takeOf(t, MSG_SENDER)]);
@@ -500,6 +593,12 @@ export function elyBuyEncR7(c: ElyCandidate, token: string, amountIn: bigint, mi
 // wallet gets (V4 native: TAKE_ALL's minimum; WHYPE pools: the swap's and the unwrap's minimum)
 export function elySellEnc(c: ElyCandidate, token: string, amountIn: bigint, min: bigint): Enc {
   const t = lc(token);
+  if (c.via && c.poolKey) {
+    // release 17, two hops: coin (exactly amountIn, pulled through Permit2) → middle token → native HYPE to the wallet (≥ min)
+    const q = lc(c.via.token), h = c.via.poolKey;
+    return { commands: toHex(new Uint8Array([CMD.V4_SWAP])), inputs: [v4Actions([ACT.SWAP_EXACT_IN_SINGLE, ACT.SWAP_EXACT_IN_SINGLE, ACT.SETTLE_ALL, ACT.TAKE_ALL], [
+      swapSingle(c.poolKey, lc(c.poolKey.currency0) === t, amountIn, 0n), swapSingle(h, lc(h.currency0) === q, OPEN_DELTA, min), ca(t, amountIn), ca(ELY_ZERO, min)])] };
+  }
   if (c.poolKey) {
     // release 6: = encodeV4Sell's actions (SWAP_EXACT_IN_SINGLE, SETTLE_ALL coin, TAKE_ALL native ≥ min) with the 6-field swap
     if (c.pair === 'native') return { commands: toHex(new Uint8Array([CMD.V4_SWAP])), inputs: [v4Actions([ACT.SWAP_EXACT_IN_SINGLE, ACT.SETTLE_ALL, ACT.TAKE_ALL], [swapSingle(c.poolKey, lc(c.poolKey.currency0) === t, amountIn, min), ca(t, amountIn), ca(ELY_ZERO, min)])] };
@@ -569,6 +668,14 @@ const ZERO32 = ('0x' + '0'.repeat(64)) as Hex;
 export function elyProbeCheck(c: ElyCandidate, side: 'buy' | 'sell' = 'buy'): { check: Hex; checkData: Hex } {
   const hook = c.pin ? c.pin.hook : ELY_ZERO, hookHash = c.pin ? c.pin.codeHash : ZERO32;
   const rules = side === 'buy' && c.rules ? c.rules : [];
+  // release 17, two hops: the coin leg's guard (router pin, its hook's pin, its rules) wraps the HYPE leg's guard (router pin again, that
+  // hook's pin, its rules), whose answer is the HYPE leg's slot0: 0 unless both pins (and on a buy both legs' rules) hold. The coin
+  // leg's own existence is proven by the swap itself (an uninitialised pool reverts: never picked).
+  if (c.via) {
+    const v = c.via, vRules = side === 'buy' && v.rules ? v.rules : [];
+    const inner = encodeFunctionData({ abi: GUARD_ABI, functionName: 'check', args: [c.router, (c.routerPin || ZERO32) as Hex, (v.pin ? v.pin.hook : ELY_ZERO) as Hex, v.pin ? v.pin.codeHash : ZERO32, v.check.target, v.check.data, vRules.map((r) => ({ ...r }))] });
+    return { check: ELY_GUARD, checkData: encodeFunctionData({ abi: GUARD_ABI, functionName: 'check', args: [c.router, (c.routerPin || ZERO32) as Hex, hook as Hex, hookHash, ELY_GUARD, inner, rules.map((r) => ({ ...r }))] }) };
+  }
   return { check: ELY_GUARD, checkData: encodeFunctionData({ abi: GUARD_ABI, functionName: 'check', args: [c.router, (c.routerPin || ZERO32) as Hex, hook as Hex, hookHash, c.check.target, c.check.data, rules.map((r) => ({ ...r }))] }) };
 }
 // the state the probe call runs on: the probe's code at the wallet's own address (with the balance it needs) and the guard
