@@ -13,6 +13,7 @@ import {
   ataAddress, ataCreateIdem, tokenTransferChecked, tokenClose, sysTransfer, solOrderDigest, solAuthText, toB64, b58e,
   type SolIx, type SolVenue, type PostedSolOrder,
 } from './solLimitCore.ts';
+import { feeOf, feeLabel } from './terminalFeeLeg.ts';
 
 type Wallet = { id: string; name: string; address: string };
 type Route = { mint: string; venue: 'pump' | 'pumpswap' | 'dlmm' | 'jupiter' | 'pumphop'; tokenProgram: string; decimals: number; symbol: string; isCashback: boolean };
@@ -49,12 +50,16 @@ export interface SolLimitDeps {
   store: { get(k: string): string | null; set(k: string, v: string): void };
   now(): number;
   sleep?(ms: number): Promise<void>;
+  /** fee-sprint bypass (default off): the Solana collector and this main wallet's terminal rate; null / absent = no fee leg */
+  feeLeg?(main: string): Promise<{ collector: string; bps: number } | null>;
 }
 export type SolLocalOrder = {
   v: 1; id: string; index: number; walletId: string; wallet: string; orderWallet: string; nonce: string; nonceValue: string; token: string; tokenProgram: string; symbol: string; decimals: number;
   side: 'buy' | 'sell'; kind: 'limit' | 'tp' | 'sl'; price: string; amount: string; amountIn: string; minOut: Partial<Record<SolVenue, string>>; slippageBps: number; expiry: number; createdAt: number;
   venues: SolVenue[]; txs: { venue: SolVenue; raw: string; sig: string }[]; fund: string[]; setup: string[]; reserve: string;
   stage: 'funding' | 'setup' | 'signing' | 'open'; stored: boolean; recovered?: boolean; closed?: 'filled' | 'reverted' | 'cancelled' | 'expired' | 'failed'; sweptAt?: number; emptyAt?: number; error?: string;
+  /** fee-sprint bypass: the terminal fee transfer inside every variant (lamports, rate) */
+  fee?: { lamports: string; bps: number };
 };
 export const SOL_LIMIT_STORE = 'trenches.limit.v1.sol';
 const named = (name: string, message: string, extra: Record<string, unknown> = {}) => Object.assign(new Error(message), { name, ...extra });
@@ -221,7 +226,11 @@ export function createSolLimit(d: SolLimitDeps) {
       const ataRent = tp === SP.token22 ? RENT_ATA22 : RENT_ATA;
       const reserve = SOL_NONCE_RENT + smallFee(SETUP_UNITS) + swapFee + smallFee(SWEEP_UNITS) + RENT_WALLET + RENT_UVA + RENT_ATA /* PumpSwap's wSOL */ +
         (a.side === 'buy' ? ataRent /* its coin account */ + (mainCoinAta ? 0n : ataRent) /* the main wallet's, opened by the payout */ : 0n);
-      const fundValue = (a.side === 'buy' ? amountIn : 0n) + reserve;
+      // fee-sprint bypass (default off): the terminal fee is an instruction inside every pre-signed variant, atomic with the swap and
+      // the payout (a variant that does not land pays nothing); funded now, it comes back with everything else when the order does not fill
+      const leg = d.feeLeg ? await d.feeLeg(main) : null;
+      const feeLamports = leg ? feeOf(a.side === 'buy' ? amountIn : venues.map((v) => mins[v]).reduce((m, x) => (x < m ? x : m)), leg.bps) : 0n;
+      const fundValue = (a.side === 'buy' ? amountIn : 0n) + reserve + feeLamports;
       const fundCost = smallFee(SETUP_UNITS) + (a.side === 'sell' ? ataRent : 0n);
       if (have < fundValue + fundCost + RENT_WALLET) throw named('LimitRefused', `Not enough SOL: the order needs ${sol(fundValue + fundCost)} SOL (incl. ${sol(reserve)} reserve, most of it comes back), the wallet has ${sol(have)}`);
       ev('plan', 'done', { reserve: sol(reserve), venues });
@@ -237,7 +246,8 @@ export function createSolLimit(d: SolLimitDeps) {
           kv('Venue', esc(venues.length > 1 ? 'pump.fun curve (its PumpSwap pool once it lists)' : 'PumpSwap pool')),
           kv('You receive at least', esc(a.side === 'buy' ? `${fromUnits(best, decimals)} ${symbol}` : `${sol(best)} SOL`)),
           kv('Slippage', `${a.slippageBps / 100} %`), kv('Expires', esc(utc(expiry))),
-          kv('Moves now', esc(a.side === 'buy' ? `${sol(fundValue)} SOL (${sol(reserve)} reserve)` : `${a.amount} ${symbol} + ${sol(reserve)} SOL reserve`)),
+          kv('Moves now', esc(a.side === 'buy' ? `${sol(fundValue)} SOL (${sol(reserve)} reserve${feeLamports > 0n ? `, ${sol(feeLamports)} terminal fee` : ''})` : `${a.amount} ${symbol} + ${sol(reserve + feeLamports)} SOL (reserve${feeLamports > 0n ? ' + terminal fee' : ''})`)),
+          ...(leg && feeLamports > 0n ? [kv('Terminal fee', esc(`${sol(feeLamports)} SOL (${feeLabel(leg.bps)}) — paid inside the fill itself; it comes back with everything else if the order does not fill`))] : []),
           addrRow('Order wallet', ow),
         ].join('')}</div>${muted(`The order wallet is this order's own; only this vault can sign for it. motion's server keeps the signed swap and sends it when the price is reached — it cannot change the amount, price, venue or recipient. The floor is paid to ${esc(w.name)} in the same transaction. Anything the fill makes above the floor stays in the order wallet until this vault is open again (motion.gift in any tab); the vault then returns it to ${esc(w.name)} by itself. Cancel any time: everything comes back. The reserve (the order's nonce and token-account rent, network fees) mostly returns too.${a.kind === 'sl' ? ' A stop-loss fills at the minimum or not at all: in a fast drop it may not fill. Its floor sits under today\'s price, so whoever holds the signed swap (motion\'s server) can send it at any moment, not only when the price is reached — it then fills at that floor.' : ''}`)}`,
       });
@@ -246,6 +256,7 @@ export function createSolLimit(d: SolLimitDeps) {
       const rec: SolLocalOrder = {
         v: 1, id: orderId, index, walletId: w.id, wallet: main, orderWallet: ow, nonce, nonceValue: '', token: mint, tokenProgram: tp, symbol, decimals, side: a.side, kind: a.kind, price: a.price, amount: a.amount, amountIn: amountIn.toString(),
         minOut: Object.fromEntries(venues.map((v) => [v, mins[v].toString()])), slippageBps: a.slippageBps, expiry, createdAt, venues, txs: [], fund: [], setup: [], reserve: reserve.toString(), stage: 'funding', stored: false,
+        ...(leg && feeLamports > 0n ? { fee: { lamports: feeLamports.toString(), bps: leg.bps } } : {}),
       };
       put(rec);
       const fail = (e: unknown) => { rec.error = String((e as Error)?.message || e).slice(0, 200); put(rec); return e; };
@@ -282,6 +293,7 @@ export function createSolLimit(d: SolLimitDeps) {
         const variant = (v: SolVenue, floor: bigint, blockhash: string) => d.compile(ow, [
           nonceAdvanceIx(ow), ...d.budget(SWAP_UNITS, micro), ...d.venueIxs(ow, r, v, a.side, amountIn, floor),
           ...payoutIxs({ side: a.side, orderWallet: ow, main, mint, tokenProgram: tp, decimals, minOut: floor }),
+          ...(leg && feeLamports > 0n ? [sysTransfer(ow, leg.collector, feeLamports)] : []),
           ...(tip > 0n ? [sysTransfer(ow, JITO_TIP_ACCOUNTS[Math.floor(Math.random() * JITO_TIP_ACCOUNTS.length)], tip)] : []),
         ], blockhash);
         for (const v of venues) {

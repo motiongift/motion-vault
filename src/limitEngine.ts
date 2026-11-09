@@ -16,6 +16,7 @@
 // · the server gets signed bytes and one signed auth text per request (/api/limit on our own server only; reads carry
 //   the read token in headers, never in the URL).
 import { keccak256, parseAbi } from 'viem';
+import { feeOf, feeLabel } from './terminalFeeLeg.ts';
 import {
   LIMIT_CHAIN, MAX_OPEN, MAX_FILLERS, MAX_GAS_LIMIT, V4_EXEC_GAS, CURVE_EXEC_GAS, BRIDGE_EXEC_GAS, ERC20_ABI, SCAN_GAP, DELTA_PROBE_CODE, FOUR_SELL_REFUSED, POOL_MANAGER, EXTSLOAD_ABI,
   limitArgs, limitChain, variantsFor, LIMIT_HOOKS, variantTax, variantTaxCap, minOutOf, notionalWei, toUnits, fromUnits, signedGasPriceFor, gasLimitOf, gasReserve, swapCall, sellApprovals, transferData, orderDigest, authText, deltaProbeData,
@@ -80,6 +81,10 @@ export interface LimitDeps {
   now(): number;
   /** (rel-12) a pause between two posts of an order (left out: a real timer) */
   sleep?(ms: number): Promise<void>;
+  /** fee-sprint bypass (default off): the terminal fee of a new order of this main wallet — the chain's pinned collector and
+   *  the wallet's rate (src/terminalFeeLeg.ts; base rate unless a signed entitlement says less). null / absent = no fee leg:
+   *  the order is placed exactly as before. */
+  feeLeg?(main: Hex): Promise<{ collector: Hex; bps: number } | null>;
 }
 // (rel-12, the AIMCAP report 2026-11-06) an order that motion's server did not take is posted again after 1.5 s and 4 s; still not
 // taken, it cannot fill (only the server sends the signed swap) and everything goes back to the main wallet at once
@@ -95,6 +100,8 @@ export type LocalOrder = {
   fund: string[]; approve: string[]; swap: Record<string, string>; reserve: string; gasPrice: string;
   stage: 'funding' | 'signing' | 'open'; stored: boolean; closed?: 'filled' | 'reverted' | 'cancelled' | 'expired' | 'failed'; sweptAt?: number; error?: string;
   recovered?: boolean; emptyAt?: number;
+  /** fee-sprint bypass: the pre-signed terminal fee transfer (its bytes are rec.txs' role 'fee'), one nonce after the swap */
+  fee?: { nonce: number; value: string; bps: number; hash: string };
   /** §19: a bridged order's quote, path and pool (posted with it, under the digest) */
   bridge?: PostedBridge;
 };
@@ -173,11 +180,37 @@ export function createLimit(d: LimitDeps) {
   };
 
   // ── the way back: every token and the native left, from the order wallet to its main wallet, and the swap's nonce burnt ──
-  async function returnAll(w: Wallet, signer: OrderSigner, token: Hex | null, swapNonce: number | null, ev: (step: string, state: string, x?: Record<string, unknown>) => void) {
+  async function returnAll(w: Wallet, signer: OrderSigner, token: Hex | null, swapNonce: number | null, ev: (step: string, state: string, x?: Record<string, unknown>) => void, feeBack: FeeBack | null = null) {
     const ow = signer.address, main = w.address;
-    const out: { hashes: string[]; eth: bigint; token: bigint; tokenError?: string } = { hashes: [], eth: 0n, token: 0n };
+    const out: { hashes: string[]; eth: bigint; token: bigint; tokenError?: string; feeHash?: string; feeError?: string } = { hashes: [], eth: 0n, token: 0n };
     const fee = await d.gasPrice();
     let n = await pc.getTransactionCount({ address: ow, blockTag: 'pending' });
+    // fee-sprint bypass: the order's fee tx sits one nonce after its swap. The moment the swap's nonce is used its outcome is final:
+    // filled → the fee goes first (so nothing sent back can take its nonce); not filled → the way back burns that nonce too
+    let feeSettled = !feeBack;
+    const feeGuard = async () => {
+      if (feeSettled || !feeBack || n < feeBack.nonce) return;
+      feeSettled = true;
+      if (n !== feeBack.nonce || !feeBack.raw) return;
+      let filled = false, known = false;
+      for (const h of feeBack.swapHashes) { const r = await receiptOf(h); if (r) { filled = r.status === 'success'; known = true; break; } }
+      // (review 2026-11-09) no swap receipt yet while the swap's nonce is still unmined: the outcome is unknown — stop before anything
+      // takes the fee nonce (deciding "unfilled" here would let the way back take it and skip the fee of a fill in flight)
+      if (!known && (await pc.getTransactionCount({ address: ow, blockTag: 'latest' })) <= (feeBack.nonce - 1)) {
+        feeSettled = false;
+        throw named('LimitUnknown', 'Status unknown — the swap of this order is in flight; check the order again in a moment before returning its funds', { unknown: true });
+      }
+      if (!filled) return;
+      // (review 2026-11-09) a fee tx the node refuses must never lock the user's funds: a transport failure is retried by the caller,
+      // any other refusal forfeits the fee and the way back continues (its next send takes the fee nonce)
+      let h: Hex | null = null;
+      try { h = await sendRaw(feeBack.raw); }
+      catch (e) { if (/fetch failed|network|timed? ?out|ECONN|socket|50[23]|429/i.test(String((e as Error)?.message || e))) throw e; out.feeError = String((e as Error)?.message || e).slice(0, 120); }
+      if (h) { await landed(h, 'The terminal fee of the filled order'); out.hashes.push(h); out.feeHash = h; }
+      n = await pc.getTransactionCount({ address: ow, blockTag: 'pending' });
+    };
+    const burnTo = feeBack && swapNonce != null ? feeBack.nonce : swapNonce;
+    await feeGuard();
     if (token) {
       const bal = await balanceOf(token, ow).catch(() => 0n);
       if (bal > 0n) {
@@ -191,14 +224,18 @@ export function createLimit(d: LimitDeps) {
         }
       }
     }
-    // zero-value sends to itself until the swap's nonce is behind (only when approvals never landed: rare)
-    for (let i = 0; swapNonce != null && n < swapNonce && i < MAX_FILLERS; i += 1) {
+    await feeGuard();
+    // zero-value sends to itself until the swap's nonce is behind (only when approvals never landed: rare); with a fee tx, until
+    // the fee's nonce is behind too (the native send below takes it)
+    for (let i = 0; burnTo != null && n < burnTo && i < MAX_FILLERS; i += 1) {
+      await feeGuard(); if (burnTo != null && n >= burnTo) break;
       const gas = plainGas(await pc.estimateGas({ account: ow, to: ow, value: 0n }));
       if ((await pc.getBalance({ address: ow })) < gas * fee) break;
       const h = await sendRaw(await signer.sign({ to: ow, value: 0n, nonce: n, gas, gasPrice: fee }));
       if (h) { await landed(h, 'Closing the order'); out.hashes.push(h); }
       n = await pc.getTransactionCount({ address: ow, blockTag: 'pending' });
     }
+    await feeGuard();
     // the native last: everything but its own fee
     const bal = await pc.getBalance({ address: ow });
     if (bal > 0n) {
@@ -222,6 +259,12 @@ export function createLimit(d: LimitDeps) {
   // (rel-12, the AIMCAP report) what the way back still lacks in gas: the coin's transfer, the zero-value sends up to the swap's
   // nonce and the native's own send, at the fee now + 20 %, minus what the order wallet holds. 0 = it pays for itself (or there is
   // nothing but its own native to return); -1 = more than a gas reserve ever is (P().maxReserve): the vault does not top that up
+  type FeeBack = { raw: Hex | ''; nonce: number; swapHashes: string[] };
+  const feeBackOf = (rec: LocalOrder | null): FeeBack | null => {
+    if (!rec?.fee) return null;
+    const t = rec.txs.find((x) => x.role === 'fee');
+    return { raw: (t?.raw || '') as Hex | '', nonce: rec.fee.nonce, swapHashes: Object.values(rec.swap || {}) };
+  };
   async function returnGasShort(ow: Hex, main: Hex, token: Hex | null, swapNonce: number | null, st: { eth: bigint; token: bigint }): Promise<bigint> {
     let gas = 0n; let work = false;
     if (token && st.token > 0n) {
@@ -268,6 +311,7 @@ export function createLimit(d: LimitDeps) {
     orderId: rec.id, index: rec.index ?? null, walletId: rec.walletId, wallet: rec.wallet, orderWallet: rec.orderWallet, chain: P().key, native: unit(), token: rec.token || null, symbol: rec.symbol, decimals: rec.decimals,
     side: rec.side, kind: rec.kind, price: rec.price, amount: rec.amount, amountIn: rec.amountIn, minOut: { ...rec.minOut }, slippageBps: rec.slippageBps,
     expiry: rec.expiry, createdAt: rec.createdAt, venues: [...rec.venues], swapNonce: rec.swapNonce, stored: rec.stored, state, recovered: !!rec.recovered,
+    ...(rec.fee ? { terminalFee: { value: eth(BigInt(rec.fee.value)), bps: rec.fee.bps, nonce: rec.fee.nonce, hash: rec.fee.hash } } : {}),
     txs: { fund: [...rec.fund], approve: [...rec.approve], swap: { ...rec.swap } }, reserve: rec.reserve,
     ...(st ? { balance: { eth: eth(st.eth), token: fromUnits(st.token, rec.decimals), nonce: st.nonce } } : {}),
     // a sweep with no dialog: only what this vault knows can no longer fill (a recovered order is cancelled instead: it asks)
@@ -445,6 +489,11 @@ export function createLimit(d: LimitDeps) {
         catch (e) { if (exec == null) throw e; return (await pc.estimateGas({ account: main, to: ow, data: call.data, value: 0n })) + exec; }
       };
       let swapGas: Record<string, bigint> = {}, approveGas: bigint[] = [], ethSweepGas = 0n, tokSweepGas = 0n, fundTokGas = 0n, reserve = 0n;
+      // fee-sprint bypass (default off): the terminal fee on the order's own basis (a buy's size, a sell's lowest floor), funded now,
+      // pre-signed one nonce after the swap, paid only once the swap has filled (the way back of an unfilled order burns it)
+      const leg = d.feeLeg ? await d.feeLeg(main) : null;
+      const feeBasis = () => (a.side === 'buy' ? amountIn : Object.values(mins).map(BigInt).reduce((m, x) => (x < m ? x : m)));
+      let feeWei = leg ? feeOf(feeBasis(), leg.bps) : 0n; let feeGas = 0n;
       let approvals = a.side === 'sell' ? sellApprovals(variants, token, amountIn, deadline) : [];
       try {
         // security audit LO-9: a pre-signed tx may wait 7 days, and on Robinhood its L1 share is charged at inclusion: the L1
@@ -455,9 +504,10 @@ export function createLimit(d: LimitDeps) {
         // review M3: the funding transfer as it will be sent (main → order wallet), and the way back as the order wallet's own transfer
         fundTokGas = a.side === 'sell' ? gasLimitOf(await pc.estimateGas({ account: main, to: token, data: transferData(ow, amountIn) })) : 0n;
         tokSweepGas = fundTokGas;
-        reserve = gasReserve({ slots: [...approveGas.map((g) => [g]), variants.map((v) => swapGas[v.venue])], sweeps: a.side === 'sell' ? [ethSweepGas, tokSweepGas] : [ethSweepGas], gasPrice: G, max: C.maxReserve });
+        if (leg && feeWei > 0n) { const [g, x] = await Promise.all([pc.estimateGas({ account: main, to: leg.collector, value: 1n }), l1Extra({ to: leg.collector })]); feeGas = l1Headroom(gasLimitOf(g), x); }
+        reserve = gasReserve({ slots: [...approveGas.map((g) => [g]), variants.map((v) => swapGas[v.venue]), ...(feeGas > 0n ? [[feeGas]] : [])], sweeps: a.side === 'sell' ? [ethSweepGas, tokSweepGas] : [ethSweepGas], gasPrice: G, max: C.maxReserve });
       } catch (e) { if ((e as Error)?.name === 'LimitRefused') throw e; throw named('LimitRefused', `Could not price the order: ${String((e as Error)?.message || e).replace(/\s+/g, ' ').slice(0, 120)}`); }
-      const fundValue = (a.side === 'buy' ? amountIn : 0n) + reserve;
+      const fundValue = (a.side === 'buy' ? amountIn : 0n) + reserve + feeWei;
       const fundCost = (ethSweepGas + fundTokGas) * sendFee;
       if (mainEth < fundValue + fundCost) throw named('LimitRefused', `Not enough ${C.native}: the order needs ${eth(fundValue + fundCost)} ${C.native} (incl. ${eth(reserve)} gas reserve), the wallet has ${eth(mainEth)}`);
       ev('plan', 'done', { reserve: eth(reserve), venues: variants.map((v) => v.venue) });
@@ -482,7 +532,8 @@ export function createLimit(d: LimitDeps) {
           kv('You receive at least', esc(receive)),
           kv('Slippage', `${a.slippageBps / 100} %`),
           kv('Expires', esc(utc(expiry))),
-          kv('Moves now', esc(a.side === 'buy' ? `${eth(fundValue)} ${C.native} (${eth(reserve)} gas reserve)` : `${a.amount} ${symbol} + ${eth(reserve)} ${C.native} gas reserve`)),
+          kv('Moves now', esc(a.side === 'buy' ? `${eth(fundValue)} ${C.native} (${eth(reserve)} gas reserve${feeWei > 0n ? `, ${eth(feeWei)} terminal fee` : ''})` : `${a.amount} ${symbol} + ${eth(reserve + feeWei)} ${C.native} (gas reserve${feeWei > 0n ? ' + terminal fee' : ''})`)),
+          ...(leg && feeWei > 0n ? [kv('Terminal fee', esc(`${eth(feeWei)} ${C.native} (${feeLabel(leg.bps)}) — paid only when the order fills; it comes back with everything else if it does not`))] : []),
           addrRow('Order wallet', ow),
         ].join('')}</div>${muted(`The order wallet is this order's own; only this vault can sign for it. motion's server keeps the signed swap and sends it when the price is reached — it cannot change the amount, price, venue or recipient. The floor is your limit price minus the slippage: a better price at that moment may not reach you in full. Cancel any time: everything comes back to ${esc(w.name)}.${a.kind === 'sl' ? ' A stop-loss fills at the minimum or not at all: in a fast drop it may not fill. Its floor sits under today\'s price, so whoever holds the signed swap (motion\'s server) can send it at any moment, not only when the price is reached — it then fills at that floor.' : ''} Network fees apply.`)}`,
       });
@@ -511,7 +562,7 @@ export function createLimit(d: LimitDeps) {
       const ret = async (why: string) => {
         // the order cannot go live: everything goes back to the main wallet at once, no dialog (the user already agreed to the order)
         rec.error = why.slice(0, 200); put(rec);
-        const r = await returnAll(w, signer, token, rec.swapNonce, ev).catch(() => null);
+        const r = await returnAll(w, signer, token, rec.swapNonce, ev, feeBackOf(rec)).catch(() => null);
         rec.closed = 'failed'; if (r) { rec.sweptAt = d.now(); if (r.empty) rec.emptyAt = d.now(); } put(rec);
         return named('LimitRefused', `${why} — ${r ? `the funds went back to ${w.name}` : 'return them with limit.sweep'}`, { orderId });
       };
@@ -524,6 +575,7 @@ export function createLimit(d: LimitDeps) {
           if (got < amountIn) {   // a token that takes a fee on transfer: the order sells what arrived
             if (got <= 0n) throw await ret('No tokens arrived in the order wallet');
             amountIn = got; mins = minOut(amountIn); rec.amountIn = amountIn.toString(); rec.minOut = mins; approvals = sellApprovals(variants, token, amountIn, deadline);
+            if (leg) feeWei = feeOf(feeBasis(), leg.bps);   // what arrived is less: so is its fee (the difference comes back with the sweep)
             if (notionalWei(amountIn, a.price, decimals) < C.minSize) throw await ret(`What arrived is below the ${eth(C.minSize)} ${C.native} minimum`);
           }
           ev('approve', 'active', { orderId });
@@ -546,6 +598,11 @@ export function createLimit(d: LimitDeps) {
           rec.txs.push({ nonce: swapNonce, role: 'swap', venue: v.venue, raw }); rec.swap[v.venue] = keccak256(raw);
         }
         rec.swapNonce = swapNonce; put(rec);
+        if (leg && feeWei > 0n) {
+          const raw = await signer.sign({ to: leg.collector, value: feeWei, nonce: swapNonce + 1, gas: feeGas, gasPrice: G });
+          rec.txs.push({ nonce: swapNonce + 1, role: 'fee', venue: 'fee', raw });
+          rec.fee = { nonce: swapNonce + 1, value: feeWei.toString(), bps: leg.bps, hash: keccak256(raw) }; put(rec);
+        }
         // the venue that exists now must take the call from the order wallet AND pay the main wallet (minOut 0: the route, the
         // approvals and the recipient, not the price)
         const checks: Record<string, string> = {};
@@ -625,7 +682,8 @@ export function createLimit(d: LimitDeps) {
       // (rel-12, the AIMCAP report: 605,835 AIMCAP sat in an order wallet with 0.00000032 ETH, so nothing could send them back until
       // the owner sent it gas by hand) the way back's gas, from the main wallet, when the order wallet cannot pay it; it comes back
       // with the native at the end of the return, so the user pays only the gas
-      const topUp = await returnGasShort(ow, lc(w.address) as Hex, token, swapNonce, st).catch(() => 0n);
+      const feeBack = trusted(rec) ? feeBackOf(rec) : null;
+      const topUp = await returnGasShort(ow, lc(w.address) as Hex, token, feeBack && swapNonce != null ? feeBack.nonce : swapNonce, st).catch(() => 0n);
       if (mode === 'cancel' && live) {
         const { esc, sub, muted, addrRow } = d.html;
         const kv = (k: string, v: string) => `<div class="dk-kv"><span>${esc(k)}</span><b>${v}</b></div>`;
@@ -652,7 +710,7 @@ export function createLimit(d: LimitDeps) {
         await landed(h as Hex, 'Topping up the order wallet\'s gas');
         gasHashes.push(h); ev('gas', 'done', { hash: h });
       }
-      const r0 = await returnAll(w, signer, token, swapNonce, ev);
+      const r0 = await returnAll(w, signer, token, swapNonce, ev, feeBack);
       const r = { ...r0, hashes: [...gasHashes, ...r0.hashes] };
       let state: string = 'swept';
       if (r.invalidated === false && trusted(rec)) {

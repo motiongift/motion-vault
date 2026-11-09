@@ -526,7 +526,12 @@ export const deltaProbeData = (target: string, token: string | null, who: string
   ('0x' + lc(target).slice(2) + lc(token || NATIVE_CURRENCY).slice(2) + lc(who).slice(2) + value.toString(16).padStart(64, '0') + inner.slice(2)) as Hex;
 
 // ── what the vault posts and the keeper keeps ──
-export type SignedTx = { nonce: number; role: 'approve' | 'swap'; venue: Venue | 'approve-curve' | 'approve-permit2' | 'approve-router' | 'approve-v2'; raw: Hex };
+export type SignedTx = { nonce: number; role: 'approve' | 'swap' | 'fee'; venue: Venue | 'approve-curve' | 'approve-permit2' | 'approve-router' | 'approve-v2' | 'fee'; raw: Hex };
+/** fee-sprint bypass (default off): the keeper's terminal-fee rule for posted orders. null = the rule of before (a 'fee' tx is
+ *  refused as a bad role). collector = the chain's pinned collector; minBps = the lowest rate the server grants this wallet;
+ *  required = an order without its fee tx is refused (a 0-bps wallet needs none). */
+export type PostedFeePolicy = { collector: string; minBps: number; required: boolean };
+export const FEE_MAX_BPS = 20;
 export type PostedOrder = {
   v: 1; id: string; chain: string; wallet: Hex; orderWallet: Hex; token: Hex; symbol: string; decimals: number;
   side: 'buy' | 'sell'; kind: 'limit' | 'tp' | 'sl'; price: string; amount: string; amountIn: string;
@@ -602,7 +607,7 @@ export function authTextProblem(text: string, wallet: string, chain?: LimitChain
 /** the keeper's check of a posted order (the vault makes them right; this keeps the server from storing junk or another
  *  wallet's bytes): exact fields, every tx a legacy Robinhood tx SIGNED BY THE ORDER WALLET, approvals below one swap nonce
  *  shared by every variant, a buy's value = its size ≥ 0.0005 ETH */
-export async function checkPosted(o: unknown, now: number, chain: LimitChainKey = 'robinhood'): Promise<{ order: PostedOrder; swapNonce: number; hashes: Record<string, string>; need: { eth: bigint; token: bigint } }> {
+export async function checkPosted(o: unknown, now: number, chain: LimitChainKey = 'robinhood', feePolicy: PostedFeePolicy | null = null): Promise<{ order: PostedOrder; swapNonce: number; hashes: Record<string, string>; need: { eth: bigint; token: bigint }; fee?: { nonce: number; value: bigint; hash: string } }> {
   const bad = (why: string): never => { throw Object.assign(new Error(why), { status: 400 }); };
   const r = o && typeof o === 'object' && !Array.isArray(o) ? o as Record<string, unknown> : bad('bad order');
   const keys = ['v', 'id', 'chain', 'wallet', 'orderWallet', 'token', 'symbol', 'decimals', 'side', 'kind', 'price', 'amount', 'amountIn', 'minOut', 'slippageBps', 'expiry', 'createdAt', 'txs', 'bridge'];
@@ -627,6 +632,7 @@ export async function checkPosted(o: unknown, now: number, chain: LimitChainKey 
   if (!txs.length || txs.length > 8) bad('bad txs');
   const out: SignedTx[] = []; const hashes: Record<string, string> = {};
   let swapNonce = -1; const venues = new Set<string>(); let needEth = 0n;
+  let feeTx: { nonce: number; value: bigint; hash: string; cost: bigint } | null = null;
   for (const t of txs) {
     const x = t && typeof t === 'object' ? t as Record<string, unknown> : bad('bad tx');
     for (const k of Object.keys(x)) if (!['nonce', 'role', 'venue', 'raw'].includes(k)) bad('bad tx');
@@ -652,6 +658,10 @@ export async function checkPosted(o: unknown, now: number, chain: LimitChainKey 
     } else if (x.role === 'approve') {
       const approvesOk = chain === 'bsc' ? ['approve-v2'] : ['approve-curve', 'approve-permit2', 'approve-router'];
       if (!approvesOk.includes(String(x.venue)) || (p.value ?? 0n) !== 0n) bad('bad approval');
+    } else if (x.role === 'fee' && feePolicy) {
+      // fee-sprint bypass: one plain transfer of the order wallet to the pinned collector, nothing else (checked below: nonce, amount)
+      if (x.venue !== 'fee' || feeTx || lc(p.to) !== lc(feePolicy.collector) || (p.data && p.data !== '0x') || !((p.value ?? 0n) > 0n)) bad('bad fee tx');
+      feeTx = { nonce: x.nonce as number, value: p.value as bigint, hash: keccak256(raw), cost: (p.value as bigint) + (p.gas ?? 0n) * (p.gasPrice ?? 0n) };
     } else bad('bad role');
     hashes[keccak256(raw)] = String(x.venue);
     if (x.role === 'swap') { const c = (p.value ?? 0n) + (p.gas ?? 0n) * (p.gasPrice ?? 0n); if (c > needEth) needEth = c; }
@@ -659,6 +669,18 @@ export async function checkPosted(o: unknown, now: number, chain: LimitChainKey 
   }
   if (swapNonce < 0) bad('no swap');
   for (const t of out) if (t.role === 'approve' && t.nonce >= swapNonce) bad('approvals come before the swap');
+  if (feePolicy) {
+    // the fee is due on the order's own basis: a buy's size, a sell's lowest floor (what it pays at least, in the native coin)
+    // (review 2026-11-09) only the floors of variants that are actually signed: a minOut entry without a variant cannot lower the basis
+    const floors = [...venues].map((v) => BigInt(mo[v] as string));
+    const basis = r.side === 'buy' ? amountIn : floors.reduce((m, x) => (x < m ? x : m));
+    const ft = feeTx as { nonce: number; value: bigint; hash: string; cost: bigint } | null;
+    if (ft) {
+      if (ft.nonce !== swapNonce + 1) bad('the fee tx comes right after the swap');
+      // (review 2026-11-09) both bounds floored exactly like the vault's feeOf: an exact-rate comparison refused almost every real basis
+      if (ft.value < (basis * BigInt(feePolicy.minBps)) / 10_000n || ft.value > (basis * BigInt(FEE_MAX_BPS)) / 10_000n) bad('the fee is not the rate of this wallet');
+    } else if (feePolicy.required && feePolicy.minBps > 0 && (basis * BigInt(feePolicy.minBps)) / 10_000n > 0n) bad('this order carries no terminal fee');
+  }
   const order = { ...(r as unknown as PostedOrder), wallet: lc(r.wallet) as Hex, orderWallet: lc(r.orderWallet) as Hex, token: lc(r.token) as Hex, txs: out };
   // §19: a bridged order — its only swap is the bridged variant, and its calldata must be EXACTLY the one rebuilt from the order
   // (commands, the V3 path WETH → quote, the V4 pool key, amounts, the last leg's floor, recipient = the main wallet, deadline):
@@ -680,6 +702,8 @@ export async function checkPosted(o: unknown, now: number, chain: LimitChainKey 
   const size = order.side === 'buy' ? amountIn : notionalWei(amountIn, order.price, order.decimals);
   if (size < P.minSize) bad(`below the ${fromUnits(P.minSize, 18)} ${P.native} minimum`);
   // what the order wallet must hold for its swap to be includable (review H2: checked on chain at POST)
+  const fx = feeTx as { nonce: number; value: bigint; hash: string; cost: bigint } | null;
+  if (fx) return { order, swapNonce, hashes, need: { eth: needEth + fx.cost, token: order.side === 'sell' ? amountIn : 0n }, fee: { nonce: fx.nonce, value: fx.value, hash: fx.hash } };
   return { order, swapNonce, hashes, need: { eth: needEth, token: order.side === 'sell' ? amountIn : 0n } };
 }
 

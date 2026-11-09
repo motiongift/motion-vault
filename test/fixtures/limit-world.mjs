@@ -13,7 +13,7 @@ export const CURVE = '0x000000000000000000000000000000000000c0e5';
 const hx = (v) => '0x' + BigInt(v).toString(16);
 export const E = (x) => BigInt(Math.round(x * 1e6)) * 10n ** 12n;   // ETH → wei
 
-export function limitWorld({ mainKey = generatePrivateKey() } = {}) {
+export function limitWorld({ mainKey = generatePrivateKey(), feeLeg = null } = {}) {
   const clock = { t: Date.UTC(2026, 10, 6, 12, 0, 0) };
   const now = () => clock.t;
   const chain = createChain({ token: TOKEN, curve: CURVE, now });
@@ -22,7 +22,7 @@ export function limitWorld({ mainKey = generatePrivateKey() } = {}) {
   chain.give(main.address, 1_000_000n * 10n ** 18n);
   const rpc = chain.rpc;
   // the fake keeper: `answer` decides each POST ('ok' | 500 | 400 | 'throw'); what it took and every request it saw
-  const keeper = { answer: ['ok'], posts: 0, deletes: [], orders: new Map() };
+  const keeper = { answer: ['ok'], posts: 0, deletes: [], orders: new Map(), bodies: new Map() };
   const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
   const fetchFn = async (url, init = {}) => {
     const u = new URL(url); if (u.pathname !== '/api/limit') return json(404, { ok: false, error: 'not found' });
@@ -31,7 +31,7 @@ export function limitWorld({ mainKey = generatePrivateKey() } = {}) {
       const a = keeper.answer.length > 1 ? keeper.answer.shift() : keeper.answer[0]; keeper.posts += 1;
       const b = JSON.parse(init.body);
       if (a === 'throw') throw new Error('fetch failed');
-      if (a === 'ok') { keeper.orders.set(b.order.id, b.order); return json(200, { ok: true }); }
+      if (a === 'ok') { keeper.orders.set(b.order.id, b.order); keeper.bodies.set(b.order.id, b); return json(200, { ok: true }); }
       if (a === 'kept500') { keeper.orders.set(b.order.id, b.order); return json(500, { ok: false, error: 'internal' }); }
       return json(Number(a), { ok: false, error: Number(a) >= 500 ? 'internal' : 'bad order' });
     }
@@ -92,6 +92,7 @@ export function limitWorld({ mainKey = generatePrivateKey() } = {}) {
     store: { get: (k) => st.get(k) ?? null, set: (k, v) => st.set(k, v) },
     now,
     sleep: async (ms) => { sleeps.push(ms); },
+    ...(feeLeg ? { feeLeg: async (main) => feeLeg } : {}),
   });
   const limit = mk(store);
   const route = { type: 'pons', curve: CURVE, pairToken: '0x0000000000000000000000000000000000000000', feeBps: 100, creatorTaxBps: 100, chainId: 4663, quoteSymbol: 'ETH' };

@@ -29,6 +29,7 @@ import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearF
 import { solJupWarm } from './solEngine';
 import { solKeys, solVenueIxs, solSimulateAccounts, solLimitSend, solErrText, solBlockhashInfo, solAccounts, solSigStatusesBoth, sendPlan as solSendPlan, compileLegacy as solCompile, solBudget, signMessage as solSignMessage } from './solEngine';
 import { createSolLimit } from './solLimitEngine';
+import { feeLegFor, bpsFor, type FeeChain, type FeeLegConfig, TERMINAL_FEE_LEG } from './terminalFeeLeg';
 import { solOrderIdOf, solOrderKeys, solAuthTextProblem } from './solLimitCore';
 import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, solUnwrap, solWsolBalancesFor, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
@@ -5212,6 +5213,31 @@ const limitWallet = (id: string) => {
   return a;
 };
 const limitChainKey = () => (CFG.key === 'bsc' ? 'bsc' : 'robinhood') as 'bsc' | 'robinhood';
+// ── fee-sprint bypass (default off): the terminal fee of one wallet on a chain. feeLegFor is null unless the chain's switch is
+// on (src/terminalFeeLeg.ts TERMINAL_FEE_LEG); a holder/membership discount comes from a server entitlement the vault fetches
+// read-only and hands to bpsFor — a bad or missing one is the base rate, never zero (fail-closed). On but unconfigured throws.
+const feeChainOf = (c: number): FeeChain | null => (c === LIMIT_CHAIN_ID ? 'robinhood' : c === BSC_CHAIN_ID ? 'bsc' : null);
+const entitlementCache = new Map<string, { at: number; e: unknown }>();
+async function entitlementFor(fc: FeeChain, wallet: string): Promise<unknown> {
+  // read-only GET of our own server; any failure = no entitlement = base rate. Never blocks a trade.
+  // (review 2026-11-09) a Solana address is case-sensitive: lower-casing it named another (nonexistent) wallet, so no Sol discount ever applied
+  const w = fc === 'sol' ? wallet : wallet.toLowerCase();
+  const key = fc + ':' + w;
+  const hit = entitlementCache.get(key); if (hit && Date.now() - hit.at < 60_000) return hit.e;
+  try {
+    const base = (HOST && parentOrigin ? parentOrigin : location.origin).replace(/\/+$/, '') + (fc === 'bsc' ? '/bsc' : '');
+    const r = await fetch(`${base}/api/terminal-fee/entitlement?wallet=${encodeURIComponent(w)}`, { credentials: 'omit', signal: AbortSignal.timeout(5000) });
+    const j = r.ok ? await r.json().catch(() => null) : null;
+    const e = j && typeof j === 'object' && j.entitlement ? j.entitlement : null;
+    entitlementCache.set(key, { at: Date.now(), e }); return e;
+  } catch { entitlementCache.set(key, { at: Date.now(), e: null }); return null; }
+}
+async function terminalFeeLeg(chainId: number, wallet: string, cfg: FeeLegConfig = TERMINAL_FEE_LEG): Promise<{ collector: string; bps: number } | null> {
+  const fc = feeChainOf(chainId); if (!fc) return null;
+  const leg = feeLegFor(fc, cfg); if (!leg) return null;
+  const { bps } = await bpsFor({ leg, wallet, entitlement: await entitlementFor(fc, wallet), nowMs: Date.now() }, cfg);
+  return { collector: leg.collector, bps };
+}
 const limit = createLimit({
   // Robinhood Chain and (2026-10-25) BNB Chain: each its own order wallets (the chain is in the HMAC message), store and venues
   lane: () => !SOL_MODE && !NEAR_MODE && ((CFG.key === 'robinhood' && chain.id === LIMIT_CHAIN_ID) || (CFG.key === 'bsc' && chain.id === BSC_CHAIN_ID)),
@@ -5261,6 +5287,7 @@ const limit = createLimit({
   api: () => (HOST && parentOrigin ? parentOrigin : location.origin),
   store: { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } },
   now: () => Date.now(),
+  feeLeg: async (main) => terminalFeeLeg(chain.id, main) as Promise<{ collector: `0x${string}`; bps: number } | null>,
 });
 // ── limit orders on Solana (2026-10-25; src/solLimitEngine.ts, trench docs/drafts/LIMIT-ORDERS.md §14) ──
 // The Solana frame, the vault's own key wallets. Each order's wallet seed is HMAC-SHA256(main Solana seed,
@@ -5301,7 +5328,15 @@ const solLimit = createSolLimit({
   api: () => (HOST && parentOrigin ? parentOrigin : location.origin),
   store: { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } },
   now: () => Date.now(),
+  feeLeg: (main) => terminalFeeLegSol(main),
 });
+// (fee-sprint bypass, default off) a Solana leg: feeLegFor('sol') is null unless its switch is on; the discount comes from the
+// same read-only entitlement endpoint; an unconfigured 'sol' collector throws rather than trade fee-free.
+async function terminalFeeLegSol(wallet: string, cfg: FeeLegConfig = TERMINAL_FEE_LEG): Promise<{ collector: string; bps: number } | null> {
+  const leg = feeLegFor('sol', cfg); if (!leg) return null;
+  const { bps } = await bpsFor({ leg, wallet, entitlement: await entitlementFor('sol', wallet), nowMs: Date.now() }, cfg);
+  return { collector: leg.collector, bps };
+}
 // one limit.* surface for the page: the Solana frame's orders there, the EVM frame's elsewhere
 const limitApi = {
   place: (o: unknown) => (SOL_MODE ? solLimit.place(o) : limit.place(o)),
@@ -7123,7 +7158,11 @@ const engine = {
     const user = solOrigin ? solAddressOf(a as never) : (/^0x[0-9a-fA-F]{40}$/.test(a.address) && !nativeChainOf(a.key) ? a.address : '');
     if (!user || !a.key || a.ext) throw new Error('This wallet cannot sign on this network');
     const rcpt = String(q.recipient);
-    const bound = await bindSwap(user, { originChainId: origin, destinationChainId: Number(q.destinationChainId), originCurrency: String(q.originCurrency), destinationCurrency: String(q.destinationCurrency), amount: String(q.amount), recipient: rcpt });
+    // fee-sprint bypass (default off): if the origin lane's fee leg is on, Relay's quote must carry its app fee at the base rate
+    // (src/relaySwap.ts relayAppFeeProblem; the app fee already asks for BRIDGE_APP_FEE). Off = undefined = no extra check.
+    const relayFeeChain: FeeChain | null = origin === LIMIT_CHAIN_ID ? 'robinhood' : origin === BSC_CHAIN_ID ? 'bsc' : solOrigin ? 'sol' : null;
+    const relayLeg = relayFeeChain ? feeLegFor(relayFeeChain) : null;
+    const bound = await bindSwap(user, { originChainId: origin, destinationChainId: Number(q.destinationChainId), originCurrency: String(q.originCurrency), destinationCurrency: String(q.destinationCurrency), amount: String(q.amount), recipient: rcpt }, fetch, relayLeg ? { minAppFeeBps: relayLeg.baseBps } : {});
     const minOut = /^\d{1,60}$/.test(String(q.minOut || '')) ? BigInt(String(q.minOut)) : 0n;
     if (minOut > 0n && BigInt(bound.out) < minOut) {
       if (q.phase === 'bind') return { ok: false, moved: true, out: bound.out, outFormatted: bound.outFormatted };

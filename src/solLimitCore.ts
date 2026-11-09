@@ -228,7 +228,11 @@ export function solAuthVerify(text: string, sigHex: string, wallet: string): boo
  * instructions of the shapes below, the venue's swap with the order's amount and its floor, and the floor paid to the
  * main wallet. Compute, priority and tip within bounds. Returns the signatures by venue.
  */
-export function checkSolPosted(o: unknown, now: number): { order: PostedSolOrder; sigs: Record<string, SolVenue>; need: { lamports: bigint; token: bigint } } {
+/** fee-sprint bypass (default off): the keeper's terminal-fee rule. null = the rule of before (a transfer to the collector is an
+ *  unexpected account). minBps = the lowest rate the server grants this wallet; required = a variant without it is refused. */
+export type SolFeePolicy = { collector: string; minBps: number; required: boolean };
+export const SOL_FEE_MAX_BPS = 20;
+export function checkSolPosted(o: unknown, now: number, feePolicy: SolFeePolicy | null = null): { order: PostedSolOrder; sigs: Record<string, SolVenue>; need: { lamports: bigint; token: bigint } } {
   const bad = (why: string): never => { throw Object.assign(new Error(why), { status: 400 }); };
   const r = o && typeof o === 'object' && !Array.isArray(o) ? o as Record<string, unknown> : bad('bad order');
   const keys = ['v', 'id', 'chain', 'wallet', 'orderWallet', 'nonce', 'nonceValue', 'token', 'tokenProgram', 'symbol', 'decimals', 'side', 'kind', 'price', 'amount', 'amountIn', 'minOut', 'slippageBps', 'expiry', 'createdAt', 'txs'];
@@ -274,7 +278,7 @@ export function checkSolPosted(o: unknown, now: number): { order: PostedSolOrder
     const [first, ...rest] = p.ixs;
     if (!first || first.program !== SP.system || !same(first.data, u32le(4)) || first.accounts[0] !== r.nonce || first.accounts[1] !== SP.recentBlockhashes || first.accounts[2] !== ow) bad('the first instruction must advance the order\'s nonce');
     const floor = BigInt(mo[venue] as string);
-    let swaps = 0, paid = false, units = 200_000, micro = 0, tip = 0n, toWsol = 0n;
+    let swaps = 0, paid = false, units = 200_000, micro = 0, tip = 0n, toWsol = 0n, feePaid = 0n, feeIxs = 0;
     for (const ix of rest) {
       if (ix.program === SP.budget) {
         if (ix.data[0] === 2 && ix.data.length === 5) units = rdU32(ix.data, 1);
@@ -286,6 +290,7 @@ export function checkSolPosted(o: unknown, now: number): { order: PostedSolOrder
         if (to === wallet && side === 'sell') { if (lamports !== floor || paid) bad('the payout must be exactly the floor, once'); paid = true; }
         else if (to === owWsol && side === 'buy' && venue === 'pumpswap') toWsol += lamports;
         else if (JITO_TIP_ACCOUNTS.includes(to)) tip += lamports;
+        else if (feePolicy && to === feePolicy.collector) { feePaid += lamports; feeIxs += 1; }
         else bad('a transfer to an unexpected account');
       } else if (ix.program === SP.ata) {
         if (!(ix.data.length === 1 && ix.data[0] === 1) || ix.accounts[0] !== ow || ![ow, wallet].includes(ix.accounts[2])) bad('bad token-account instruction');
@@ -310,7 +315,15 @@ export function checkSolPosted(o: unknown, now: number): { order: PostedSolOrder
     if (!paid) bad('the variant does not pay the main wallet its floor');
     if (units > SOL_MAX_UNITS || micro > SOL_MAX_MICRO || tip > SOL_MAX_TIP) bad('compute, priority or tip out of range');
     if (toWsol !== 0n && toWsol !== amountIn) bad('the wrapped SOL must be the order\'s amount');
-    const cost = 5_000n + (BigInt(units) * BigInt(micro)) / 1_000_000n + tip + (side === 'buy' ? amountIn : 0n);
+    if (feePolicy) {
+      // (review 2026-11-09) bounds floored exactly like the vault's feeOf (an exact-rate comparison refused almost every real basis).
+      // The basis stays this variant's own floor: a minOut entry without a variant can never lower it (the vault's floors are equal)
+      const basis = side === 'buy' ? amountIn : floor;
+      if (feeIxs > 1) bad('one fee transfer per variant');
+      if (feeIxs === 1 && (feePaid < (basis * BigInt(feePolicy.minBps)) / 10_000n || feePaid > (basis * BigInt(SOL_FEE_MAX_BPS)) / 10_000n)) bad('the fee is not the rate of this wallet');
+      if (feeIxs === 0 && feePolicy.required && (basis * BigInt(feePolicy.minBps)) / 10_000n > 0n) bad('this order carries no terminal fee');
+    }
+    const cost = 5_000n + (BigInt(units) * BigInt(micro)) / 1_000_000n + tip + feePaid + (side === 'buy' ? amountIn : 0n);
     if (cost > needLamports) needLamports = cost;
     sigs[b58e(p.sigs[0])] = venue;
     out.push({ venue, raw: x.raw as string });

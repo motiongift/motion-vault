@@ -23,6 +23,7 @@ import {
   RELAY_SOL, NATIVE_EVM, NATIVE_SOL, relayBody, relayQuote, detailsProblem, evmStepsProblem, solStepsProblem, independentOut, priceProblem,
   type QuoteSource, type SolIxJ, type EvmStep,
 } from './relayApi.ts';
+import { relayAppFeeProblem } from './terminalFeeLeg.ts';
 import { solKeys, compileV0, signMessage, solLimitSend, solRpc, solBudget, solBlockhashInfo, sendPlan, tokState, b58e, solTokenBalancesFor, SOL_ADDR, P, type SolAcct } from './solEngine.ts';
 // the most gas a Relay swap's deposit / approve may be signed with (audit 2026-11-01, vault-security-bridge-gas-ceiling)
 export const SWAP_DEPOSIT_GAS_MAX = 1_000_000n, SWAP_APPROVE_GAS_MAX = 200_000n;
@@ -48,11 +49,14 @@ export function swapRequestProblem(q: Partial<SwapReq>, chainOk: (id: number) =>
 }
 
 // bind: the vault's own quote for exactly this request, every check above, nothing signed
-export async function bindSwap(user: string, q: SwapReq, f: typeof fetch = fetch): Promise<SwapBound> {
+// fee-sprint bypass (default off): opts.minAppFeeBps = the terminal base rate of the origin lane when its fee leg is on; the quote
+// must then carry Relay's app fee of at least that rate in the coin swapped (src/terminalFeeLeg.ts relayAppFeeProblem), else refused
+export async function bindSwap(user: string, q: SwapReq, f: typeof fetch = fetch, opts: { minAppFeeBps?: number } = {}): Promise<SwapBound> {
   const body = relayBody({ user, recipient: q.recipient, originChainId: Number(q.originChainId), destinationChainId: Number(q.destinationChainId), originCurrency: q.originCurrency, destinationCurrency: q.destinationCurrency, amount: String(q.amount) });
   const { j, source } = await relayQuote(body, f);
   const bad = detailsProblem(j, { ...body });
   if (bad) throw new Error(`Relay's quote was refused: ${bad}`);
+  if (opts.minAppFeeBps != null) { const why = relayAppFeeProblem(j, { originChainId: body.originChainId, originCurrency: body.originCurrency, amount: body.amount }, opts.minAppFeeBps, RELAY_SOL); if (why) throw Object.assign(new Error(`Relay's quote was refused: ${why} — nothing was sent`), { code: 'TerminalFeeRequired' }); }
   const co = j.details.currencyOut, ci = j.details.currencyIn;
   const outDec = Number(co.currency?.decimals), inDec = Number(ci.currency?.decimals);
   if (!Number.isInteger(outDec) || !Number.isInteger(inDec)) throw new Error('Relay\'s quote was refused: no decimals for a coin');
