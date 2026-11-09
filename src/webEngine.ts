@@ -3,7 +3,7 @@ import { openEvmClaims } from './terminal-evm/claim-store.mjs';
 import { verifyEvmFinality } from './terminal-evm/finality.mjs';
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } from './terminalEvmConfig';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
-import { assertLegacyTerminalAllowed } from './terminalFeeGate';
+import { assertLegacyTerminalAllowed, gatedCall, relayOriginLane, type LegacySurface } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
 import { TERMINAL_FEE_POLICY } from './terminalFeePolicyConfig';
 import { TERMINAL_SOL_POLICY } from './terminalFeeConfig';
@@ -29,7 +29,7 @@ import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearF
 import { solJupWarm } from './solEngine';
 import { solKeys, solVenueIxs, solSimulateAccounts, solLimitSend, solErrText, solBlockhashInfo, solAccounts, solSigStatusesBoth, sendPlan as solSendPlan, compileLegacy as solCompile, solBudget, signMessage as solSignMessage } from './solEngine';
 import { createSolLimit } from './solLimitEngine';
-import { feeLegFor, bpsFor, type FeeChain, type FeeLegConfig, TERMINAL_FEE_LEG } from './terminalFeeLeg';
+import { feeLegFor, bpsFor, isFeeChain, type FeeChain, type FeeLegConfig, TERMINAL_FEE_LEG } from './terminalFeeLeg';
 import { solOrderIdOf, solOrderKeys, solAuthTextProblem } from './solLimitCore';
 import { SOL_ADDR, solAddressOf, solSecretKey, solSignText, solBridgeDeposit, RELAY_SOL_CHAIN, solRoute, solTradeOne, solPreviewOne, solBalancesFor, solTokenBalancesFor, solTransfer, solTokenTransfer, solUnwrap, solWsolBalancesFor, toUnits, solReceipt, solTokenMeta, SolSendUnknown, setSolRpcs, setSolApiBase, type SolAcct } from './solEngine';
 import { BRIDGE_CHAINS, bridgeBalances, bridgeDeposit, bridgeSend, bridgeReceipt, type BridgeQuoteLite } from './bridgeEngine';
@@ -3097,7 +3097,6 @@ async function tradeGuard<T>(key: string, busy: () => T, fn: () => Promise<{ ret
   catch (e) { releaseInFlight(key); throw e; }
 }
 async function trade(side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown, opts?: unknown) {
-  assertLegacyTerminalAllowed(laneKey(), 'trade');
   tradesInFlight += 1; post({ t: 'busy', v: true });
   try {
     // V13 VA-2: the size is checked before anything is recorded or asked (`buy(t, -1e300)` zeroed the hourly ledger)
@@ -5337,6 +5336,12 @@ async function terminalFeeLegSol(wallet: string, cfg: FeeLegConfig = TERMINAL_FE
   const { bps } = await bpsFor({ leg, wallet, entitlement: await entitlementFor('sol', wallet), nowMs: Date.now() }, cfg);
   return { collector: leg.collector, bps };
 }
+// fee-sprint-1109 merge: limit.place and relaySwap carry the terminal fee themselves when that lane's fee leg is on
+// (src/terminalFeeLeg.ts), so the legacy gate (src/terminalFeeGate.ts) does not refuse them there. Leg off = gated exactly
+// as in the legacy-gate-extend candidate. Both switches are deployment-pinned and false in this build.
+const feeLegOn = (lane: string) => isFeeChain(lane) && TERMINAL_FEE_LEG.enabled[lane] === true;
+const legacyOrFeeLeg = <T>(lane: string, surface: LegacySurface, run: () => Promise<T>): Promise<T> => (feeLegOn(lane) ? run() : gatedCall(lane, surface, run));
+const relayGate = (lane: string) => { if (!feeLegOn(lane)) assertLegacyTerminalAllowed(lane, 'relaySwap'); };
 // one limit.* surface for the page: the Solana frame's orders there, the EVM frame's elsewhere
 const limitApi = {
   place: (o: unknown) => (SOL_MODE ? solLimit.place(o) : limit.place(o)),
@@ -5879,7 +5884,6 @@ function unrecordBuy(since: number, total: number) {
 }
 const nothingSent = (results: Result[]) => results.length > 0 && results.every((x) => !x.ok && x.state === 'not_started');
 async function usdBuy(o: unknown) {
-  assertLegacyTerminalAllowed(laneKey(), 'float.buy');
   const a = usdBuyArgs(o);
   if (!SOL_MODE && !NEAR_MODE && (CFG.key === 'robinhood' || CFG.key === 'bsc')) return usdBuyEvm(a);
   if (!SOL_MODE) throw new Error('A buy straight from the USD balance is not available on this chain yet');
@@ -7040,13 +7044,13 @@ const engine = {
   // perps phase 2: perps.<method>({ … }) — one object each, shapes checked in src/lighter/perpsCore.ts (args)
   perps: { status: perps.status, quote: perps.quote, open: perps.open, close: perps.close, cancel: perps.cancel, cancelAll: perps.cancelAll, deposit: perps.deposit, withdrawQuote: perps.withdrawQuote, withdraw: perps.withdraw, claim: perps.claim, history: perps.history, setup: perps.setup, leverage: perps.leverage, margin: perps.margin, trigger: perps.trigger },
   // limit orders v1: limit.<method>({ … }) — one object each, shapes checked in src/limitCore.ts (limitArgs)
-  limit: limitApi,
+  limit: { ...limitApi, place: (o: unknown) => legacyOrFeeLeg<Awaited<ReturnType<typeof limitApi.place>>>(laneKey(), 'limit.place', () => limitApi.place(o)) },
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
-  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => clickRun(() => usdBuy(o)), convert: float.convert, withdraw: float.withdraw },
+  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => gatedCall(laneKey(), 'float.buy', () => clickRun(() => usdBuy(o))), convert: float.convert, withdraw: float.withdraw },
   terminalTrade: (request: unknown) => clickRun(() => terminalTrade(request)),
   terminalTradeEvm: (request: unknown) => clickRun(() => terminalTradeEvm(request)),
-  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('buy', token, amount, accountIds, hint, opts)),
-  sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
+  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedCall(laneKey(), 'trade', () => clickRun(() => trade('buy', token, amount, accountIds, hint, opts))),
+  sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedCall(laneKey(), 'trade', () => clickRun(() => trade('sell', token, percent, accountIds, hint, opts))),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
   preview: (side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown) => preview(side, token, size, accountIds, hint),
   receipt: (hash: string) => receipt(hash),
@@ -7143,12 +7147,15 @@ const engine = {
   // gates and dialogs as bridgeDeposit; what is signed is only Relay's own steps for the request the vault bound itself
   // (EVM: an exact approve to Relay's depository, then the deposit; Solana: one simulated transaction) ──
   relaySwap: async (id: string, q: Partial<SwapBound> & { minOut?: string; phase?: 'bind'; ticket?: string }, auth?: Auth) => {
+    relayGate(laneKey());
+    if (q?.originChainId !== undefined) relayGate(relayOriginLane(Number(q.originChainId), RELAY_SOL_CHAIN, BRIDGE_CHAINS));
     const list = requireUnlocked(); const a = list.find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
     if (q?.ticket) {
       const k = String(q.ticket); const t = swapTickets.get(k); swapTickets.delete(k);
       for (const [x, v] of swapTickets) if (Date.now() - v.at > 90_000) swapTickets.delete(x);
       if (!t || t.id !== id || Date.now() - t.at > 90_000) throw new Error('This swap quote expired — press Swap again');
       const b = t.bound;
+      relayGate(relayOriginLane(Number(b.originChainId), RELAY_SOL_CHAIN, BRIDGE_CHAINS));
       const hash = Number(b.originChainId) === RELAY_SOL_CHAIN ? await solSwapSend(a as never, b) : (await evmSwapSend(a, b)).hash;
       return { ok: true, hash, requestId: b.requestId };
     }
