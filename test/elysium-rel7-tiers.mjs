@@ -114,11 +114,36 @@ test('missing or malformed code hash: refused (no candidate, no route)', () => {
   assert.equal(E.elyCandidates(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK))).length, own, 'a hint without a hash adds nothing');
 });
 
-test('a dynamic fee: refused behind an unverified hook, allowed behind the reviewed ASC hook', () => {
-  assert.equal(E.elyHookVerdict(PM.uni, FRESH_HOOK, DYN, { codeHash: UNKNOWN_HASH }).ok, false);
-  assert.equal(E.elyHookVerdict(PM.uni, FRESH_HOOK, DYN, { codeHash: UNKNOWN_HASH, tier: 'auto' }).ok, false, 'auto too');
-  assert.notEqual(E.elyRouteProblem(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN), { codeHash: UNKNOWN_HASH })), '');
+test('release 15: a dynamic fee behind a not-reviewed, not-refused hook on a stock PoolManager is always unverified', () => {
+  for (const pm of Object.values(PM)) {
+    const v = E.elyHookVerdict(pm, FRESH_HOOK, DYN, { codeHash: UNKNOWN_HASH });
+    assert.equal(v.ok, true, pm); assert.equal(v.tier, 'unverified', pm); assert.equal(v.codeHash, UNKNOWN_HASH);
+    assert.equal(E.elyHookVerdict(pm, FRESH_HOOK, DYN, { codeHash: UNKNOWN_HASH, tier: 'auto' }).tier, 'unverified', 'an auto claim does not lift the cap: ' + pm);
+  }
+  assert.equal(E.elyRouteProblem(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN), { codeHash: UNKNOWN_HASH })), '');
+  assert.equal(E.elyRouteProblem(COIN, v4r('uni-v4', weth(COIN, FRESH_HOOK, DYN), { codeHash: UNKNOWN_HASH }, 'weth')), '');
+  const c = hinted(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN), { codeHash: UNKNOWN_HASH, tier: 'auto' }));
+  assert.equal(c.tier, 'unverified'); assert.equal(c.pin.codeHash, UNKNOWN_HASH); assert.equal(c.rules, undefined, 'no reviewed rules');
+  // still refused: no code hash yet, a PoolManager that is not open, a refused address, a refused code at a fresh address
+  assert.equal(E.elyHookVerdict(PM.uni, FRESH_HOOK, DYN).ok, false);
+  assert.notEqual(E.elyRouteProblem(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN))), '');
+  assert.equal(E.elyHookVerdict('0x' + '77'.repeat(20), FRESH_HOOK, DYN, { codeHash: UNKNOWN_HASH }).ok, false);
+  for (const [a, why] of Object.entries(E.ELY_REFUSED_HOOKS)) {
+    const v = E.elyHookVerdict(PM.uni, a, DYN, { codeHash: UNKNOWN_HASH, tier: 'auto' }); assert.equal(v.ok, false, a); assert.match(v.problem, /refuses/);
+    assert.ok(why);
+  }
+  for (const h of Object.keys(E.ELY_REFUSED_HOOK_CODES)) {
+    const v = E.elyHookVerdict(PM.uni, FRESH_HOOK, DYN, { codeHash: h, tier: 'auto' }); assert.equal(v.ok, false, h); assert.match(v.problem, /refuses/);
+    assert.notEqual(E.elyRouteProblem(COIN, v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN), { codeHash: h })), '');
+  }
+  // ELYPN (2026-11-09): Uniswap's PoolManager, hook 0x6b12…f8ec (code 0x1be97e9e…, read from 4 nodes), fee 0x800000, tick spacing 200
+  const ELYPN = '0x93d08212af367301b9fecc74503942aa71b61f1f', ELYPN_HOOK = '0x6b1216a40b65c83e9c9e18a562c446697b8cf8ec', ELYPN_HASH = '0x1be97e9e8bab23afd85598310005dd27f934013c3993cc3db6bd806ae8d1d953';
+  assert.ok(E.hookSwapFlags(ELYPN_HOOK) > 0);
+  const r = v4r('uni-v4', nat(ELYPN, ELYPN_HOOK, DYN, 200), { codeHash: ELYPN_HASH });
+  assert.equal(E.elyRouteProblem(ELYPN, r), '');
+  const e = hinted(ELYPN, r); assert.equal(e.tier, 'unverified'); assert.equal(e.pool, '0xb49e9008b5d9306757c0259281f3428acfb176eb34e3b870b02dbc1f785c9b1d');
   assert.equal(E.elyHookVerdict(PM.uni, ASC_HOOK, DYN, { codeHash: ASC_HASH }).ok, true);
+  assert.equal(E.elyHookVerdict(PM.uni, ASC_HOOK, DYN, { codeHash: ASC_HASH }).tier, 'reviewed');
   // a hook WITHOUT swap flags and a dynamic fee: still refused, as in rel6
   const noSwap = '0x' + 'ab'.repeat(18) + '2000';
   assert.notEqual(E.elyRouteProblem(COIN, v4r('uni-v4', nat(COIN, noSwap, DYN))), '');
@@ -158,4 +183,27 @@ test('buy-time tier guards: the 3 HYPE cap is for unverified only; the 0.002 HYP
   // hookless / no-hook candidates: no tier guard
   const plain = E.elyCandidates(COIN, null)[0];
   assert.equal(E.elyTierBuyProblem(plain, 10n * 10n ** 18n, null), '');
+});
+
+test('release 15: a dynamic-fee unverified pool — a BUY is decided on the click own buy-and-sell-back (cap, >= 80 %); a SELL never is', () => {
+  const r = v4r('uni-v4', nat(COIN, FRESH_HOOK, DYN), { codeHash: UNKNOWN_HASH, tier: 'auto' });
+  const cands = E.elyCandidates(COIN, r), hi = cands.findIndex((c) => c.hinted);
+  assert.equal(cands[hi].tier, 'unverified');
+  const none = { ran: false, buyOk: false, coinGot: 0n, nativeSpent: 0n, buyGas: 0n, sellOk: false, coinSold: 0n, nativeBack: 0n, sellGas: 0n, taxSent: 0n, taxGot: 0n, routerKept: false, err: '0x' };
+  const at = (amount, backBps, over = {}) => cands.map((_, i) => (i === hi ? { ...seen((amount * BigInt(backBps)) / 10_000n, over), nativeSpent: amount } : none));
+  const one = 10n ** 16n;
+  // the click's own case passes: picked, no tier problem
+  let p = E.elyPick(cands, at(one, 9507), 'buy');
+  assert.equal(p.i, hi); assert.equal(p.s.tierProblem, undefined);
+  // the click's own case returns < 80 %: picked only to carry the refusal, which elyBuyProblem reports first
+  p = E.elyPick(cands, at(one, 7999), 'buy');   // 79.99 % (shown rounded)
+  assert.equal(p.i, hi); assert.match(p.s.tierProblem, /sold straight back returns only/); assert.equal(E.elyBuyProblem(p.s, p.s, one, one), p.s.tierProblem);
+  // the sell-back of the click's own case did not go through: refused (fail closed)
+  p = E.elyPick(cands, at(one, 9507, { sellOk: false }), 'buy'); assert.match(p.s.tierProblem, /could not be measured/);
+  // the 3 HYPE cap per buy (and exactly 3 passes)
+  p = E.elyPick(cands, at(E.ELY_UNVERIFIED_MAX_BUY + 1n, 9500), 'buy'); assert.match(p.s.tierProblem, /at most 3 HYPE/);
+  p = E.elyPick(cands, at(E.ELY_UNVERIFIED_MAX_BUY, 9500), 'buy'); assert.equal(p.s.tierProblem, undefined);
+  // a sell: no tier rule at all (a holder can always exit), even when a buy sold back would return 10 %
+  p = E.elyPick(cands, at(one, 1000), 'sell'); assert.equal(p.i, hi); assert.equal(p.s.tierProblem, undefined);
+  assert.equal(E.elySellProblem({ ...p.s, coinSold: 5n }, 5n), '');
 });

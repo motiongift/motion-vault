@@ -226,7 +226,9 @@ export const hookSwapFlags = (hooks: string): number => Number(BigInt(lc(hooks) 
 //   'auto'        Tier 2: not reviewed, not refused, and the lane's watcher passed its automatic checks (static + live sims). The vault
 //                 takes this from the lane as a label: the same guards as 'unverified', without the per-buy cap.
 //   'unverified'  Tier 3: any other hook with swap flags on a stock V4 PoolManager (ELY_OPEN_MANAGERS) whose code is not refused, with a
-//                 STATIC pool fee ≤ 10 % (a dynamic fee behind an unreviewed hook cannot be bounded: refused).
+//                 STATIC pool fee ≤ 10 %, or (release 15, owner in chat 2026-11-09: «quickly allow trading these tokens») a DYNAMIC fee:
+//                 it has no readable cap, so it is always 'unverified' (never 'auto', whatever the lane claims) and its buys rest on the
+//                 per-buy cap and the click's own buy-and-sell-back (≥ 80 %); sells are never refused for it (exit always open).
 // Every tier keeps every guard of every buy: the probe's buy + sell-back + 1 % transfer (honeypot / tax), the plain-wallet buy-then-sell
 // simulation, the impact guard, motion's second reading. 'auto' / 'unverified' add: the 0.002 HYPE buy-and-sell-back must return ≥ 80 %
 // (≈ the 10 %/side cap a reviewed hook's rules enforce) and, for 'unverified', ELY_UNVERIFIED_MAX_BUY per buy.
@@ -315,7 +317,7 @@ export function elyHookVerdict(manager: string, hooks: string, fee: number, clai
   if (own(ELY_REFUSED_HOOK_CODES, codeHash)) return no('the pool sits behind a hook this vault refuses: ' + ELY_REFUSED_HOOK_CODES[codeHash]);
   if (own(ELY_HOOK_CODES[pm], codeHash)) return { ok: true, tier: 'reviewed', codeHash, problem: '' };
   if (!ELY_OPEN_MANAGERS.includes(pm)) return no('the pool sits behind a swap hook this vault does not trust');
-  if (fee === DYNAMIC_FEE_FLAG) return no('a dynamic fee behind a hook that is not reviewed');
+  if (fee === DYNAMIC_FEE_FLAG) return { ok: true, tier: 'unverified', codeHash, problem: '' };   // release 15: see 'unverified' above
   if (!(Number.isInteger(fee) && fee >= 0 && fee <= MAX_STATIC_FEE)) return no('the pool fee is above 10 %');
   return { ok: true, tier: claim?.tier === 'auto' ? 'auto' : 'unverified', codeHash, problem: '' };
 }
