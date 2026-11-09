@@ -1,7 +1,8 @@
 import { verifyTerminalEvm, simulateTerminalEvm, exactTerminalApproval } from './terminal-evm/vault-guard.mjs';
 import { openEvmClaims } from './terminal-evm/claim-store.mjs';
-import { verifyEvmFinality } from './terminal-evm/finality.mjs';
+import { verifyEvmFinality, verifyEvmL2Receipt, verifyEvmDropped } from './terminal-evm/finality.mjs';
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } from './terminalEvmConfig';
+import { TERMINAL_EVM_RH_L2_RELEASE } from './terminalEvmRelease';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed, gatedCall, relayOriginLane, type LegacySurface } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
@@ -7908,6 +7909,10 @@ async function terminalTradeEvm(request: unknown) {
   const s = tradeSettings(undefined);
   if (s.turbo || mevOn(s) || !Number.isFinite(s.gasBoost) || s.gasBoost < 1 || s.gasBoost > 5) throw new Error('Terminal candidate requires ordinary public execution with bounded gas');
   if (!Number.isSafeInteger(policy.finalityBlocks) || policy.finalityBlocks < 1 || BigInt(policy.maxGas) <= 0n || BigInt(policy.maxGasPrice) <= 0n || BigInt(policy.maxGasCost) <= 0n) throw new Error('Invalid terminal execution deployment limits');
+  // (fee-sprint3, review F2) OPTION, null in this build: Robinhood journal release on the L2 receipt + N confirmations instead of L1 finality
+  const l2Release = key === 'robinhood' ? TERMINAL_EVM_RH_L2_RELEASE : null;
+  if (l2Release !== null && (policy.chainId !== 4663 || !Number.isSafeInteger(l2Release.confirmations) || l2Release.confirmations < 1 || l2Release.confirmations > 100000)) throw new Error('Invalid terminal release option');
+  const releaseConfirmations = l2Release ? Math.max(policy.finalityBlocks, l2Release.confirmations) : policy.finalityBlocks;
   if (TERMINAL_FEE_POLICY) {
     const collector = TERMINAL_FEE_POLICY.collectors?.[key as 'robinhood' | 'bsc'];
     if (!collector || collector !== String(policy.feeRecipient).toLowerCase()) throw new Error('Terminal fee collector is not configured for this chain');
@@ -7926,14 +7931,20 @@ async function terminalTradeEvm(request: unknown) {
     return await tradeGuard<Result>(`${side}:${token}:${address}`, () => ({ name: own.name, address, ok: false, error: 'Trade already pending', state: 'not_started' }), async () => {
       return laneLock(address, async () => {
         const journal = await openEvmClaims({ name: `motion-terminal-evm-${chain.id}-${policy.router.toLowerCase()}`,
-          verifyFinal: row => verifyEvmFinality({ client: publicClient, chainId: policy.chainId, row, confirmations: policy.finalityBlocks }) });
+          verifyFinal: row => l2Release
+            ? verifyEvmL2Receipt({ client: publicClient, chainId: policy.chainId, row, confirmations: releaseConfirmations })
+            : verifyEvmFinality({ client: publicClient, chainId: policy.chainId, row, confirmations: policy.finalityBlocks }),
+          // (fee-sprint3, review F3) a signed tx that never lands: release the wallet (only) once its account nonce is consumed at the
+          // same finality and the exact hash has no receipt. Nothing is re-signed or re-sent; the quote nonce stays consumed.
+          verifyDropped: row => verifyEvmDropped({ client: publicClient, chainId: policy.chainId, row, confirmations: l2Release ? releaseConfirmations : null }) });
         let claimId: string | null = null;
         try {
           const held = await journal.pending(address);
           if (held) {
             await journal.reconcile(held.id);
             if ((await journal.get(held.id))?.status === 'idle') await journal.cancelIdle(held.id); // prior approval finalized; old quote stays consumed
-            if (await journal.pending(address)) throw new Error('Previous terminal transaction is unresolved; no new signature will be made');
+            const still = await journal.pending(address);
+            if (still) throw new Error(`Previous terminal transaction is unresolved; no new signature will be made${still.dropSeenAt != null ? ' (it looks dropped; re-checking, try again in a minute)' : ''}`);
           }
           const balance = side === 'sell' ? await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [address] }) : 0n;
           const rawSell = side === 'buy' ? 0n : balance * BigInt(Math.round(size * 100)) / 10000n;
@@ -7970,7 +7981,7 @@ async function terminalTradeEvm(request: unknown) {
             const raw = await account.signTransaction({ ...tx, chainId: chain.id, nonce, gas, gasPrice, type: 'legacy' } as any);
             if (Math.floor(Date.now() / 1000) >= verified.quote.deadline) throw new Error('Terminal receipt expired during signing; nothing broadcast');
             const hash = keccak256(raw);
-            await journal.signed(claimId!, hash, phase); // durable BEFORE first broadcast
+            await journal.signed(claimId!, hash, phase, nonce); // durable BEFORE first broadcast (with its account nonce, F3)
             noteNonceUsed(address, nonce);
             try { const sent = await broadcast(raw, 0, false, { from: address, nonce }); if (sent !== hash) throw new Error('Broadcast hash mismatch'); }
             catch { throw Object.assign(new Error('Terminal send outcome is unknown; do not resubmit'), { name: 'TerminalEvmUnknown', unknown: true, hash }); }
@@ -7978,7 +7989,7 @@ async function terminalTradeEvm(request: unknown) {
           };
           const approve = async (amount: bigint, phase: 'approve-zero' | 'approve-exact') => {
             const hash = await sendExact(exactTerminalApproval(verified, amount), phase);
-            const rc = await publicClient.waitForTransactionReceipt({ hash, confirmations: policy.finalityBlocks, timeout: 30000, pollingInterval: 500 });
+            const rc = await publicClient.waitForTransactionReceipt({ hash, confirmations: releaseConfirmations, timeout: 30000, pollingInterval: 500 });
             await journal.reconcile(claimId!);
             if (rc.status !== 'success' || (await journal.get(claimId!))?.status !== 'idle') throw new Error('Exact terminal approval did not finalize');
             const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [address, policy.router] });

@@ -1,1 +1,3 @@
 export function verifyEvmFinality(args: { client: any; chainId: number; row: { hash?: string | null }; confirmations: number }): Promise<{ final: boolean; hash?: string; success?: boolean }>;
+export function verifyEvmL2Receipt(args: { client: any; chainId: number; row: { hash?: string | null }; confirmations: number }): Promise<{ final: boolean; soft?: true; hash?: string; success?: boolean; blockNumber?: string; blockHash?: string }>;
+export function verifyEvmDropped(args: { client: any; chainId: number; row: { hash?: string | null; trader?: string; txNonce?: string | null }; confirmations?: number | null }): Promise<{ dropped: boolean; hash?: string; accountNonce?: string; atBlock?: string }>;
