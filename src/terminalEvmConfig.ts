@@ -2,6 +2,8 @@ import type { TerminalEvmConfig } from './terminal-evm/vault-guard.mjs';
 // Release 20 (coverage by venue): each chain's `registry` lists the venue classes of src/terminal-evm/venue-registry.mjs whose
 // markets need no per-coin market key (proven on chain by pinned code hashes + factory reads). The per-coin marketKeys stay
 // valid (a table market keeps its route); src/terminalFeeCoverage.ts reads the same lists for the fee gate.
+// Enabled = fork-proven 2026-11-09 (B:/tmp/fee-coverage/fork): exact 20 bps buy + sell, foreign call refused. 'standard-curve' is
+// defined but NOT enabled (no Standard coin on its curve to prove it on; no launch in the last ~2M blocks).
 // Reviewed deployment/runtime + finite market registry, never supplied by the app.
 // Null means unsupported: this candidate must not be advertised as ready or silently fall back.
 // BNB venues beyond Pancake V2 for the terminal-fee lane. Empty = OFF (original candidate: BNB V2 only).
@@ -57,7 +59,7 @@ export const TERMINAL_EVM_POLICY: Readonly<Partial<Record<'robinhood' | 'bsc', T
       "v4",
       "standard-pool"
     ],
-    "registry": ["v4-launcher", "v3", "v4-hookless", "v4-doppler", "standard-pool", "standard-curve"],
+    "registry": ["v4-launcher", "v3", "v4-hookless", "v4-doppler", "standard-pool"],
     "ponsV2": {
       "enabled": true,
       "factory": "0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e",

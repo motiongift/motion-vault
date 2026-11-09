@@ -72,7 +72,7 @@ test('registryScope: only the chain\'s known classes, no duplicates; absent = no
   assert.throws(() => registryScope('bsc', ['v4-hookless']), /registry configuration/);
   for (const c of ['robinhood', 'bsc']) for (const cls of REGISTRY_CLASSES[c]) assert.ok(classContracts(c, cls).length >= 1, `${c} ${cls}`);
   // the deployment config of this build lists every class, and only known ones
-  assert.deepEqual([...TERMINAL_EVM_POLICY.robinhood.registry].sort(), [...REGISTRY_CLASSES.robinhood].sort());
+  assert.deepEqual([...TERMINAL_EVM_POLICY.robinhood.registry], ['v4-launcher', 'v3', 'v4-hookless', 'v4-doppler', 'standard-pool'], 'fork-proven classes only (standard-curve off)');
   assert.deepEqual([...TERMINAL_EVM_POLICY.bsc.registry].sort(), [...REGISTRY_CLASSES.bsc].sort());
   assert.deepEqual([...TERMINAL_EVM_BNB_VENUES].sort(), ['flap', 'four', 'v3']);
 });
