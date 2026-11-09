@@ -172,7 +172,7 @@ export function classContracts(chain, cls) {
 const V3_FACTORY_ABI = parseAbi(['function getPool(address,address,uint24) view returns(address)']);
 const V2_FACTORY_ABI = parseAbi(['function getPair(address,address) view returns(address)']);
 // Code is immutable at an address (no SELFDESTRUCT-redeploy after Cancun outside one tx), so a verified (chain, address, hash)
-// stays verified for the session. The cache only ever holds positives.
+// stays verified for the session. The cache only ever holds positives (code hashes and factory entries).
 const CODE_OK = new Set();
 async function codeHashIs(client, chainId, pin) {
   const k = `${chainId}:${pin.address}:${pin.codeHash}`;
@@ -192,13 +192,22 @@ export async function verifyRegistryMarket({ chain, cls, route: r, token, client
   const pins = classContracts(chain, cls);
   const checks = await Promise.all(pins.map(p => codeHashIs(client, P.chainId, p)));
   if (checks.some(ok => !ok)) refuse('venue contract code differs from the pinned deployment');
+  // A factory's getPool / getPair entry is written once and never changes, so a verified one is cached like the code hashes
+  // (terminalTradeEvm runs the vault check up to four times per trade).
   if (cls === 'v3') {
-    const q = r.quoteToken;
-    const pool = await client.readContract({ address: P.v3Factory.address, abi: V3_FACTORY_ABI, functionName: 'getPool', args: [token, q, r.fee] });
-    if (same(pool, ZERO) || !same(pool, r.pool)) refuse('V3 pool is not the factory pool');
+    const q = r.quoteToken, k = `${P.chainId}:v3:${lc(token)}:${lc(q)}:${r.fee}:${lc(r.pool)}`;
+    if (!CODE_OK.has(k)) {
+      const pool = await client.readContract({ address: P.v3Factory.address, abi: V3_FACTORY_ABI, functionName: 'getPool', args: [token, q, r.fee] });
+      if (same(pool, ZERO) || !same(pool, r.pool)) refuse('V3 pool is not the factory pool');
+      CODE_OK.add(k);
+    }
   } else if (cls === 'v2') {
-    const pair = await client.readContract({ address: P.v2Factory.address, abi: V2_FACTORY_ABI, functionName: 'getPair', args: [r.path.at(-2), token] });
-    if (same(pair, ZERO) || !same(pair, r.pool)) refuse('V2 pair is not the factory pair');
+    const k = `${P.chainId}:v2:${lc(r.path.at(-2))}:${lc(token)}:${lc(r.pool)}`;
+    if (!CODE_OK.has(k)) {
+      const pair = await client.readContract({ address: P.v2Factory.address, abi: V2_FACTORY_ABI, functionName: 'getPair', args: [r.path.at(-2), token] });
+      if (same(pair, ZERO) || !same(pair, r.pool)) refuse('V2 pair is not the factory pair');
+      CODE_OK.add(k);
+    }
   }
   // v4-*: the pool id is derived from the pool key by the pinned PoolManager inside the pinned Universal Router; an uninitialised
   // pool reverts in the vault's own simulation. Standard / flap / four: verifyEvmRoute already proved the registry entry
