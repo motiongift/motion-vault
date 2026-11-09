@@ -1,0 +1,2477 @@
+{
+  "routes": [
+    {
+      "token": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x217e9ed14c797df4597512d2245c00ca93e5a567",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x03d65edab34360e1098bfd379255ddf910bb7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x064baa08999abf0a917f000dd4782196a1037777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x06cdee62371b2a1ff2f6d88d1a1e293b1297e2f7",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x064baa08999abf0a917f000dd4782196a1037777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0829d99edaf4b94d1a1f79c826976d9501a17777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xae135fb2f753f2b969ba54d80253dfaacc768036",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x0829d99edaf4b94d1a1f79c826976d9501a17777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0b35285fe783dd3441573b84be4fbdb743457777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0c6302401aa5325c2e36f170f52c00b1d220b405",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x0bd5ded695d61c2db15c703c345d57e039fd0b6d",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x0c6302401aa5325c2e36f170f52c00b1d220b405"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0cee7a04355b2e2d7248d9566db8889cf44f7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x19be5234e0a8ce85060f11425c5243eacdc5302c",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x0cee7a04355b2e2d7248d9566db8889cf44f7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0d991bbb5a470b8cd6398a21f2afb9f28a0e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xd60604d5108ba3148a7d4470e04cc3ab85190dbc",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0x0d991bbb5a470b8cd6398a21f2afb9f28a0e7777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x0fe805ae8ca0ff9971ddfacdbfd837d41c597777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x1ff902564054dba79456858386a1dafb81a1b67d",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x0fe805ae8ca0ff9971ddfacdbfd837d41c597777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x10ee65bd5c7f0395f6a7e0e8fcdf9604482b7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x113d68c8cca4fe5ba25f49c00784079d168e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xd6fe21107c05a153d419edc3d93072066d52dff9",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x113d68c8cca4fe5ba25f49c00784079d168e7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x1235baa9ddf30f590e7db70fdad74fb508587777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 200,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x14f6a94909c407854390aa2d2462a3095d317777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x223c585c50d4747653a57d577707b1eadbb2cfb0",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x14f6a94909c407854390aa2d2462a3095d317777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x15c33670ceadf3ff6de984647abb37a39ff77777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xfd7e9606d48931787ffa2eaf787eeef26545f14c",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x15c33670ceadf3ff6de984647abb37a39ff77777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x1a72fd7d075acea148f7ec63e24a21baa5cbffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x1e23c41a0aa6bc1f9c210acfb28e8cda5eb4e40a",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x1a72fd7d075acea148f7ec63e24a21baa5cbffff"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x1d628e104a110e02bdd91ea34e124278874f7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xd372c818143a7ca370bca78dda872e65df8a1edf",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x1d628e104a110e02bdd91ea34e124278874f7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x1dc82baca62c0ba85f09dbfb8033814f64207777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x7c695897a1beb7a564a7148fbcb358d21f42e433",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x1dc82baca62c0ba85f09dbfb8033814f64207777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x211f9bb97d5069af0891902957fe537550d37777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x22cd94d51cd4a8947c337af2e3868ed47aee7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x138574dc0fe99b76f9b45a0adfaa2d14c2a26fde",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0x22cd94d51cd4a8947c337af2e3868ed47aee7777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x26a77b49f80b11a72fa89452fbe9073d776b7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x6f5c80166fcfb15dcef0e114a2f54ce8af6fd77a",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x26a77b49f80b11a72fa89452fbe9073d776b7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x275b22c5ea15970428c8248cc047b3cdf1a07777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x276681605b6a85894ef4d9a580050047e36a7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x4cfd8265853526e4fcb988b5a80d6d8ab962075c",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x276681605b6a85894ef4d9a580050047e36a7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x28ef2256fe6fbdcb1f0f2dbdee0a082ff7017777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xe1d2a9e062093645a867fc2aa2072850af090e74",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x28ef2256fe6fbdcb1f0f2dbdee0a082ff7017777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x29b2b7cb9d09e0c85de42db1061a18473dbf7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x17c78ed5cd81d175fc3fd3250a56b1fe8260fa06",
+        "quoteToken": "0x205812cdbed920aff76c6580abd681a46d11efc7",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x205812cdbed920aff76c6580abd681a46d11efc7",
+          "0x29b2b7cb9d09e0c85de42db1061a18473dbf7777"
+        ],
+        "quoteSymbol": "QQQB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x2b1d6b8475d542d3e1c826d0ff22ea5c2cb57777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x61d049cad25d09b92194a2e8278aa2388a625f91",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x2b1d6b8475d542d3e1c826d0ff22ea5c2cb57777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x2db74b911d3d17eeaed82f3cdd0836e9edcf7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 200,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x30b446c5b023129fcba3f12661042ba700867777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 200,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3116a5e304b13c5a65881cfd829b196d83047777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 0,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x324dab89dbeccad2413317c3c2c792a1dc227777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3254a72d2907a68cb4eecf9a5c2420ce52c97777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 1000,
+        "sellTaxBps": 1000,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x36551d9a26f2dcbd901c7b7ad04673ccf23e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x84ea0d16a2d40e5c54efc7b97b9e55898ba3a083",
+        "quoteToken": "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+          "0x36551d9a26f2dcbd901c7b7ad04673ccf23e7777"
+        ],
+        "quoteSymbol": "FXIon",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x367f70fd5d7962b6f5ba8973ffd3e7d891f17777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3c8250f320a6ac4bd632991ee493c889ce937777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 200,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3e6f7cf11a7a2a7d3b3b0370bdb1917863377777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x567c84fc214d6eaa3d6104dae5edc6b489adde19",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0x3e6f7cf11a7a2a7d3b3b0370bdb1917863377777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3ee49b3e4cf289bf2d5b06b1a1fef37ae5137777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x46c06db595a1c4c1ed3a88940306ed62b5879087",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x3ee49b3e4cf289bf2d5b06b1a1fef37ae5137777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x3f15b50f4631ca33ebf06bef7b6f9ad2448d7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x35f8b07934a1eb33d23dcbd113c4fef6ab257710",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x3f15b50f4631ca33ebf06bef7b6f9ad2448d7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x46e4b82d338b7db8eca173b973f20476602d7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 250,
+        "sellTaxBps": 250,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x480b4cfa02e69e66263c93f14bea0e1e69587777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x45a0da81f071ea4c495b1749e4dd439df0b557e5",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x480b4cfa02e69e66263c93f14bea0e1e69587777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x48acf8b8d1a4bce3e7d76d15b178c5e5960f7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x48d70bd972505a02033fbc0bfe1a0e7686ee7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xfcd51fc0e6be876c23cd7f225c48e829c2792db2",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x48d70bd972505a02033fbc0bfe1a0e7686ee7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xc53e634836e95cda2857e2fbd3eaf2f7f63cf832",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x49f0ce0c1e6c2000626884cab87889ebc8c67777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x4c465c06573e821e44c1dec00d3c3d57ebf87777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 0,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x4d3bec623ab04e6f8c79691f8dcb872a4740ffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8d3e7df151a01b0caf84b996ee86ffcf0b600767",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4d3bec623ab04e6f8c79691f8dcb872a4740ffff"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x507dfbb4c49af0dfd00283aa2f012f8a4a267777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x499f943094ae6f58206c0d9c7a2e2536ca3b00b2",
+        "quoteToken": "0xc9882def23bc42d53895b8361d0b1edc7570bc6a",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xc9882def23bc42d53895b8361d0b1edc7570bc6a",
+          "0x507dfbb4c49af0dfd00283aa2f012f8a4a267777"
+        ],
+        "quoteSymbol": "FIST",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x5389a2caf8253bf768712ff7eecaef6bd77e7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x547e81ff918e34e15a1adb795edb3f654fcc7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x552aee338af26567534e632bf8ec4eb802627777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x1b8adb37afe6c62dafec152e66e0ab069a12326c",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x552aee338af26567534e632bf8ec4eb802627777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x55b191611c2c282cc735c29c3b2ff7c2cae57777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x569e98a75eb37dd464b086b83790ecc00b1d7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xb3b2ca046aa5d2d6350c4097992436c7f58ceeb8",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x569e98a75eb37dd464b086b83790ecc00b1d7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x579de142402e670ccb4c63cc250dfe5b68d27777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xacac0a8a7c0f773b0d7d09993646e58f3f3fb082",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x579de142402e670ccb4c63cc250dfe5b68d27777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x5ac9886b8629d38094a6cae7cf9879b40ceb7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x96d42e97270d021eca2fc77be4a6b0f0bd52bc49",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x5ac9886b8629d38094a6cae7cf9879b40ceb7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x5b1910eaad6450e50f816082aa078c41f10c292f",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x162d64349c57ff06ad69551870f0414f694e6491",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x5b1910eaad6450e50f816082aa078c41f10c292f"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x5dd2b276d2f66de4a3c70c7b0f94d55a7e7d7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x5f8c29604581af48ae25598c24e8eac3e50a7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x61a0787ca30557d38026c646cf2d950776547777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x526417cd3e47a87be43fa2599bc24acbd131364c",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x61a0787ca30557d38026c646cf2d950776547777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6809e7082b9e9877bd89f26bc079419cb87c7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xed0e2c4aad74414a84178028d77f0245c9e5322c",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0x6809e7082b9e9877bd89f26bc079419cb87c7777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6bb7acac10f3d69de136579641bf4d467a397777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xeba3a9285d83f8fb23fc5cd83118c722fd56b833",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x6bb7acac10f3d69de136579641bf4d467a397777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6bdf0406283413f14da6619ada0d23d055727777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xd1709d30465bbb8ed69fcb63b2bf4fcbb940c3bd",
+        "quoteToken": "0x113d68c8cca4fe5ba25f49c00784079d168e7777",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x113d68c8cca4fe5ba25f49c00784079d168e7777",
+          "0x6bdf0406283413f14da6619ada0d23d055727777"
+        ],
+        "quoteSymbol": "うさぎ",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6e2a4ecb5081ec392258438b4bb42615da2a7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6f34ad5f19a3baa7d5e2b8282ff0d75a774e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8ee0523c1e776f59efe5d46b4b41f1cfbdf74bd9",
+        "quoteToken": "0x4ef9d3062c7f6eba4aae4990c5036598c6eff4ec",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4ef9d3062c7f6eba4aae4990c5036598c6eff4ec",
+          "0x6f34ad5f19a3baa7d5e2b8282ff0d75a774e7777"
+        ],
+        "quoteSymbol": "BABAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6f6e44925c17e7290c2032fd2d0731ac861e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x3f95dfce2d6bd72fba4433a50b54ac7bbcc64e02",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x6f6e44925c17e7290c2032fd2d0731ac861e7777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6f9f4a0e4702f4f16cb80b8b6d922771af6e7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x6fc4162002f3b106c3bce28954d952916b367777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x72c6411071c28c622c0d7d12c331640845167777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 0,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x731987ef4be608b8c27f70f2540f770d46ae7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x733c00f60adcee876d928d8766274203084b7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x758e238272c2f78f632480ae25cdcfdea2287777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x454a90baef173c206b13918df3bb8501f0a137fa",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x758e238272c2f78f632480ae25cdcfdea2287777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x77113f1cd4bdef9a2d2c86c0b3fa1844c9787777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x41dd9d0e2c2b16f251b4f25e4c90a10a1a75c9b8",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x77113f1cd4bdef9a2d2c86c0b3fa1844c9787777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x78cd05cf0d0b2a8022fdda8c97baad31f2c07777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x78fd41e3c3fecbbfc04c399672ad37a16b99ffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8505345601acf0765ffe44787bdd8c98db701329",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x78fd41e3c3fecbbfc04c399672ad37a16b99ffff"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x7c4d42f2081179023e2adec970e1814313347777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x7c5f09baf2733eb0fa4c674235f4c49cd9417777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x22dada67e101077b517eb2b57091518f9e82eb8a",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x7c5f09baf2733eb0fa4c674235f4c49cd9417777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x7de1606230aa70802caecf1a3e90039a6265b1c4",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x53895464c524c6fdd82ad5189bf92d9b798c6a51",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x7de1606230aa70802caecf1a3e90039a6265b1c4"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x806321269b9d1e7a90fd859bc07fca250e257777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x88ed8c04b8ff33a287e06c7b10ade3cec7ad9cc1",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x806321269b9d1e7a90fd859bc07fca250e257777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x8474d67585d93275b9c7a2d0f1c9ed2141777777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xf6d7e50c8134f277c7daed5dba10f4918497c6be",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x8474d67585d93275b9c7a2d0f1c9ed2141777777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x8a117e7d9993b37ffab0996b80b6fd9789b27777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x8d73dbd6a89e38a3cd5a7050c7f3d98e38667777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x68075a353167970f45f6bb3152a5343cfefccf50",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x8d73dbd6a89e38a3cd5a7050c7f3d98e38667777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x8d77ebd032e6647f2d278578775063bd65977777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xcad83216725e1629c9be55002b12fa0bf936f0af",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x8d77ebd032e6647f2d278578775063bd65977777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x90ff4a1883805b322ab4861e4a1c32b72b187777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x26ff7999283cf53eb61746ffac7c634961e4e9f3",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x90ff4a1883805b322ab4861e4a1c32b72b187777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9184566749a78aef757ad3b2ce1d1cce47997777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x923bdda3aa42a74c2e9b6afdce14c2b4c0e57777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xcf785ad938f581d150f3ba9d5a47be908ed95623",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x923bdda3aa42a74c2e9b6afdce14c2b4c0e57777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9244708f469199c2e1bc613d31e615e33bf87777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x51a1ec109d04771977b6464232a4e66e7bfa0103",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x9244708f469199c2e1bc613d31e615e33bf87777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9453f47b2c17798a32ffdd3b15cfa01613e97777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8547a0c861cb266ba7fb4b703c939de916122df3",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x9453f47b2c17798a32ffdd3b15cfa01613e97777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x94c4a633309f5e7e521d1b2d2cba67950dedffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x4eb590988980c4ad05d38047bc9b49773ac514a9",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0x94c4a633309f5e7e521d1b2d2cba67950dedffff"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x94e34d6ada75b2898ab71b79d10d843a733b7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 200,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x95494df02dc2c30e74cdda3cdb912debf2e97777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x95578773e3b4fbcb7c88d9e2cf9aa682c86bffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xb2b049ca157e1b9dd4000c4207a3681ef9bdec28",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x95578773e3b4fbcb7c88d9e2cf9aa682c86bffff"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x95d722dcd7ecdf8f5306f75411e4ec1c11bd7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x975faed559b45feb8a5c5ceb940e614302947777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xb574b9a4ac85a588e66f4cb8fa4edf30ca066172",
+        "quoteToken": "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+          "0x975faed559b45feb8a5c5ceb940e614302947777"
+        ],
+        "quoteSymbol": "XAUt",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x97ce06a6f1b5a170c003dc6d0c242f5b6e907777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x2058dc6deda2db6acc62633251caeab1a083b46d",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x97ce06a6f1b5a170c003dc6d0c242f5b6e907777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9862d6478cb8098645815ff27f91efbc659f7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x25ee4fa4bff5363d47496e68377b1241e8e21a47",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x9862d6478cb8098645815ff27f91efbc659f7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9b5a213e7f26516e0ec11cda9ba06ff8a1017777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x7528524cb1863bd47d1b06e21d660baed4744d5c",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x9b5a213e7f26516e0ec11cda9ba06ff8a1017777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9c913dbbfd5feaa2e5c4585ebb4ee1a71a237777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x6a1e701855127b37c117e4d428705060ee57d27b",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0x9c913dbbfd5feaa2e5c4585ebb4ee1a71a237777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9ce238f22bbf13c4b4fe0b774e32bec7c82a7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9d6718a01147f272a518d6da60abe095c0f37777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 0,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9d88980d66d6af042411a3ba39994b51abde7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x06cd22bd5ede35c168facce93bd290cf1e1544c3",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0x9d88980d66d6af042411a3ba39994b51abde7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9dff1b05243e79dd4f6d5549d50815dd9db57777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 200,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x9fa8ce7c115f5cea678ac9b5b3b638ec6d957777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x5ec1b76e28d2e8d271666775e1e02cd62d26c3ce",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0x9fa8ce7c115f5cea678ac9b5b3b638ec6d957777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa12da721fa95efff4cbc995483ffdafec0607777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x2e1ad2931fb54ab57a789c1bc095bfecfecc1dfb",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0xa12da721fa95efff4cbc995483ffdafec0607777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa507b706e69ecfefda1861c999e7adb52fc97777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x9488c33694824c9c4456a0bff4187807cbdc012a",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xa507b706e69ecfefda1861c999e7adb52fc97777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa5b4f745634e0f354d7ae05f9a4a2fa47d017777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa6bc45fd21b06a82a82917c2f4f99e2b7a7b7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa88ebd7644837294011650b3a13d274001ef7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xa990ea580eb94f2bfc8f5b4f8e91430819f97777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xee430ee883c0be5720606de34d91269506a43b0a",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0xa990ea580eb94f2bfc8f5b4f8e91430819f97777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xabb96baf967e54b2b9c748362c965566f21d7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xa275be497115f90cddf5d912b083fffa3e235294",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xabb96baf967e54b2b9c748362c965566f21d7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xac21f150d7b98770d7344ee751cc954d7e2e7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xb0c2ab5af4028461ace3f6e1c33a4ee1404e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xdabbd019c0174bdae6354f32b158d42e4a0e7489",
+        "quoteToken": "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x21caef8a43163eea865baee23b9c2e327696a3bf",
+          "0xb0c2ab5af4028461ace3f6e1c33a4ee1404e7777"
+        ],
+        "quoteSymbol": "XAUt",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xb47574a489945cd8086c80658d17ea4a794c7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x589d606b1b0228be843b8830dd9a91cf6bdce9a2",
+        "quoteToken": "0xfe189e97832da1573e4e4ff034f4ffc3a15c7777",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xfe189e97832da1573e4e4ff034f4ffc3a15c7777",
+          "0xb47574a489945cd8086c80658d17ea4a794c7777"
+        ],
+        "quoteSymbol": "MarsCoin",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xb6f2da751b3b7e09a4b8ddb38b04dec608ab7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xbb4203f6188cdccb264faeef14ee0918c876cd62",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0xb6f2da751b3b7e09a4b8ddb38b04dec608ab7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xb84a69219443d278bbab801ba19380eee6cc7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x4bb30b4d615a653d48f9bab264bacf7e78c26d51",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0xb84a69219443d278bbab801ba19380eee6cc7777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xb879b7873aa7c3bd2fe9ed2992b2d3bbf9487777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xa1e1e7a4125ae212d3c870da8a681a5be16d3f17",
+        "quoteToken": "0xf2ec508422174ee564de98187db9359d318afb6b",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xf2ec508422174ee564de98187db9359d318afb6b",
+          "0xb879b7873aa7c3bd2fe9ed2992b2d3bbf9487777"
+        ],
+        "quoteSymbol": "DJTB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xbae277745ff987446af743d50c2bd529112d7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xcf39324093c3ac41ad6986e8822690d02da7db2f",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xbae277745ff987446af743d50c2bd529112d7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xbb5cc95ac222f36a68ace7380c5439e3fcb47777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x3f90dd521087f42e159a945257946ec74f116581",
+        "quoteToken": "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+          "0xbb5cc95ac222f36a68ace7380c5439e3fcb47777"
+        ],
+        "quoteSymbol": "FXIon",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xbca41e58dc9282964c43c9a5b565e280e4c1ffff",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xc1f4ea8fbf45de0ac756da8d794794dafc22b0cb",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbca41e58dc9282964c43c9a5b565e280e4c1ffff"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xbe7ad219d06e46ff9574c428601808dadec47777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xc022fdb61b5dfbd3b167f74fcba7d0381b937777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x0d8fa2b74f9132c1415042d05521a5aa7f6273db",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xc022fdb61b5dfbd3b167f74fcba7d0381b937777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xc0a7c16e54ad236b7f07fd3dd6187780a4db7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xde27e01ef32005dd9764625e300924f5f4ddc192",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0xc0a7c16e54ad236b7f07fd3dd6187780a4db7777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xc85bf38c8d0b7e5c59911bcb536f76750b937777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xc96dff1a903417c9964cc367dbe2039d4d7f7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8a4e119d6ecf465bbc2eead4cb8b755678aa5679",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xc96dff1a903417c9964cc367dbe2039d4d7f7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xcda15bfbb4c9427c76fd5de17172ef3febdc7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8c576f3d1b051ccccdfbe2add269cceda08d2e77",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0xcda15bfbb4c9427c76fd5de17172ef3febdc7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xce29d3ffacfd35c364dba6eac1bd105aa8f97777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xa16b8d24423cb48b46b4ff62b9642836023a858a",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xce29d3ffacfd35c364dba6eac1bd105aa8f97777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xce3b2809eb55e8abf2c4da61df166f1c2ad57777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 100,
+        "sellTaxBps": 100,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xcfd5f0f51eba4151f9a593279d77cefedd187777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xf23c1cf81d9914f82283d65a7688128eac8cd716",
+        "quoteToken": "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x4902c5ebc598265ed2212b559b042de8a5eeec3f",
+          "0xcfd5f0f51eba4151f9a593279d77cefedd187777"
+        ],
+        "quoteSymbol": "BNCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xd738b729b2a51100d01e4302de08c11fa4427777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x572318086fbab68442ae2cf6da6aa4fba7c84653",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xd738b729b2a51100d01e4302de08c11fa4427777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xd8045117422c4ec16a739113beeadf7f19987777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xdafc92ec27417f0951ecc3159a39a669dae07777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xdb4828a709bb2888a796cc774f5e50ae6acc7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x29ba65f1c38c25857de94c052b3492ec5f6f86f2",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xdb4828a709bb2888a796cc774f5e50ae6acc7777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xdd49812292afa160a2baea09fa12089c65cb7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x3ba5299fc75b25d5edbee1ef56df39113c890fc0",
+        "quoteToken": "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+          "0xdd49812292afa160a2baea09fa12089c65cb7777"
+        ],
+        "quoteSymbol": "FXIon",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xdf96a1498f336035d004a380dfeb0b4aff357777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x6299252bda227ffa85fb7ffc8ca3b3dd925fab70",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0xdf96a1498f336035d004a380dfeb0b4aff357777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xe36a062176dc86cd8c5a2ddc743108bab27e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x16107dafa851251ba4ef359dbcdb93a3b003495a",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0xe36a062176dc86cd8c5a2ddc743108bab27e7777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xe4f1e59e3bd8345a2cb1200c2634c280edf97777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 400,
+        "sellTaxBps": 400,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xe6abc844653c20482a0c45c3cd6e203d62267777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x8d85ecc41138b546b2fd4d99c780be3017660bea",
+        "quoteToken": "0x55d398326f99059ff775485246999027b3197955",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x55d398326f99059ff775485246999027b3197955",
+          "0xe6abc844653c20482a0c45c3cd6e203d62267777"
+        ],
+        "quoteSymbol": "USDT",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xe92ba1c76f1c37904883e09afb3656c526e47777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xe9320db4ddfc689470d09c768a4cb9b05cf97777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x9701c49e18685b765393022d9558e7bef761c19a",
+        "quoteToken": "0x431a3bee82e2ca41e49895cbece5bb0f76a89b7a",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x431a3bee82e2ca41e49895cbece5bb0f76a89b7a",
+          "0xe9320db4ddfc689470d09c768a4cb9b05cf97777"
+        ],
+        "quoteSymbol": "AAPLB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xedd39f442fb734f4dde543f52f3c16eaa6147777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x40aec18c5ae4fd49970758023c15fd05598fe70c",
+        "quoteToken": "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xedd39f442fb734f4dde543f52f3c16eaa6147777"
+        ],
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xef13106ea7218a426090ed648a62f0c70b137777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf1a91ff1ebff7fbf4219f2706f88fbd164fe7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x31212ac79eb5c9b0b21fe1166657200ec9acedc2",
+        "quoteToken": "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x02fca66c1d1afb4e2a7884261eb00f63598a7436",
+          "0xf1a91ff1ebff7fbf4219f2706f88fbd164fe7777"
+        ],
+        "quoteSymbol": "NVDAB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf1b3ed8c96c505e38ce746512bb2234fd3f07777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 900,
+        "sellTaxBps": 900,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf3bf87dbceb6d0fdd1820dc84a82c31be49c7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0x92586c1abaf7d305cd454ec63da7b74b533d4c12",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xf3bf87dbceb6d0fdd1820dc84a82c31be49c7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf49725118cb0707b8706ffffe895f3ab16da7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xbae8327deb97de23940d877134cd16f1bed0f83d",
+        "quoteToken": "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c",
+          "0xf49725118cb0707b8706ffffe895f3ab16da7777"
+        ],
+        "quoteSymbol": "BTCB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf83c938c018310ecb60981f5b1a855fcec0e7777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xecbe11970712a3d171d5d950b0ea9971d3828b87",
+        "quoteToken": "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0xbe9d156892e55e7154bcd3cb0fea677f9d3103e1",
+          "0xf83c938c018310ecb60981f5b1a855fcec0e7777"
+        ],
+        "quoteSymbol": "SPCXB",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xf897f943924799d295066d51085b08397d627777",
+      "route": {
+        "type": "v2",
+        "chainId": 56,
+        "router": "0x10ed43c718714eb63d5aa57b78b54704e256024e",
+        "pool": "0xf8f552dded29ce90ef5bf9188770abfffa43e0c8",
+        "quoteToken": "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+        "path": [
+          "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+          "0x9b8e987e6fec8cf1380c4dca7071e2c7853aeea1",
+          "0xf897f943924799d295066d51085b08397d627777"
+        ],
+        "quoteSymbol": "FXIon",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xfc404df1c1201b23c6335d54d468ca2c2e167777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 250,
+        "sellTaxBps": 250,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0xfe869d3372ae7a293b583c0af2ac1465510a7777",
+      "route": {
+        "type": "flap",
+        "chainId": 56,
+        "portal": "0xe2ce6ab80874fa9fa2aae65d277dd6b8e65c9de0",
+        "quoteToken": "0x0000000000000000000000000000000000000000",
+        "quoteDecimals": 18,
+        "nativeToQuote": false,
+        "buyTaxBps": 300,
+        "sellTaxBps": 300,
+        "quoteSymbol": "",
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    }
+  ]
+}

@@ -34,10 +34,13 @@ test('gate ON, leg ON: limit.place runs (it pays its own fee); relay passes only
   assert.throws(() => w.relayGate('bsc'), /gated/, 'bsc has no leg');
   await assert.rejects(w.legacyOrFeeLeg('bsc', 'limit.place', async () => 'x'), /gated/);
 });
-test('market buy/sell and float.buy stay on the plain legacy gate (no fee-leg waiver)', () => {
-  assert.match(SRC, /buy: \(token: string, amount: number, accountIds\?: string\[\], hint\?: unknown, opts\?: unknown\) => gatedCall\(laneKey\(\), 'trade', /);
-  assert.match(SRC, /sell: \(token: string, percent: number, accountIds\?: string\[\], hint\?: unknown, opts\?: unknown\) => gatedCall\(laneKey\(\), 'trade', /);
-  assert.match(SRC, /buy: \(o: unknown\) => gatedCall\(laneKey\(\), 'float\.buy', /);
+// release 19 (test/fee-enforce.mjs): market buy and float.buy go through the per-market gate, a sell is never gated; still no
+// fee-leg waiver on any of them
+test('market buy and float.buy stay on the legacy gate (per market, no fee-leg waiver); sell is never gated', () => {
+  assert.match(SRC, /buy: \(token: string, amount: number, accountIds\?: string\[\], hint\?: unknown, opts\?: unknown\) => gatedBuy\(laneKey\(\), 'trade', /);
+  assert.match(SRC, /sell: \(token: string, percent: number, accountIds\?: string\[\], hint\?: unknown, opts\?: unknown\) => clickRun\(\(\) => trade\('sell', /);
+  assert.match(SRC, /buy: \(o: unknown\) => gatedBuy\(laneKey\(\), 'float\.buy', /);
+  assert.doesNotMatch(SRC, /legacyOrFeeLeg\(laneKey\(\), '(trade|float\.buy)'/);
 });
 test('every fee switch in this build is OFF', () => {
   const r = p => readFileSync(new URL('../src/' + p, import.meta.url), 'utf8');

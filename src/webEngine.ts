@@ -4,7 +4,8 @@ import { verifyEvmFinality, verifyEvmL2Receipt, verifyEvmDropped } from './termi
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } from './terminalEvmConfig';
 import { TERMINAL_EVM_RH_L2_RELEASE } from './terminalEvmRelease';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
-import { assertLegacyTerminalAllowed, gatedCall, relayOriginLane, type LegacySurface } from './terminalFeeGate';
+import { assertLegacyTerminalAllowed, gatedCall, gatedBuy, relayOriginLane, type LegacySurface } from './terminalFeeGate';
+import { evmCovered, solCovered } from './terminalFeeCoverage';
 import { solTerminalTrade } from './solEngine';
 import { TERMINAL_FEE_POLICY } from './terminalFeePolicyConfig';
 // Fee-policy receipts (default OFF). Null config = this whole feature is dead code and the lanes are unchanged.
@@ -5359,6 +5360,22 @@ const feeLegOn = (lane: string) => isFeeChain(lane) && TERMINAL_FEE_LEG.enabled[
 const legacyOrFeeLeg = <T>(lane: string, surface: LegacySurface, run: () => Promise<T>): Promise<T> => (feeLegOn(lane) ? run() : gatedCall(lane, surface, run));
 // The frame lane's leg only waives the gate when the swap's origin also pays through a leg (Relay app-fee floor).
 const relayGate = (lane: string, origin?: string) => { if (!(feeLegOn(lane) && (origin === undefined || feeLegOn(origin)))) assertLegacyTerminalAllowed(lane, 'relaySwap'); };
+// Release 19 (src/terminalFeeGate.ts gatedBuy): is this coin's market one the terminal fee covers (src/terminalFeeCoverage.ts)?
+// Decided on what the legacy buy itself would trade, with no extra request: EVM = the coin's table entry, else (Robinhood Pons)
+// the vault's OWN route copy — already in memory after the token page's prewarm; cold, the vault's own read that the click
+// starts anyway (refreshOwnRoute shares one in-flight read), the page's hint only when that read gives nothing (the hint is all
+// the legacy click could trade then). Solana = the vault's own route (solRoute: read from the chain, cached; the click reuses it).
+const hintRoute = (hint: unknown): unknown => { const j = hint && typeof hint === 'object' ? hint as { ok?: unknown; route?: unknown } : null; return j?.ok && j.route && typeof j.route === 'object' ? j.route : null; };
+function buyCovered(token: unknown, hint: unknown): boolean | Promise<boolean> {
+  if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then(solCovered, () => false) : false;
+  if (NEAR_MODE) return false;
+  const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true };
+  const first = evmCovered(lane, token, undefined, sw);
+  if (first !== undefined) return first;
+  const key = lc(token as string), own = ownRouteNow(key);
+  if (own) return evmCovered(lane, token, own, sw) === true;
+  return refreshOwnRoute(key).then((r) => evmCovered(lane, token, r ?? hintRoute(hint), sw) === true, () => evmCovered(lane, token, hintRoute(hint), sw) === true);
+}
 // one limit.* surface for the page: the Solana frame's orders there, the EVM frame's elsewhere
 const limitApi = {
   place: (o: unknown) => (SOL_MODE ? solLimit.place(o) : limit.place(o)),
@@ -7063,11 +7080,12 @@ const engine = {
   // limit orders v1: limit.<method>({ … }) — one object each, shapes checked in src/limitCore.ts (limitArgs)
   limit: { ...limitApi, place: (o: unknown) => legacyOrFeeLeg<Awaited<ReturnType<typeof limitApi.place>>>(laneKey(), 'limit.place', () => limitApi.place(o)) },
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
-  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => gatedCall(laneKey(), 'float.buy', () => clickRun(() => usdBuy(o))), convert: float.convert, withdraw: float.withdraw },
+  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => gatedBuy(laneKey(), 'float.buy', () => buyCovered((o as { token?: unknown } | null)?.token, (o as { hint?: unknown } | null)?.hint), () => clickRun(() => usdBuy(o))), convert: float.convert, withdraw: float.withdraw },
   terminalTrade: (request: unknown) => clickRun(() => terminalTrade(request)),
   terminalTradeEvm: (request: unknown) => clickRun(() => terminalTradeEvm(request)),
-  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedCall(laneKey(), 'trade', () => clickRun(() => trade('buy', token, amount, accountIds, hint, opts))),
-  sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedCall(laneKey(), 'trade', () => clickRun(() => trade('sell', token, percent, accountIds, hint, opts))),
+  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedBuy(laneKey(), 'trade', () => buyCovered(token, hint), () => clickRun(() => trade('buy', token, amount, accountIds, hint, opts))),
+  // release 19: a sell is never gated (exits are never blocked; the app takes the fee path for it when its quote works)
+  sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
   preview: (side: 'buy' | 'sell', token: string, size: number, accountIds?: string[], hint?: unknown) => preview(side, token, size, accountIds, hint),
   receipt: (hash: string) => receipt(hash),

@@ -1,0 +1,750 @@
+{
+  "routes": [
+    {
+      "token": "0x0203d6032fd529c888c9d79cbdf2e169611f091f",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xb3545e9b88e11ed8f73f6fcb3ae90a2addb1d5ab",
+        "stock": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+        "poolKey": {
+          "currency0": "0x0203d6032fd529c888c9d79cbdf2e169611f091f",
+          "currency1": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SKHY"
+      }
+    },
+    {
+      "token": "0x061732dc141e0a2d37f5fa91cf5343f24064e60f",
+      "route": {
+        "type": "v4",
+        "chainId": 4663,
+        "poolKey": {
+          "currency0": "0x0000000000000000000000000000000000000000",
+          "currency1": "0x061732dc141e0a2d37f5fa91cf5343f24064e60f",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0xe5e702641ea86f4ae6cc3cdaed2b886f976be044"
+        },
+        "pair": "native",
+        "quoteToken": "",
+        "quoteSymbol": "",
+        "bridgeFee": 0,
+        "bridgeHops": [],
+        "bridgeFees": []
+      }
+    },
+    {
+      "token": "0x085b263746faa370d6915245be0a2faf8a707e61",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x65b6c9e6794be79649dc6993e20f1b5afbf27236",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x085b263746faa370d6915245be0a2faf8a707e61",
+          "currency1": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x0926eb7a097b71e27d18a26cbe6ce29a82e6a37a",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x23e28a91301b1b52808da9354f0286ecfd3d910d",
+        "stock": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+        "poolKey": {
+          "currency0": "0x0926eb7a097b71e27d18a26cbe6ce29a82e6a37a",
+          "currency1": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "BABA"
+      }
+    },
+    {
+      "token": "0x1959c782e156a0c0aa2c288d7ae4cd3f01abfcde",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x308e2128f1aa82cde2e2328be83f76f5fdcffc26",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x1959c782e156a0c0aa2c288d7ae4cd3f01abfcde",
+          "currency1": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x3cedeb9e2b73ae92c61aa4bb5fa27d1cbab75d65",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x93741675042583c3f5837abd15084f989e838d2e",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x3cedeb9e2b73ae92c61aa4bb5fa27d1cbab75d65",
+          "currency1": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x4a3e1c523efbfbda311d4724487e21aadeb8f7ed",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x5213c6ee7a5c3d02df856a368eaacf769a42ed54",
+        "stock": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+        "poolKey": {
+          "currency0": "0x4a3e1c523efbfbda311d4724487e21aadeb8f7ed",
+          "currency1": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "BABA"
+      }
+    },
+    {
+      "token": "0x5452fcb54894027801cf8852e6acbca2890cb5f7",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x4818ae73c74e7af36e006b758019e0eca0d91336",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x5452fcb54894027801cf8852e6acbca2890cb5f7",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x693a9bb5b955ec0433d181553a9b896d2781b37b",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x822d62658c57ddab2e3c381725121559ade74fd3",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x693a9bb5b955ec0433d181553a9b896d2781b37b",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x77a1d1bbaaed989faf5ed10e623aebee6853373d",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xd587f0e0abce7102d6dcb03aac44c9be886860e7",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x77a1d1bbaaed989faf5ed10e623aebee6853373d",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x7c0495053f47ec52eb4b678c4ad8f572df745bfe",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xf6a70fa8e4fa500dd290e33f315fcbd8681ff77b",
+        "stock": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+        "poolKey": {
+          "currency0": "0x7c0495053f47ec52eb4b678c4ad8f572df745bfe",
+          "currency1": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SKHY"
+      }
+    },
+    {
+      "token": "0x91595ef6fc5ca3039845de6ceec2755cb7b332bf",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xd84844e459382b89d9e97224558908b935d49a11",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x91595ef6fc5ca3039845de6ceec2755cb7b332bf",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x92de9d3888953f3c6a55840f189c409976d9bba1",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x71eed441c30091d4bff98003380fac7a6d1cc72b",
+        "stock": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+        "poolKey": {
+          "currency0": "0x84cab63bc87912e71ad199ff14a0ba45de68fef8",
+          "currency1": "0x92de9d3888953f3c6a55840f189c409976d9bba1",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SKHY"
+      }
+    },
+    {
+      "token": "0x9353ac4dcf13630169e22188894deb20abf40e3a",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x4c4b44eeee5c419d854613c5e3cf34d2510d633e",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x9353ac4dcf13630169e22188894deb20abf40e3a",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x947ac56bb8e722ddef0d58303b1113847781e240",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x9b3d68fb0910aac9c1a84a9a2941cbe6ed712845",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x947ac56bb8e722ddef0d58303b1113847781e240",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0x9994bfa979179af4bb0fbcd7f2df0d20a86637de",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x457c75224c0456b3e55113962bfb2d07946f8e05",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0x9994bfa979179af4bb0fbcd7f2df0d20a86637de",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0xa952bf4f94a962fa8f82357e4d647a9f96dfb4c1",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x1fb69acb9ba0e1d1f42e7f2e455ac6ca6154a19f",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0xa952bf4f94a962fa8f82357e4d647a9f96dfb4c1",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0xbf9b33ed15069775e799c7af7ccb0637f8eeb9bf",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x8166b2ef55850fbd3066958c041e0f59ecc33f23",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0xbf9b33ed15069775e799c7af7ccb0637f8eeb9bf",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0xd21166922242d3cb6c35702ccd2b9771e80e15df",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xe033fd23c5e0459cea1348da0aadfb526cdbb7c1",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0xd21166922242d3cb6c35702ccd2b9771e80e15df",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0xee1c78ad44f862430fd125c5201f4fd21b878637",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x269ba94c046361411835e26852548d51fe427723",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0xee1c78ad44f862430fd125c5201f4fd21b878637",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 100,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    },
+    {
+      "token": "0xf36834a6f6453baf1a1be347a00b30071947f2d5",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0xd1c4bad1f68c2bad84d4dbd72e563795d662ce6b",
+        "stock": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+        "poolKey": {
+          "currency0": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+          "currency1": "0xf36834a6f6453baf1a1be347a00b30071947f2d5",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "BABA"
+      }
+    },
+    {
+      "token": "0xf840e45ad7f6ed08cea13c8af8795e5c796ce98a",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x0c1ebd8da1e31431d007dccc007a10adfc208824",
+        "stock": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+        "poolKey": {
+          "currency0": "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4",
+          "currency1": "0xf840e45ad7f6ed08cea13c8af8795e5c796ce98a",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "BABA"
+      }
+    },
+    {
+      "token": "0xf913b7961bf1a1f16835d69f9b0bdaf9528a740d",
+      "route": {
+        "type": "standard",
+        "chainId": 4663,
+        "stage": "pool",
+        "router": "0x190b452d16e12e3beedd76a030ea991fe3856c33",
+        "factory": "0x3d6ea4e97b8ab9e1a1b4943febffe22d8c920091",
+        "curve": "0x1bc469eefd7ab031173ac068d4cc67d4d22fbef4",
+        "stock": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+        "poolKey": {
+          "currency0": "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea",
+          "currency1": "0xf913b7961bf1a1f16835d69f9b0bdaf9528a740d",
+          "fee": 0,
+          "tickSpacing": 200,
+          "hooks": "0x048f2dc8a71a0321b5e119cd577c56d0190920cc"
+        },
+        "stockPool": {
+          "fee": 8388608,
+          "tickSpacing": 60,
+          "hooks": "0xc15b155a3094934171a15625d1a80aba267b6080"
+        },
+        "ethPool": {
+          "fee": 500,
+          "tickSpacing": 10,
+          "hooks": "0x0000000000000000000000000000000000000000"
+        },
+        "feeBps": 100,
+        "creatorTaxBps": 0,
+        "snipeTaxBps": 0,
+        "quoteSymbol": "SPCX"
+      }
+    }
+  ]
+}
