@@ -8,4 +8,5 @@
 //   confirmations (sequencer soft finality). The quote nonce / reservation keys stay consumed forever either way; the
 //   journal history marks such releases soft (block number + hash) for a later reorg audit. Risk comparison for the owner:
 //   B:/tmp/fee-sprint3/engine/F2-release-options.txt
-export const TERMINAL_EVM_RH_L2_RELEASE: Readonly<{ confirmations: number }> | null = null;
+// fee-sprint7 ACTIVATION build: option B (L2 receipt + 20 confirmations), RELEASE-PLAN-v3 decision 2.
+export const TERMINAL_EVM_RH_L2_RELEASE: Readonly<{ confirmations: number }> | null = Object.freeze({ confirmations: 20 });
