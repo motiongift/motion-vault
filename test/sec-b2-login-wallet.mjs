@@ -31,6 +31,8 @@ function world({ main = null, seedSrc = 'main', attached = [] } = {}) {
     bridgeTickets: new Map(), swapTickets: new Map(), formatUnits: (v) => String(Number(v) / 1e18),
     ownBridgeQuote: async () => bound, bindSwap: async () => bound, swapRequestProblem: () => '',
     solSwapSend: async () => '', solBridgeDeposit: async () => '', bridgeDeposit: async () => '', evmSwapSend: async () => ({ hash: '' }),
+    // fee-sprint-1109: the shipped OFF state of the fee leg / legacy gate (TERMINAL_FEE_LEG all false, REQUIRED all false)
+    feeLegFor: () => null, LIMIT_CHAIN_ID: 4663, BSC_CHAIN_ID: 56, laneKey: () => 'robinhood', relayGate: () => {}, relayOriginLane: () => 'unknown',
   };
   const extra = has('verifiedLogin') ? ['verifiedLogin'] : [];
   // two cuts: engine.bridgeDeposit is cut as `const bridgeDeposit`, the name of the module function it calls on phase 2 (not reached here)
