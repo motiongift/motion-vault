@@ -5341,7 +5341,8 @@ async function terminalFeeLegSol(wallet: string, cfg: FeeLegConfig = TERMINAL_FE
 // as in the legacy-gate-extend candidate. Both switches are deployment-pinned and false in this build.
 const feeLegOn = (lane: string) => isFeeChain(lane) && TERMINAL_FEE_LEG.enabled[lane] === true;
 const legacyOrFeeLeg = <T>(lane: string, surface: LegacySurface, run: () => Promise<T>): Promise<T> => (feeLegOn(lane) ? run() : gatedCall(lane, surface, run));
-const relayGate = (lane: string) => { if (!feeLegOn(lane)) assertLegacyTerminalAllowed(lane, 'relaySwap'); };
+// The frame lane's leg only waives the gate when the swap's origin also pays through a leg (Relay app-fee floor).
+const relayGate = (lane: string, origin?: string) => { if (!(feeLegOn(lane) && (origin === undefined || feeLegOn(origin)))) assertLegacyTerminalAllowed(lane, 'relaySwap'); };
 // one limit.* surface for the page: the Solana frame's orders there, the EVM frame's elsewhere
 const limitApi = {
   place: (o: unknown) => (SOL_MODE ? solLimit.place(o) : limit.place(o)),
@@ -7147,8 +7148,9 @@ const engine = {
   // gates and dialogs as bridgeDeposit; what is signed is only Relay's own steps for the request the vault bound itself
   // (EVM: an exact approve to Relay's depository, then the deposit; Solana: one simulated transaction) ──
   relaySwap: async (id: string, q: Partial<SwapBound> & { minOut?: string; phase?: 'bind'; ticket?: string }, auth?: Auth) => {
-    relayGate(laneKey());
-    if (q?.originChainId !== undefined) relayGate(relayOriginLane(Number(q.originChainId), RELAY_SOL_CHAIN, BRIDGE_CHAINS));
+    const relayOrigin = q?.originChainId !== undefined ? relayOriginLane(Number(q.originChainId), RELAY_SOL_CHAIN, BRIDGE_CHAINS) : undefined;
+    relayGate(laneKey(), relayOrigin);
+    if (relayOrigin !== undefined) relayGate(relayOrigin);
     const list = requireUnlocked(); const a = list.find((x) => x.id === id); if (!a) throw new Error('Unknown wallet');
     if (q?.ticket) {
       const k = String(q.ticket); const t = swapTickets.get(k); swapTickets.delete(k);
