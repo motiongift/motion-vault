@@ -224,11 +224,63 @@ export function evmCovered(chain: string, token: unknown, route: unknown, sw: Co
 }
 // Solana: the terminal quote is a Jupiter swap with motion's platform fee (one Jupiter instruction, the vault's receipt path).
 // Release 20: Jupiter also routes pump.fun curves ("Pump.fun") and PumpSwap pools ("Pump.fun Amm") — measured 2026-11-09 on the
-// coins motion traded (B:/tmp/fee-coverage/measure/jupiter-sol.json) — so those venues can take the fee path too. Which of the
-// vault's own venues count as covered is deployment-pinned here. 'dlmm' and 'pumphop' stay fee-free (not measured enough).
+// coins motion traded (B:/tmp/fee-coverage/measure/jupiter-sol.json). Owner decision (2026-11-09, via the coordinator): such a
+// coin is covered ONLY while Jupiter routes it. A fresh pump.fun coin Jupiter has not indexed yet ("NO_ROUTES_FOUND") is NOT
+// blocked: its buy runs on the legacy path, fee-free; the moment Jupiter routes it, it is covered. 'dlmm' and 'pumphop' stay
+// fee-free. A coin whose vault route is 'jupiter' is covered as in release 19 (no Jupiter read: the route itself is Jupiter's).
 export const SOL_COVERED_VENUES: readonly string[] = Object.freeze(['jupiter', 'pump', 'pumpswap']);
-/** Solana: covered iff the vault's own route venue is one the terminal Jupiter quote takes */
+/** venues covered only while Jupiter routes the coin (the rest of SOL_COVERED_VENUES needs no read) */
+export const SOL_INDEX_GATED: readonly string[] = Object.freeze(['pump', 'pumpswap']);
+const solVenue = (route: unknown) => (!!route && typeof route === 'object' ? (route as { venue?: unknown }).venue : undefined);
+/** Solana, venue only (no Jupiter read): could the fee path take this route? */
 export function solCovered(route: unknown, venues: readonly string[] = SOL_COVERED_VENUES): boolean {
-  const v = !!route && typeof route === 'object' ? (route as { venue?: unknown }).venue : undefined;
+  const v = solVenue(route);
   return typeof v === 'string' && venues.includes(v);
+}
+export type JupiterIndexed = (mint: string) => Promise<boolean>;
+/** Solana fee gate: 'jupiter' -> covered; pump / pumpswap -> covered iff Jupiter routes the mint now; everything else -> not.
+ *  Any failure of the Jupiter read counts as "not routed" (the buy is never blocked by a Jupiter outage). */
+export function solBuyCovered(route: unknown, indexed: JupiterIndexed): boolean | Promise<boolean> {
+  const v = solVenue(route);
+  if (typeof v !== 'string' || !SOL_COVERED_VENUES.includes(v)) return false;
+  if (!SOL_INDEX_GATED.includes(v)) return true;
+  const mint = (route as { mint?: unknown }).mint;
+  if (typeof mint !== 'string') return false;
+  return indexed(mint).then((x) => x === true, () => false);
+}
+const JUP_QUOTE = 'https://lite-api.jup.ag/swap/v1/quote';   // = solEngine's JUP_API (keyless; already in the vault's connect-src)
+const WSOL = 'So11111111111111111111111111111111111111112';
+const NOT_INDEXED = /^(NO_ROUTES_FOUND|COULD_NOT_FIND_ANY_ROUTE|TOKEN_NOT_TRADABLE)$/;
+/** "Does Jupiter route this mint from SOL now?" true only on a 200 with a route plan; a definite "no route" answer is false and
+ *  remembered for `noMs` (short: the coin is covered within seconds of being indexed); a route is remembered for `yesMs`
+ *  (an indexed coin stays indexed). 429 / 5xx / timeout / network = false, not remembered (never blocks a buy). */
+export function createJupiterIndexCheck({ fetchImpl = (u: string, i?: RequestInit) => fetch(u, i), now = () => Date.now(), yesMs = 10 * 60_000, noMs = 3_000, timeoutMs = 1_500, probeLamports = 10_000_000 } = {}): JupiterIndexed {
+  const memo = new Map<string, { v: boolean; until: number }>();
+  const inflight = new Map<string, Promise<boolean>>();
+  return (mint: string) => {
+    const hit = memo.get(mint);
+    if (hit && hit.until > now()) return Promise.resolve(hit.v);
+    const going = inflight.get(mint);
+    if (going) return going;
+    const url = `${JUP_QUOTE}?inputMint=${WSOL}&outputMint=${encodeURIComponent(mint)}&amount=${probeLamports}&slippageBps=1200&swapMode=ExactIn&restrictIntermediateTokens=true`;
+    const p = Promise.resolve().then(() => fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) })).then(async (res) => {
+      const j = await res.json().catch(() => null) as { routePlan?: unknown; outputMint?: unknown; errorCode?: unknown } | null;
+      if (res.status === 200 && j && j.outputMint === mint && Array.isArray(j.routePlan) && j.routePlan.length > 0) { memo.set(mint, { v: true, until: now() + yesMs }); return true; }
+      if (res.status >= 400 && res.status < 500 && res.status !== 429 && typeof j?.errorCode === 'string' && NOT_INDEXED.test(j.errorCode)) memo.set(mint, { v: false, until: now() + noMs });
+      return false;
+    }, () => false).finally(() => inflight.delete(mint));
+    inflight.set(mint, p);
+    return p;
+  };
+}
+// BNB (owner, 2026-11-09): the fee gate must NOT read the vault's own route before a click on BNB (TRADE-CORE §5, not approved):
+// a BNB coin outside the table stays on the legacy path even when its venue is a registry class (the fee path still serves it
+// when the app takes it). Robinhood keeps the release-19 own-route read (native Pons) and adds the registry classes to it.
+export const GATE_ROUTE_READ: Readonly<Record<'robinhood' | 'bsc', boolean>> = Object.freeze({ robinhood: true, bsc: false });
+/** the registry lists the fee GATE may use: the deployment's own lists, minus every chain whose pre-click route read is off */
+export function gateRegistry(policy: Readonly<Partial<Record<'robinhood' | 'bsc', { registry?: readonly string[] } | undefined>>> | null | undefined): Readonly<Record<'robinhood' | 'bsc', readonly string[]>> {
+  return Object.freeze({
+    robinhood: GATE_ROUTE_READ.robinhood ? [...(policy?.robinhood?.registry ?? [])] : [],
+    bsc: GATE_ROUTE_READ.bsc ? [...(policy?.bsc?.registry ?? [])] : [],
+  });
 }

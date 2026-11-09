@@ -9,7 +9,7 @@ import { encodeFunctionData } from 'viem';
 import { REGISTRY_PINS, REGISTRY_CLASSES, registryClass, registryScope, classContracts, verifyRegistryMarket, _resetRegistryCache } from '../src/terminal-evm/venue-registry.mjs';
 import { verifyTerminalEvm } from '../src/terminal-evm/vault-guard.mjs';
 import { TERMINAL_EXECUTE_ABI, TERMINAL_PURPOSE, ZERO_HASH } from '../src/terminal-evm/quote-authorization.mjs';
-import { evmCovered, solCovered, SOL_COVERED_VENUES, COVERED_TOKENS } from '../src/terminalFeeCoverage.ts';
+import { evmCovered, solCovered, solBuyCovered, createJupiterIndexCheck, gateRegistry, GATE_ROUTE_READ, SOL_COVERED_VENUES, COVERED_TOKENS } from '../src/terminalFeeCoverage.ts';
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES } from '../src/terminalEvmConfig.ts';
 
 const ZERO = '0x0000000000000000000000000000000000000000';
@@ -167,4 +167,60 @@ test('solCovered: Jupiter, pump.fun curve and PumpSwap take the Jupiter fee path
   for (const venue of ['pumphop', 'dlmm', undefined, 'JUPITER']) assert.equal(solCovered({ venue }), false, String(venue));
   assert.equal(solCovered(null), false);
   assert.equal(solCovered({ venue: 'pump' }, ['jupiter']), false, 'release-19 list');
+});
+
+test('gateRegistry: the BNB gate reads no route before a click (owner 2026-11-09); Robinhood keeps its registry', () => {
+  assert.deepEqual({ ...GATE_ROUTE_READ }, { robinhood: true, bsc: false });
+  const g = gateRegistry(TERMINAL_EVM_POLICY);
+  assert.deepEqual([...g.robinhood], [...TERMINAL_EVM_POLICY.robinhood.registry]);
+  assert.deepEqual([...g.bsc], []);
+  const B = bySym('bsc', 'BINF');
+  assert.equal(evmCovered('bsc', '0x1111111111111111111111111111111111111111', undefined, { ponsV2: true, registry: g }), false, 'no read: false at once');
+  assert.equal(evmCovered('bsc', B.token, B.route, { ponsV2: true, registry: g, tokens: { robinhood: new Set(), bsc: new Set() } }), false);
+  assert.deepEqual(gateRegistry(null), { robinhood: [], bsc: [] });
+});
+
+test('solBuyCovered: pump / PumpSwap only while Jupiter routes the coin; Jupiter venue needs no read; failures never block', async () => {
+  const MINT = 'So1aNaMint22222222222222222222222222222222';
+  let asked = 0; const yes = async () => { asked++; return true; }, no = async () => { asked++; return false; }, bad = async () => { asked++; throw Error('x'); };
+  assert.equal(solBuyCovered({ venue: 'jupiter', mint: MINT }, yes), true); assert.equal(asked, 0);
+  for (const venue of ['pump', 'pumpswap']) {
+    assert.equal(await solBuyCovered({ venue, mint: MINT }, yes), true, venue);
+    assert.equal(await solBuyCovered({ venue, mint: MINT }, no), false, venue + ' not indexed');
+    assert.equal(await solBuyCovered({ venue, mint: MINT }, bad), false, venue + ' Jupiter failure');
+  }
+  for (const venue of ['pumphop', 'dlmm', undefined]) assert.equal(solBuyCovered({ venue, mint: MINT }, yes), false, String(venue));
+  assert.equal(solBuyCovered({ venue: 'pump' }, yes), false, 'no mint: not covered');
+});
+
+test('createJupiterIndexCheck: 200 + route = yes (remembered); NO_ROUTES_FOUND = no (briefly); 429 / errors = no, not remembered', async () => {
+  const MINT = 'So1aNaMint22222222222222222222222222222222';
+  let t = 0, n = 0, answer;
+  const res = (status, j) => ({ status, json: async () => j });
+  const check = createJupiterIndexCheck({ now: () => t, fetchImpl: async (url) => { n++; assert.match(url, /^https:\/\/lite-api\.jup\.ag\/swap\/v1\/quote\?inputMint=So111/); return answer(); } });
+  answer = () => res(400, { error: 'No routes found', errorCode: 'NO_ROUTES_FOUND' });
+  assert.equal(await check(MINT), false); assert.equal(await check(MINT), false); assert.equal(n, 1, 'definite no remembered for a moment');
+  t += 3001;
+  answer = () => res(200, { outputMint: MINT, routePlan: [{ swapInfo: { label: 'Pump.fun' } }] });
+  assert.equal(await check(MINT), true, 'covered the moment Jupiter routes it'); assert.equal(n, 2);
+  t += 60_000; assert.equal(await check(MINT), true); assert.equal(n, 2, 'yes remembered');
+  const other = 'So1aNaMint33333333333333333333333333333333';
+  answer = () => res(429, { code: 429 });
+  assert.equal(await check(other), false); assert.equal(await check(other), false); assert.equal(n, 4, '429 not remembered');
+  answer = () => { throw Error('net'); };
+  assert.equal(await check(other), false);
+  answer = () => res(200, { outputMint: MINT, routePlan: [] });
+  assert.equal(await check(other), false, 'route for another mint / empty plan = no');
+  answer = () => res(400, { errorCode: 'SOMETHING_ELSE' });
+  const n0 = n; await check(other); await check(other); assert.equal(n - n0, 2, 'unknown 4xx not remembered');
+  const M4 = 'So1aNaMint44444444444444444444444444444444';
+  let release; answer = () => new Promise(r => { release = () => r(res(200, { outputMint: M4, routePlan: [1] })); });
+  const a = check(M4), b = check(M4);
+  await new Promise(r => setTimeout(r, 5)); release();
+  assert.deepEqual(await Promise.all([a, b]), [true, true], 'one read in flight per mint');
+});
+
+test('createJupiterIndexCheck against live Jupiter (keyless, read-only)', { skip: process.env.FEE_COVERAGE_LIVE !== '1' }, async () => {
+  const check = createJupiterIndexCheck();
+  assert.equal(await check('9qghVo6gqg1nVYGZCq14mhsFFUDH3e2z1iH4JtkfLoat'), true, 'an indexed coin (BTC, Raydium CPMM)');
 });

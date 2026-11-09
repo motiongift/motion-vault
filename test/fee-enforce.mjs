@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { cut, source } from './sec-cut.mjs';
 import { gatedBuy, gatedCall, assertLegacyTerminalAllowed, enforcedOn } from '../src/terminalFeeGate.ts';
-import { COVERED_TOKENS, evmCovered, solCovered, nativePonsRoute } from '../src/terminalFeeCoverage.ts';
+import { COVERED_TOKENS, evmCovered, solCovered, solBuyCovered, gateRegistry, nativePonsRoute } from '../src/terminalFeeCoverage.ts';
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_PONS_V2 } from '../src/terminalEvmConfig.ts';
 import { TERMINAL_SOL_POLICY } from '../src/terminalFeeConfig.ts';
 import { terminalMarketKey } from '../src/terminal-evm/vault-guard.mjs';
@@ -85,10 +85,11 @@ test('gatedBuy: covered = refused before run; uncovered = run; promise and throw
 });
 
 // ── the real dispatch (engine.buy / engine.sell / engine.float.buy / buyCovered) ──
-function world({ lane = 'robinhood', own = null, read = null, solRoute = null, mode = 'evm' } = {}) {
-  const calls = { trade: [], usdBuy: [], reads: 0, sol: 0 };
+function world({ lane = 'robinhood', own = null, read = null, solRoute = null, mode = 'evm', jupIndexed = async () => true } = {}) {
+  const calls = { trade: [], usdBuy: [], reads: 0, sol: 0, jup: 0 };
   const stubs = {
-    gatedBuy, gatedCall, evmCovered, solCovered,
+    gatedBuy, gatedCall, evmCovered, solCovered, solBuyCovered, gateRegistry,
+    JUP_INDEXED: (m) => { calls.jup += 1; return jupIndexed(m); },
     SOL_MODE: mode === 'sol', NEAR_MODE: false, CFG: { key: lane },
     SOL_ADDR: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
     TERMINAL_EVM_PONS_V2: true, TERMINAL_EVM_POLICY,
@@ -137,18 +138,19 @@ test('engine.buy on Robinhood Pons: decided on the vault\'s own route, the hint 
   assert.deepEqual(v4.calls.trade, [['buy', OTHER]], 'a V4 coin outside the table stays fee-free');
 });
 
-// release 20: a BNB coin outside the table is decided on the vault's own route (registry classes), like a Robinhood Pons coin
-test('engine.buy on BNB: table coins refused with no read; other coins by the vault own route (registry class refused, the rest trades)', async () => {
+// release 20, owner 2026-11-09: NO pre-click route read on BNB (TRADE-CORE §5 not approved): only table coins are gated there;
+// a registry-class coin outside the table stays on the legacy path (the fee path still serves it when the app takes it)
+test('engine.buy on BNB: table coins refused with no read; every other coin trades with no read, a registry class too', async () => {
   const w = world({ lane: 'bsc' });
   await assert.rejects(w.buy(BSC_FLAP, 0.1), { code: 'TerminalPolicyRequired' });
   assert.equal(w.calls.reads, 0, 'a table coin needs no route read');
   await w.buy(OTHER, 0.1);
-  assert.deepEqual(w.calls.trade, [['buy', OTHER]], 'no route: the legacy trade decides');
-  assert.equal(w.calls.reads, 1, "cold: the vault's own read (shared with the click)");
+  assert.deepEqual(w.calls.trade, [['buy', OTHER]]);
+  assert.equal(w.calls.reads, 0, 'no route read before the click on BNB');
   const V2 = { type: 'v2', chainId: 56, router: '0x10ed43c718714eb63d5aa57b78b54704e256024e', pool: '0x' + '3'.repeat(40), quoteToken: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', path: ['0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', OTHER], quoteSymbol: '', bridgeHops: [], bridgeFees: [] };
   const v2 = world({ lane: 'bsc', own: V2 });
-  await assert.rejects(v2.buy(OTHER, 0.1), { code: 'TerminalPolicyRequired' });
-  assert.equal(v2.calls.reads, 0, 'warm copy: no read');
+  await v2.buy(OTHER, 0.1);
+  assert.deepEqual(v2.calls.trade, [['buy', OTHER]], 'a V2 registry coin outside the table: legacy (gate off on BNB)');
   const inf = world({ lane: 'bsc', own: { type: 'inf', chainId: 56 } });
   await inf.buy(OTHER, 0.1);
   assert.deepEqual(inf.calls.trade, [['buy', OTHER]], 'Infinity stays fee-free');
@@ -163,10 +165,18 @@ test('engine.buy on Solana: Jupiter / pump.fun / PumpSwap routes refused, pumpho
   assert.deepEqual(jup.calls.trade, [['sell', MINT]]);
   assert.equal(jup.calls.sol, 1, 'only the buy asked for the route');
   for (const venue of ['pump', 'pumpswap']) {
-    const w = world({ mode: 'sol', solRoute: async () => ({ venue }) });
-    await assert.rejects(w.buy(MINT, 0.1), { code: 'TerminalPolicyRequired' }, venue);
+    const w = world({ mode: 'sol', solRoute: async () => ({ venue, mint: MINT }) });
+    await assert.rejects(w.buy(MINT, 0.1), { code: 'TerminalPolicyRequired' }, venue + ' routed by Jupiter');
     assert.deepEqual(w.calls.trade, [], venue);
+    assert.equal(w.calls.jup, 1);
+    // owner 2026-11-09: a coin Jupiter has not indexed yet (or a Jupiter failure) is never blocked
+    for (const jupIndexed of [async () => false, async () => { throw new Error('jupiter down'); }]) {
+      const f = world({ mode: 'sol', solRoute: async () => ({ venue, mint: MINT }), jupIndexed });
+      await f.buy(MINT, 0.1);
+      assert.deepEqual(f.calls.trade, [['buy', MINT]], venue + ' not indexed: legacy buy');
+    }
   }
+  assert.equal(jup.calls.jup, 0, 'a Jupiter-venue coin needs no Jupiter read');
   for (const venue of ['pumphop', 'dlmm']) {
     const w = world({ mode: 'sol', solRoute: async () => ({ venue }) });
     await w.buy(MINT, 0.1);

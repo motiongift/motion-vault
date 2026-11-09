@@ -5,7 +5,9 @@ import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } fr
 import { TERMINAL_EVM_RH_L2_RELEASE } from './terminalEvmRelease';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed, gatedCall, gatedBuy, relayOriginLane, type LegacySurface } from './terminalFeeGate';
-import { evmCovered, solCovered } from './terminalFeeCoverage';
+import { evmCovered, solBuyCovered, createJupiterIndexCheck, gateRegistry } from './terminalFeeCoverage';
+// release 20: SOL pump.fun / PumpSwap buys are covered only while Jupiter routes the coin (owner decision 2026-11-09)
+const JUP_INDEXED = createJupiterIndexCheck();
 import { solTerminalTrade } from './solEngine';
 import { TERMINAL_FEE_POLICY } from './terminalFeePolicyConfig';
 // Fee-policy receipts (default OFF). Null config = this whole feature is dead code and the lanes are unchanged.
@@ -5367,10 +5369,10 @@ const relayGate = (lane: string, origin?: string) => { if (!(feeLegOn(lane) && (
 // the legacy click could trade then). Solana = the vault's own route (solRoute: read from the chain, cached; the click reuses it).
 const hintRoute = (hint: unknown): unknown => { const j = hint && typeof hint === 'object' ? hint as { ok?: unknown; route?: unknown } : null; return j?.ok && j.route && typeof j.route === 'object' ? j.route : null; };
 function buyCovered(token: unknown, hint: unknown): boolean | Promise<boolean> {
-  if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then(solCovered, () => false) : false;
+  if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then((r) => solBuyCovered(r, JUP_INDEXED), () => false) : false;
   if (NEAR_MODE) return false;
   const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true,
-    registry: { robinhood: TERMINAL_EVM_POLICY?.robinhood?.registry ?? [], bsc: TERMINAL_EVM_POLICY?.bsc?.registry ?? [] } };
+    registry: gateRegistry(TERMINAL_EVM_POLICY) };
   const first = evmCovered(lane, token, undefined, sw);
   if (first !== undefined) return first;
   const key = lc(token as string), own = ownRouteNow(key);
