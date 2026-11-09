@@ -1,8 +1,9 @@
 // Browser-safe vault boundary. Request data can select neither deployment nor signer.
 import { decodeFunctionData, decodeFunctionResult, encodeFunctionData, hashTypedData, keccak256, parseAbi, stringToHex, verifyTypedData } from 'viem';
 import { ZERO, ZERO_HASH, TERMINAL_EXECUTE_ABI, TERMINAL_TYPES, TERMINAL_PURPOSE, terminalRouteHash } from './quote-authorization.mjs';
-import { buildEvmCalls, verifyEvmRoute } from './routes/api-swap-evm-routes.mjs';
+import { buildEvmCalls, verifyEvmRoute, EVM_CHAINS } from './routes/api-swap-evm-routes.mjs';
 import { STANDARD, sameHop } from './routes/api-swap-evm-standardRouter.mjs';
+import { enabledTerminalVenueTypes, verifyBnbVenue, BNB_EXTRA_VENUES } from './bnb-venues.mjs';
 export const ROUTER_READ_ABI = parseAbi([
     'function owner() view returns(address)', 'function signer() view returns(address)',
     'function feeRecipient() view returns(address)', 'function wrappedNative() view returns(address)',
@@ -39,11 +40,43 @@ function standardPoolShape(r, token) {
         !Number.isInteger(pk.fee) || pk.fee < 0 || pk.fee > 100000 || !Number.isInteger(pk.tickSpacing) || pk.tickSpacing < 1 || pk.tickSpacing > 32767)
         refuse('standard pool route');
 }
+// PONS-V2 (default OFF). Robinhood Pons V2 bonding curves, native-ETH pair only. Enabled ONLY when the reviewed
+// deployment config carries ponsV2.enabled === true (the engine additionally ANDs its own TERMINAL_EVM_PONS_V2 constant).
+// Pons coins are created continuously, so a per-token marketKeys list cannot cover them: the trust root is the pinned
+// Pons factory (address fixed in the vendored registry, runtime code hash pinned in config) whose getLaunchedToken()
+// must name this exact curve, the native pair and registry status 1. NOTE: status stays 1 after graduation (fork
+// 2026-11-09: 0xcf47… curve reverts CurveGraduated() 0x025ac17e); a graduated curve fails the independent
+// simulation (simulateTerminalEvm), so nothing is signed. Graduated coins are routed as V4, not pons.
+export const PONS_CURVE_ABI = parseAbi(['function buy(uint256 amountIn,uint256 minOut,address to) payable', 'function sell(uint256 amountIn,uint256 minOut,address to)']);
+const PONS_ROUTE_KEYS = ['type', 'chainId', 'curve', 'pairToken', 'feeBps', 'creatorTaxBps', 'bridgeFee', 'bridgeHops', 'bridgeFees', 'quoteSymbol'];
+export function ponsV2Enabled(config, chain) {
+    return chain === 'robinhood' && config?.chainId === 4663 && config.ponsV2?.enabled === true;
+}
+/** Exact structural check of the ONLY call plan a Pons V2 terminal trade may carry. Independent of the route hash. */
+export function ponsV2CallsProblem({ calls, tokens, route, token, side, amount, executor, wrapped }) {
+    const buy = side === 'buy';
+    if (!Array.isArray(calls) || calls.length !== 1) return 'pons plan must be exactly one curve call';
+    if (!Array.isArray(tokens) || tokens.length !== 2 || !same(tokens[0], token) || !same(tokens[1], wrapped)) return 'pons tracked tokens must be [token, wrapped]';
+    const c = calls[0];
+    if (!same(c.target, route.curve) || same(c.target, token) || same(c.target, wrapped)) return 'pons call target is not the registered curve';
+    let d;
+    try { d = decodeFunctionData({ abi: PONS_CURVE_ABI, data: c.data }); } catch { return 'pons calldata does not decode'; }
+    if (d.functionName !== (buy ? 'buy' : 'sell')) return 'pons function does not match side';
+    if (!same(encodeFunctionData({ abi: PONS_CURVE_ABI, functionName: d.functionName, args: d.args }), c.data)) return 'pons calldata is not canonical';
+    const [amountIn, minOut, to] = d.args;
+    if (amountIn !== amount || minOut !== 0n || !same(to, executor)) return 'pons amount, inner minimum or recipient';
+    if (c.usePermit2 || Number(c.amountOffset) !== 0) return 'pons call must not use Permit2 or amount patching';
+    if (buy) {
+        if (c.value !== amount || !same(c.approvalToken, ZERO) || !same(c.approvalSpender, ZERO) || c.approvalAmount !== 0n) return 'pons buy value or approval';
+    } else if (c.value !== 0n || !same(c.approvalToken, token) || !same(c.approvalSpender, route.curve) || c.approvalAmount !== amount) return 'pons sell approval must be the exact input to the curve';
+    return null;
+}
 /** `client` is the vault's pinned-chain client, never supplied by the caller.
- * Default matrix is V2 BNB and V4 RH, own native wallet; RH Standard graduated pools only when config.venues lists them.
+ * Default matrix is V2 BNB and V4 RH, own native wallet; RH Standard graduated pools only when config.venues lists them;
+ * BNB v3/inf/four/flap only when the engine's TERMINAL_EVM_BNB_VENUES lists them; RH Pons V2 only when ponsV2 is enabled.
  * The EIP712 quote is the server policy receipt; exact calldata must reproduce it.
  */
-export async function verifyTerminalEvm({ config, client, transaction, route, intent, now = Date.now() }) {
+export async function verifyTerminalEvm({ config, client, transaction, route, intent, now = Date.now(), bnbVenues }) {
     if (!config || ![56, 4663].includes(config.chainId))
         refuse('disabled deployment');
     if (!transaction || Object.keys(transaction).some(k => !['chainId', 'to', 'value', 'data'].includes(k)) ||
@@ -57,15 +90,30 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
         (config.standardPoolRegistry !== undefined && config.standardPoolRegistry !== true && config.standardPoolRegistry !== false))
         refuse('venue configuration');
     const venue = terminalVenue(route);
-    if (route?.chainId !== config.chainId || !venues.includes(venue))
+    // TERMINAL_EVM_BNB_VENUES (default empty) may add v3/inf/four/flap on BNB only; empty = original v2 (bsc venues can only be ['v2']).
+    const allowed = chain === 'bsc' ? enabledTerminalVenueTypes('bsc', bnbVenues) : venues;
+    const pons = route?.type === 'pons' && ponsV2Enabled(config, chain);
+    if (route?.chainId !== config.chainId || (!allowed.includes(venue) && !pons))
         refuse('venue not enabled in this candidate');
-    if (venue === 'standard-pool')
-        standardPoolShape(route, intent.token);
-    // A Standard graduated pool is fully derived from the pinned Standard factory/curve registry (checked on chain
-    // by verifyEvmRoute below), so the deployment may accept it without a per-coin key. Every other market needs a key.
-    const registryMarket = venue === 'standard-pool' && config.standardPoolRegistry === true;
-    if (!registryMarket && !config.marketKeys?.includes(terminalMarketKey(intent.token, route)))
-        refuse('market is not deployment-approved');
+    if (pons) {
+        if (!same(config.ponsV2.factory, EVM_CHAINS.robinhood.ponsFactory) || typeof config.ponsV2.factoryCodeHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(config.ponsV2.factoryCodeHash))
+            refuse('pons factory pin');
+        // REVIEW 2026-11-09: typed fields only (viem isAddress/String() coerce ['0x..'] to an address string).
+        if (Object.keys(route).some(k => !PONS_ROUTE_KEYS.includes(k)) || typeof route.curve !== 'string' || typeof route.pairToken !== 'string' ||
+            !Array.isArray(route.bridgeHops ?? []) || !Array.isArray(route.bridgeFees ?? []))
+            refuse('pons route shape');
+        if (!same(route.pairToken, ZERO) || (route.bridgeHops?.length ?? 0) !== 0 || (route.bridgeFees?.length ?? 0) !== 0 || Number(route.bridgeFee || 0) !== 0)
+            refuse('only native-pair Pons V2 curves are enabled');
+    }
+    else {
+        if (venue === 'standard-pool')
+            standardPoolShape(route, intent.token);
+        // A Standard graduated pool is fully derived from the pinned Standard factory/curve registry (checked on chain
+        // by verifyEvmRoute below), so the deployment may accept it without a per-coin key. Every other market needs a key.
+        const registryMarket = venue === 'standard-pool' && config.standardPoolRegistry === true;
+        if (!registryMarket && !config.marketKeys?.includes(terminalMarketKey(intent.token, route)))
+            refuse('market is not deployment-approved');
+    }
     if (!['buy', 'sell'].includes(intent.side) || !Number.isInteger(intent.slippageBps) || intent.slippageBps < 1 || intent.slippageBps > 3000)
         refuse('intent');
     const decoded = decodeFunctionData({ abi: TERMINAL_EXECUTE_ABI, data: transaction.data });
@@ -102,9 +150,23 @@ export async function verifyTerminalEvm({ config, client, transaction, route, in
     const typed = { domain, types: TERMINAL_TYPES, primaryType: 'Quote', message: q };
     if (!await verifyTypedData({ ...typed, address: config.signer, signature }))
         refuse('server signature');
+    if (pons) {
+        const [factoryCode, curveCode] = await Promise.all([client.getBytecode({ address: EVM_CHAINS.robinhood.ponsFactory }), client.getBytecode({ address: route.curve })]);
+        if (!factoryCode || !same(keccak256(factoryCode), config.ponsV2.factoryCodeHash))
+            refuse('pons factory bytecode');
+        if (!curveCode || curveCode.length < 4)
+            refuse('pons curve has no code');
+    }
     await verifyEvmRoute({ chain, route, token: intent.token, client });
+    if (chain === 'bsc' && BNB_EXTRA_VENUES.includes(route.type))
+        await verifyBnbVenue({ route, token: intent.token, side: intent.side, amount, client });
     const executor = await read('executorFor', [q.trader, q.nonce]);
     const plan = buildEvmCalls({ chain, route, token: intent.token, side: intent.side, amount: buy ? amount - amount * BigInt(q.motionFeeBps) / 10000n : amount, executor, deadline: q.deadline });
+    if (pons) {
+        const why = ponsV2CallsProblem({ calls, tokens, route, token: intent.token, side: intent.side, amount: buy ? amount - amount * BigInt(q.motionFeeBps) / 10000n : amount, executor, wrapped: config.wrappedNative });
+        if (why)
+            refuse(why);
+    }
     if (!same(terminalRouteHash(plan), q.routeHash) || !same(terminalRouteHash({ calls, tokens }), q.routeHash))
         refuse('route differs from independently rebuilt calls');
     const digest = hashTypedData(typed);

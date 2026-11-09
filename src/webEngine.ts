@@ -1,7 +1,8 @@
 import { verifyTerminalEvm, simulateTerminalEvm, exactTerminalApproval } from './terminal-evm/vault-guard.mjs';
 import { openEvmClaims } from './terminal-evm/claim-store.mjs';
 import { verifyEvmFinality } from './terminal-evm/finality.mjs';
-import { TERMINAL_EVM_POLICY } from './terminalEvmConfig';
+import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } from './terminalEvmConfig';
+import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
 // In-browser wallet vault + trading engine for the Trenches terminal.
@@ -7823,7 +7824,9 @@ async function terminalTrade(request: unknown) {
 // Separate policy-authorized EVM lane. No caller-provided raw signing method.
 async function terminalTradeEvm(request: unknown) {
   const key = CFG.key;
-  const policy = key === 'robinhood' || key === 'bsc' ? TERMINAL_EVM_POLICY?.[key] : null;
+  const pinned = key === 'robinhood' || key === 'bsc' ? TERMINAL_EVM_POLICY?.[key] : null;
+  // PONS-V2: both the engine constant and the reviewed policy must enable Pons; otherwise the venue stays refused.
+  const policy = pinned ? (TERMINAL_EVM_PONS_V2 ? pinned : { ...pinned, ponsV2: undefined }) : null;
   if (SOL_MODE || NEAR_MODE || !policy || policy.chainId !== chain.id) throw new Error('Terminal EVM execution is not enabled');
   if (!request || typeof request !== 'object') throw new Error('Invalid terminal EVM request');
   const r = structuredClone(request) as Record<string, unknown>;
@@ -7856,10 +7859,13 @@ async function terminalTradeEvm(request: unknown) {
             if (await journal.pending(address)) throw new Error('Previous terminal transaction is unresolved; no new signature will be made');
           }
           const balance = side === 'sell' ? await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'balanceOf', args: [address] }) : 0n;
-          const amount = side === 'buy' ? parseEther(String(size)) : balance * BigInt(Math.round(size * 100)) / 10000n;
+          const rawSell = side === 'buy' ? 0n : balance * BigInt(Math.round(size * 100)) / 10000n;
+          // four.meme accepts sells only in 1e9-base-unit multiples; quantize only when that venue is enabled (flag off: unchanged).
+          const fourOn = key === 'bsc' && TERMINAL_EVM_BNB_VENUES.includes('four') && (r.route as { type?: unknown } | null)?.type === 'four';
+          const amount = side === 'buy' ? parseEther(String(size)) : fourOn ? rawSell / FOUR_SELL_QUANTUM * FOUR_SELL_QUANTUM : rawSell;
           if (amount <= 0n) throw new Error('No positive terminal input');
           const intent = { trader: address, token, side, amount: amount.toString(), slippageBps: Math.round(s.slippage * 100) };
-          const check = () => verifyTerminalEvm({ config: policy, client: publicClient, transaction: r.transaction, route: r.route, intent });
+          const check = () => verifyTerminalEvm({ config: policy, client: publicClient, transaction: r.transaction, route: r.route, intent, bnbVenues: TERMINAL_EVM_BNB_VENUES });
           let verified = await check();
           await tradeLimits(side, size, s, 1);
           verified = await check(); // dialogs cannot silently extend receipt validity

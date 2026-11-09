@@ -8,6 +8,8 @@ export interface TerminalEvmConfig {
   /** true = Standard graduated pools validated against the pinned on-chain registry need no per-coin market key. */
   standardPoolRegistry?: boolean;
   finalityBlocks: number; maxGas: string; maxGasPrice: string; maxGasCost: string;
+  /** PONS-V2 (default OFF): Robinhood Pons V2 native-pair curves. Absent or enabled !== true = refused. */
+  ponsV2?: { enabled: boolean; factory: Hex; factoryCodeHash: Hex };
 }
 export interface TerminalEvmIntent { trader: Hex; token: Hex; side: 'buy' | 'sell'; amount: string; slippageBps: number }
 export interface TerminalEvmTx { to: Hex; data: Hex; value: bigint }
@@ -20,6 +22,9 @@ export const TOKEN_READ_ABI: readonly any[];
 export function terminalMarketKey(token: string, route: unknown): string;
 export const SUPPORTED_VENUES: Readonly<{ bsc: readonly string[]; robinhood: readonly string[] }>;
 export function terminalVenue(route: unknown): string | undefined;
-export function verifyTerminalEvm(args: { config: TerminalEvmConfig; client: any; transaction: unknown; route: unknown; intent: TerminalEvmIntent; now?: number }): Promise<VerifiedTerminalEvm>;
+export const PONS_CURVE_ABI: readonly any[];
+export function ponsV2Enabled(config: TerminalEvmConfig | null | undefined, chain: string): boolean;
+export function ponsV2CallsProblem(args: { calls: readonly any[]; tokens: readonly string[]; route: any; token: string; side: 'buy' | 'sell'; amount: bigint; executor: string; wrapped: string }): string | null;
+export function verifyTerminalEvm(args: { config: TerminalEvmConfig; client: any; transaction: unknown; route: unknown; intent: TerminalEvmIntent; now?: number; bnbVenues?: readonly string[] }): Promise<VerifiedTerminalEvm>;
 export function exactTerminalApproval(verified: VerifiedTerminalEvm, amount: bigint): TerminalEvmTx;
 export function simulateTerminalEvm(args: { client: any; verified: VerifiedTerminalEvm; config: TerminalEvmConfig; now?: number }): Promise<bigint>;
