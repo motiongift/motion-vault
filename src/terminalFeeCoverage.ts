@@ -284,3 +284,20 @@ export function gateRegistry(policy: Readonly<Partial<Record<'robinhood' | 'bsc'
     bsc: GATE_ROUTE_READ.bsc ? [...(policy?.bsc?.registry ?? [])] : [],
   });
 }
+// Release 20 OBSERVE mode: the same decisions, answered as the venue LABEL (for the fee-fallback count) instead of true.
+/** EVM: 'table' | 'pons-curve' | a registry class, null = not covered, undefined = the route is not known yet. */
+export function evmCoverVenue(chain: string, token: unknown, route: unknown, sw: CoverageSwitches): string | null | undefined {
+  const c = evmCovered(chain, token, undefined, { ...sw, registry: {}, ponsV2: false });
+  if (c === true) return 'table';
+  const r = evmCovered(chain, token, route, sw);
+  if (r !== true) return r === undefined ? undefined : null;
+  if (chain === 'robinhood' && sw.ponsV2 && nativePonsRoute(route)) return 'pons-curve';
+  return registryClass(chain, route, token) ?? 'covered';
+}
+/** SOL: 'jupiter' | 'pump' | 'pumpswap' (the latter two only while Jupiter routes the coin), null = not covered. */
+export function solCoverVenue(route: unknown, indexed: JupiterIndexed): string | null | Promise<string | null> {
+  const v = solVenue(route);
+  const c = solBuyCovered(route, indexed);
+  const at = (x: boolean) => (x && typeof v === 'string' ? v : null);
+  return typeof c === 'boolean' ? at(c) : c.then(at, () => null);
+}

@@ -18,6 +18,13 @@ const MESSAGES: Readonly<Record<LegacySurface, string>> = Object.freeze({
   relaySwap: 'Swaps require the policy-authorized execution path; this route is not enabled',
 });
 export const enforcedOn = (chain: string): boolean => REQUIRED[chain] === true;
+// Release 20, owner decision 2026-11-09 ("trades must go through, but we must know who trades without the fee and keep fixing it"):
+// the market-buy gate runs in OBSERVE mode on every chain. A buy on a covered market that reaches the legacy path is NOT refused:
+// it runs at once, unchanged, and the market is classified AFTER the click has started (no request, await or check is added in
+// front of the click); a covered market is then reported (onFallback: an addressless fee-fallback beacon). 'enforce' = release 19's
+// refusal, kept for a later build. Deployment-pinned like REQUIRED.
+export type GateMode = 'observe' | 'enforce';
+export const GATE_MODE: GateMode = 'observe';
 export function terminalPolicyRefusal(surface: LegacySurface): Error {
   return Object.assign(new Error(MESSAGES[surface] || MESSAGES.trade), { code: 'TerminalPolicyRequired', name: 'TerminalPolicyRequired' });
 }
@@ -31,16 +38,56 @@ export function gatedCall<T>(chain: string, surface: LegacySurface, run: () => P
   try { assertLegacyTerminalAllowed(chain, surface); } catch (e) { return Promise.reject(e); }
   return run();
 }
-/** covered(): true = the fee covers this market (refuse the legacy buy), false = fee-free market, a promise = the market has to be
- *  read first (the route the vault itself will trade). An uncovered or unreadable market runs `run` unchanged; a covered one is
- *  refused. With the switch off nothing is read and nothing is checked. */
-export function gatedBuy<T>(chain: string, surface: 'trade' | 'float.buy', covered: () => boolean | Promise<boolean>, run: () => Promise<T>): Promise<T> {
+/** covered(): a truthy value = the fee covers this market (release 20: the venue label, e.g. 'table', 'v4-launcher', 'pump'),
+ *  false / null = fee-free market, a promise = the market has to be read first (the route the vault itself will trade).
+ *  OBSERVE (this build): `run` starts at once; covered() is asked after, and a covered market calls onFallback(venue) — never
+ *  awaited by the click, never able to fail it. ENFORCE: a covered market is refused before `run` (release 19).
+ *  With the switch off nothing is read and nothing is checked. */
+export function gatedBuy<T>(chain: string, surface: 'trade' | 'float.buy', covered: () => unknown, run: () => Promise<T>,
+  onFallback: (venue: string) => void = () => {}, mode: GateMode = GATE_MODE): Promise<T> {
   if (REQUIRED[chain] !== true || SURFACE_REQUIRED[surface] !== true) return run();
-  let v: boolean | Promise<boolean>;
+  const label = (c: unknown): string | null => (c === true ? 'covered' : typeof c === 'string' && c ? c : null);
+  if (mode === 'observe') {
+    const out = run();
+    try {
+      void Promise.resolve().then(covered).then((c) => { const v = label(c); if (v) onFallback(v); }).catch(() => {});
+    } catch { /* classification must never touch the trade */ }
+    return out;
+  }
+  let v: unknown;
   try { v = covered(); } catch { v = false; }   // a market the vault cannot classify is the legacy trade's own problem (it refuses or trades as before)
-  if (v === true) return Promise.reject(terminalPolicyRefusal(surface));
-  if (v === false) return run();
-  return Promise.resolve(v).catch(() => false).then((c) => (c === true ? Promise.reject(terminalPolicyRefusal(surface)) : run()));
+  if (v !== null && typeof v === 'object' && typeof (v as Promise<unknown>).then === 'function')
+    return Promise.resolve(v).catch(() => false).then((c) => (label(c) ? Promise.reject(terminalPolicyRefusal(surface)) : run()));
+  if (label(v)) return Promise.reject(terminalPolicyRefusal(surface));
+  return run();
+}
+/** The addressless fee-fallback line (same channel and shape as the app's feeFallbackBeacon.ts, scope 'fee-fallback'):
+ *  chain, side, venue class, reason code, size bucket — no wallet, no token, no exact amount, no page path. Pure. */
+export type FallbackReason = 'turbo' | 'private-send' | 'privy-wallet' | 'hop-wallet' | '2fa' | 'usd-balance' | 'sol-tip' | 'no-fee-path';
+export const FALLBACK_SCOPE = 'fee-fallback';
+/** native units (ETH / BNB / SOL) by default; 'usd' for a buy from the USD balance */
+export function sizeBucket(x: unknown, unit: 'native' | 'usd' = 'native'): string {
+  const n = Number(x);
+  if (!Number.isFinite(n) || n <= 0) return 'na';
+  if (unit === 'usd') return n < 10 ? 'usd<10' : n < 100 ? 'usd10-100' : n < 1000 ? 'usd100-1000' : 'usd>=1000';
+  return n < 0.01 ? '<0.01' : n < 0.1 ? '0.01-0.1' : n < 1 ? '0.1-1' : n < 10 ? '1-10' : '>=10';
+}
+export function fallbackBody(chain: string, venue: string, reason: FallbackReason, bucket: string, build: string): string {
+  const w = (x: string) => String(x).replace(/[^A-Za-z0-9<>=.+-]/g, '').slice(0, 24);
+  return JSON.stringify({ scope: FALLBACK_SCOPE, summary: `engine ${w(chain)} buy ${w(venue)} ${w(reason)} ${w(bucket)}`.slice(0, 120), stack: '', componentStack: '', path: '', build: w(build) });
+}
+/** One line per chain · venue · reason · bucket per engine load, at most `max` lines; fire-and-forget, never throws. */
+export function createFallbackReporter({ post, max = 12, build = 'engine-r20' }: { post: (body: string) => void; max?: number; build?: string }) {
+  const seen = new Set<string>();
+  return (chain: string, venue: string, reason: FallbackReason, bucket: string): boolean => {
+    try {
+      const key = `${chain}|${venue}|${reason}|${bucket}`;
+      if (seen.has(key) || seen.size >= max) return false;
+      seen.add(key);
+      post(fallbackBody(chain, venue, reason, bucket, build));
+      return true;
+    } catch { return false; }
+  };
 }
 /** Relay origin chain id -> engine lane key. Unknown origins map to a key no switch can enable. */
 export function relayOriginLane(chainId: number, solChainId: number, chains: Readonly<Record<number, { key: string }>>): string {

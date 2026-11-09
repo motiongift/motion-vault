@@ -4,8 +4,8 @@ import { verifyEvmFinality, verifyEvmL2Receipt, verifyEvmDropped } from './termi
 import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } from './terminalEvmConfig';
 import { TERMINAL_EVM_RH_L2_RELEASE } from './terminalEvmRelease';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
-import { assertLegacyTerminalAllowed, gatedCall, gatedBuy, relayOriginLane, type LegacySurface } from './terminalFeeGate';
-import { evmCovered, solBuyCovered, createJupiterIndexCheck, gateRegistry } from './terminalFeeCoverage';
+import { assertLegacyTerminalAllowed, gatedCall, gatedBuy, relayOriginLane, createFallbackReporter, sizeBucket, GATE_MODE, type LegacySurface, type FallbackReason } from './terminalFeeGate';
+import { evmCoverVenue, solCoverVenue, createJupiterIndexCheck, gateRegistry } from './terminalFeeCoverage';
 // release 20: SOL pump.fun / PumpSwap buys are covered only while Jupiter routes the coin (owner decision 2026-11-09)
 const JUP_INDEXED = createJupiterIndexCheck();
 import { solTerminalTrade } from './solEngine';
@@ -5368,17 +5368,52 @@ const relayGate = (lane: string, origin?: string) => { if (!(feeLegOn(lane) && (
 // starts anyway (refreshOwnRoute shares one in-flight read), the page's hint only when that read gives nothing (the hint is all
 // the legacy click could trade then). Solana = the vault's own route (solRoute: read from the chain, cached; the click reuses it).
 const hintRoute = (hint: unknown): unknown => { const j = hint && typeof hint === 'object' ? hint as { ok?: unknown; route?: unknown } : null; return j?.ok && j.route && typeof j.route === 'object' ? j.route : null; };
-function buyCovered(token: unknown, hint: unknown): boolean | Promise<boolean> {
-  if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then((r) => solBuyCovered(r, JUP_INDEXED), () => false) : false;
-  if (NEAR_MODE) return false;
+// Release 20 OBSERVE (terminalFeeGate GATE_MODE): the answer is the venue label of a covered market (null = not covered) and it is
+// asked only AFTER the legacy click has started, so the reads below (the vault's own route copy, shared with the click; a Jupiter
+// read for a pump.fun / PumpSwap coin) never sit in front of a click. In OBSERVE the BNB registry classes are counted too (the
+// pre-click read the owner did not approve does not exist in this mode); ENFORCE keeps gateRegistry (BNB table only).
+function buyCovered(token: unknown, hint: unknown): string | null | Promise<string | null> {
+  if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then((r) => solCoverVenue(r, JUP_INDEXED), () => null) : null;
+  if (NEAR_MODE) return null;
   const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true,
-    registry: gateRegistry(TERMINAL_EVM_POLICY) };
-  const first = evmCovered(lane, token, undefined, sw);
+    registry: GATE_MODE === 'observe' ? { robinhood: TERMINAL_EVM_POLICY?.robinhood?.registry ?? [], bsc: TERMINAL_EVM_POLICY?.bsc?.registry ?? [] } : gateRegistry(TERMINAL_EVM_POLICY) };
+  const first = evmCoverVenue(lane, token, undefined, sw);
   if (first !== undefined) return first;
   const key = lc(token as string), own = ownRouteNow(key);
-  if (own) return evmCovered(lane, token, own, sw) === true;
-  return refreshOwnRoute(key).then((r) => evmCovered(lane, token, r ?? hintRoute(hint), sw) === true, () => evmCovered(lane, token, hintRoute(hint), sw) === true);
+  if (own) return evmCoverVenue(lane, token, own, sw) ?? null;
+  return refreshOwnRoute(key).then((r) => evmCoverVenue(lane, token, r ?? hintRoute(hint), sw) ?? null, () => evmCoverVenue(lane, token, hintRoute(hint), sw) ?? null);
 }
+// Why a covered-market buy came to the legacy path, as far as the vault can see it (sync, settings and wallets only; the app's own
+// fee-fallback line carries the quote-side reason). Never throws.
+function fallbackReason(surface: 'trade' | 'float.buy', accountIds?: string[], opts?: unknown): FallbackReason {
+  try {
+    if (surface === 'float.buy') return 'usd-balance';
+    const s = tradeSettings(opts);
+    if (s.turbo) return 'turbo';
+    if (SOL_MODE) { if ((s.solTip || 0) > 0 || (s.solPriority || 0) > 0 || s.mev?.sol) return 'sol-tip'; }
+    else if (mevOn(s)) return 'private-send';
+    if (!SOL_MODE && !NEAR_MODE) {
+      const ids = Array.isArray(accountIds) ? accountIds : null;
+      const used = requireUnlocked().filter((a) => !a.archived && (!ids || ids.includes(a.id)));
+      if (used.some((a) => a.ext)) return 'privy-wallet';
+      if (used.some((a) => a.hop)) return 'hop-wallet';
+      const pol = policyNow();
+      const su = stepUps.get('transfer');
+      if (pol.enabled && pol.gates.transfer && !(su && su.exp > Date.now() + 5000)) return '2fa';
+    }
+  } catch { /* fall through */ }
+  return 'no-fee-path';
+}
+// the addressless fee-fallback line, to motion's existing crash log (/api/app/error, scope 'fee-fallback'), from motion's own pages
+// only: a text/plain no-cors POST (no preflight, nothing read back), keepalive, never awaited
+const FALLBACK = createFallbackReporter({ post: (body) => {
+  const base = HOST && parentOrigin ? parentOrigin : location.origin;
+  if (!/^https:\/\/([a-z0-9-]+\.)*motion\.gift$/.test(base)) return;
+  void fetch(base + '/api/app/error', { method: 'POST', mode: 'no-cors', body, headers: { 'content-type': 'text/plain' }, keepalive: true, credentials: 'omit' }).catch(() => {});
+} });
+const noteFallback = (surface: 'trade' | 'float.buy', size: unknown, accountIds?: string[], opts?: unknown) => (venue: string) => {
+  FALLBACK(laneKey(), venue, fallbackReason(surface, accountIds, opts), sizeBucket(size, surface === 'float.buy' ? 'usd' : 'native'));
+};
 // one limit.* surface for the page: the Solana frame's orders there, the EVM frame's elsewhere
 const limitApi = {
   place: (o: unknown) => (SOL_MODE ? solLimit.place(o) : limit.place(o)),
@@ -7083,10 +7118,10 @@ const engine = {
   // limit orders v1: limit.<method>({ … }) — one object each, shapes checked in src/limitCore.ts (limitArgs)
   limit: { ...limitApi, place: (o: unknown) => legacyOrFeeLeg<Awaited<ReturnType<typeof limitApi.place>>>(laneKey(), 'limit.place', () => limitApi.place(o)) },
   // one USD balance: float.<method>({ … }) — one object each, shapes checked in src/floatCore.ts (floatArgs)
-  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => gatedBuy(laneKey(), 'float.buy', () => buyCovered((o as { token?: unknown } | null)?.token, (o as { hint?: unknown } | null)?.hint), () => clickRun(() => usdBuy(o))), convert: float.convert, withdraw: float.withdraw },
+  float: { status: float.status, configure: float.configure, ensure: (o: unknown) => floatEnsure(o), sweep: float.sweep, off: float.off, jobs: float.jobs, earn: float.earn, buy: (o: unknown) => gatedBuy(laneKey(), 'float.buy', () => buyCovered((o as { token?: unknown } | null)?.token, (o as { hint?: unknown } | null)?.hint), () => clickRun(() => usdBuy(o)), noteFallback('float.buy', (o as { usd?: unknown } | null)?.usd)), convert: float.convert, withdraw: float.withdraw },
   terminalTrade: (request: unknown) => clickRun(() => terminalTrade(request)),
   terminalTradeEvm: (request: unknown) => clickRun(() => terminalTradeEvm(request)),
-  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedBuy(laneKey(), 'trade', () => buyCovered(token, hint), () => clickRun(() => trade('buy', token, amount, accountIds, hint, opts))),
+  buy: (token: string, amount: number, accountIds?: string[], hint?: unknown, opts?: unknown) => gatedBuy(laneKey(), 'trade', () => buyCovered(token, hint), () => clickRun(() => trade('buy', token, amount, accountIds, hint, opts)), noteFallback('trade', amount, accountIds, opts)),
   // release 19: a sell is never gated (exits are never blocked; the app takes the fee path for it when its quote works)
   sell: (token: string, percent: number, accountIds?: string[], hint?: unknown, opts?: unknown) => clickRun(() => trade('sell', token, percent, accountIds, hint, opts)),
   // dry run of the exact transaction, and the on-chain fate of one that was sent
