@@ -6,7 +6,6 @@ import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed, gatedCall, relayOriginLane, type LegacySurface } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
 import { TERMINAL_FEE_POLICY } from './terminalFeePolicyConfig';
-import { TERMINAL_SOL_POLICY } from './terminalFeeConfig';
 // Fee-policy receipts (default OFF). Null config = this whole feature is dead code and the lanes are unchanged.
 const FEE_POLICY_SEEN = TERMINAL_FEE_POLICY ? createSeenNonces() : null;
 // In-browser wallet vault + trading engine for the Trenches terminal.
