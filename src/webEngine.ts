@@ -1711,6 +1711,21 @@ function tradeBalances(shared: Shared, side: 'buy' | 'sell', token: `0x${string}
     return Object.fromEntries(addrs.map((a, i) => [a.toLowerCase(), vals[i]]).filter(([, v]) => v != null)) as Record<string, bigint>;
   });
 }
+// (2026-11-09, owner «ну так сделай») a V3 sell into the wrapped gas token swaps AND unwraps in ONE transaction:
+// SwapRouter02 (PancakeSwap SmartRouter on BNB: same functions) multicall([exactInputSingle(recipient = the router, address 2),
+// unwrapWETH9(the same floor, this wallet)]). The native coin lands with the swap; nothing is left as WETH. Before, a separate
+// WETH.withdraw went out behind the receipt (90 s window, errors swallowed) and could be lost. Wallet-held WETH is never touched.
+const V3_ROUTER_SELF = '0x0000000000000000000000000000000000000002' as const;
+const V3_SELL_UNWRAP_ABI = [
+  { name: 'multicall', type: 'function', stateMutability: 'payable', inputs: [{ name: 'data', type: 'bytes[]' }], outputs: [{ name: 'results', type: 'bytes[]' }] },
+  { name: 'unwrapWETH9', type: 'function', stateMutability: 'payable', inputs: [{ name: 'amountMinimum', type: 'uint256' }, { name: 'recipient', type: 'address' }], outputs: [] },
+] as const;
+const v3SellUnwrapCall = (router: `0x${string}`, args: { tokenIn: `0x${string}`; tokenOut: `0x${string}`; fee: number; amountIn: bigint; sqrtPriceLimitX96: bigint }, min: bigint, to: `0x${string}`) => ({
+  address: router, abi: V3_SELL_UNWRAP_ABI, functionName: 'multicall' as const, args: [[
+    encodeFunctionData({ abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [{ tokenIn: args.tokenIn, tokenOut: args.tokenOut, fee: args.fee, recipient: V3_ROUTER_SELF, amountIn: args.amountIn, amountOutMinimum: min, sqrtPriceLimitX96: args.sqrtPriceLimitX96 }] }),
+    encodeFunctionData({ abi: V3_SELL_UNWRAP_ABI, functionName: 'unwrapWETH9', args: [min, to] }),
+  ]] as const,
+});
 async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}`, size: number, route: Route, s: Settings, click: Shared = makeShared([acct.address])): Promise<`0x${string}`> {
   if (CFG.key === 'elysium' || route.type === 'ely') return elyTradeOne(acct, side, token, size, route, s, click);   // (trade-core.patch E8)
   const account = accountOf(acct);
@@ -2629,24 +2644,15 @@ async function tradeOne(acct: Account, side: 'buy' | 'sell', token: `0x${string}
   }
   const tokenIn = side === 'buy' ? WETH : token, tokenOut = side === 'buy' ? token : route.quoteToken;
   const args = v3SingleArgs(tokenIn, tokenOut, route.fee, amountIn);
-  // F-57 (V12): a WETH-quoted sell lands in the wrapped gas token; capture the pre-sell balance (overlaps the quote) so the delta is unwrapped.
-  const beforeWethP = side === 'sell' ? publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] }) : Promise.resolve(0n);
   const guard = v3TierGuard(WETH); guard.catch(() => {});   // V13 (speed): beside the quote
-  // V13 (G4): the call with a zero floor, proved beside the quote (a buy's proof started at t=0)
-  const early = s.turbo ? null : side === 'buy' ? bscEstimate('buy', bscBuyProbe(amountIn)) : bscEstimate('sell', { address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [args] });
+  // V13 (G4): the call with a zero floor, proved beside the quote (a buy's proof started at t=0); a sell proves its one-tx swap + unwrap
+  const early = s.turbo ? null : side === 'buy' ? bscEstimate('buy', bscBuyProbe(amountIn)) : bscEstimate('sell', v3SellUnwrapCall(UNISWAP_V3_ROUTER, args, 0n, account.address));
   const q = await quoteV3Single(tokenIn, tokenOut, route.fee, amountIn, side === 'buy');
   if (side === 'sell') { await guard; await approveIfNeeded(token, UNISWAP_V3_ROUTER, amountIn); }
-  const beforeWeth = await beforeWethP;
-  const req = await simEarly({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [{ ...args, amountOutMinimum: applySlippage(q.result) }], value: side === 'buy' ? amountIn : undefined }, early);
-  const hash = await send(req.request);
-  // the sell's proceeds arrive as WETH: unwrap only what this sell delivered, behind the trade
-  if (side === 'sell') landed(hash, 90_000).then(async (r) => {
-    if (r.status !== 'success') return;
-    const afterWeth = await publicClient.readContract({ address: WETH, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-    const got = afterWeth - beforeWeth;
-    if (got > 0n) await unwrap(acct.id, got).catch(() => {});
-  }).catch(() => {});
-  return hash;
+  // a sell: swap into the router and unwrap there, both at the same floor, in one transaction (native lands with the swap)
+  const req = await simEarly(side === 'sell' ? v3SellUnwrapCall(UNISWAP_V3_ROUTER, args, applySlippage(q.result), account.address)
+    : { address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [{ ...args, amountOutMinimum: applySlippage(q.result) }], value: amountIn }, early);
+  return send(req.request);
 }
 // ── preflight ──────────────────────────────────────────────────────────────
 // The same route, the same quote, the same calldata as a real trade — but it
@@ -2942,6 +2948,8 @@ async function previewOne(acct: Account, side: 'buy' | 'sell', token: `0x${strin
   if (side === 'sell') {
     const allowance = await publicClient.readContract({ address: token, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, UNISWAP_V3_ROUTER] });
     if (allowance < amountIn) { notes.push('an approve() transaction runs first'); out.simulated = 'skipped'; out.error = 'approval needed before the sell can be simulated'; return out; }
+    notes.push(`one transaction: the swap and the unwrap to ${NATIVE}`);
+    return run(v3SellUnwrapCall(UNISWAP_V3_ROUTER, args, applySlippage(q), account.address));   // the call the sell sends
   }
   return run({ address: UNISWAP_V3_ROUTER, abi: EXACT_INPUT_SINGLE_ABI, functionName: 'exactInputSingle', args: [{ ...args, amountOutMinimum: applySlippage(q) }], value: side === 'buy' ? amountIn : undefined });
 }

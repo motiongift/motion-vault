@@ -66,9 +66,12 @@ test('F-57: BSC V3 sells are guarded against fee-tier manipulation (one multical
 test('F-57: a V3 sell unwraps only what the sell delivered, never `quoted`', () => {
   // the old buggy unwrap(acct.id, quoted) is gone
   assert.ok(!/unwrap\(acct\.id, quoted\)/.test(eng), 'old unwrap(acct.id, quoted) still present');
-  // both V3 sell tails read before/after and unwrap the delta
-  assert.equal((eng.match(/const got = afterWeth - beforeWeth;/g) || []).length, 2);
-  assert.equal((eng.match(/if \(got > 0n\) await unwrap\(acct\.id, got\)\.catch\(\(\) => \{\}\);/g) || []).length, 2);
+  // the bridged (exactInput) V3 sell tail reads before/after and unwraps the delta
+  assert.equal((eng.match(/const got = afterWeth - beforeWeth;/g) || []).length, 1);
+  assert.equal((eng.match(/if \(got > 0n\) await unwrap\(acct\.id, got\)\.catch\(\(\) => \{\}\);/g) || []).length, 1);
+  // (2026-11-09) the WETH-quoted (exactInputSingle) sell swaps into the router and unwraps there in the same transaction
+  // (test/v3-sell-unwrap.mjs): only what this sell delivered becomes native, wallet-held WETH is never touched
+  assert.equal((eng.match(/v3SellUnwrapCall\(UNISWAP_V3_ROUTER, args, /g) || []).length, 3);
 });
 
 test('F-53: walk-backs sweep only delta+owed, capped at balance, via a per-wallet+quote ledger', () => {
