@@ -5,6 +5,10 @@ import { TERMINAL_EVM_POLICY, TERMINAL_EVM_BNB_VENUES, TERMINAL_EVM_PONS_V2 } fr
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed } from './terminalFeeGate';
 import { solTerminalTrade } from './solEngine';
+import { TERMINAL_FEE_POLICY } from './terminalFeePolicyConfig';
+import { TERMINAL_SOL_POLICY } from './terminalFeeConfig';
+// Fee-policy receipts (default OFF). Null config = this whole feature is dead code and the lanes are unchanged.
+const FEE_POLICY_SEEN = TERMINAL_FEE_POLICY ? createSeenNonces() : null;
 // In-browser wallet vault + trading engine for the Trenches terminal.
 //
 // Runs without the extension and without any confirmation step: like a
@@ -20,6 +24,7 @@ import { solTerminalTrade } from './solEngine';
 import { createPublicClient, createWalletClient, defineChain, http, fallback, parseEther, parseUnits, parseGwei, formatEther, formatUnits, toFunctionSelector, encodeFunctionData, decodeFunctionResult, multicall3Abi, keccak256, recoverMessageAddress, parseTransaction, recoverTransactionAddress } from 'viem';
 import { privateKeyToAccount, generatePrivateKey, toAccount } from 'viem/accounts';
 import { ed25519 } from '@noble/curves/ed25519';
+import { terminalFeeDecision, assertQuoteMatchesDecision, createSeenNonces } from './terminal-fee/fee-policy.mjs';
 import { NEAR_ACCT, nearAccountId, nearKeys, nearSecretKey, nearPublicKey, nearFullAccess, nearRoute, nearTradeOne, nearPreviewOne, nearBalancesFor, nearTokenBalancesFor, nearTransfer, nearReceipt, nearPrewarm, nearTokenMeta, setNearRpcs, NEAR_DEFAULT_RPCS, NearSendUnknown } from './nearEngine';
 import { solJupWarm } from './solEngine';
 import { solKeys, solVenueIxs, solSimulateAccounts, solLimitSend, solErrText, solBlockhashInfo, solAccounts, solSigStatusesBoth, sendPlan as solSendPlan, compileLegacy as solCompile, solBudget, signMessage as solSignMessage } from './solEngine';
@@ -7786,7 +7791,7 @@ async function terminalTrade(request: unknown) {
   if (!TERMINAL_SOL_POLICY) throw Object.assign(new Error('Terminal fee execution is not configured'), { code: 'TerminalFeeDisabled' });
   if (!SOL_MODE || !request || typeof request !== 'object') throw new Error('SOL terminal trade required');
   const r = request as Record<string, unknown>;
-  if (Object.keys(r).some(k => !['walletId', 'side', 'token', 'size', 'envelope', 'serialized'].includes(k)) ||
+  if (Object.keys(r).some(k => !(TERMINAL_FEE_POLICY ? ['walletId', 'side', 'token', 'size', 'envelope', 'serialized', 'feePolicy'] : ['walletId', 'side', 'token', 'size', 'envelope', 'serialized']).includes(k)) ||
     typeof r.walletId !== 'string' || !['buy', 'sell'].includes(String(r.side)) || typeof r.token !== 'string' ||
     !SOL_ADDR.test(r.token) || typeof r.size !== 'number' || typeof r.serialized !== 'string' || r.serialized.length > 1644) throw new Error('Invalid terminal trade');
   const side = r.side as 'buy' | 'sell', token = r.token, size = r.size;
@@ -7796,6 +7801,16 @@ async function terminalTrade(request: unknown) {
   if (!account || account.archived || account.hop || account.ext || !account.key) throw new Error('Own active wallet required');
   const address = solAddressOf(account), id = clickId(undefined), settings = tradeSettings(undefined);
   if (!address) throw new Error('This wallet has no Solana key');
+  if (TERMINAL_FEE_POLICY) {
+    // Verify the server's per-trade fee policy BEFORE anything is signed. Unproven = standard rate (fail-closed).
+    const p = (r.envelope && typeof r.envelope === 'object' ? (r.envelope as { payload?: Record<string, unknown> }).payload : null) || {};
+    const collector = TERMINAL_FEE_POLICY.collectors?.sol;
+    if (!collector || TERMINAL_SOL_POLICY?.feeRecipient !== collector || p.feeRecipient !== collector) throw new Error('Terminal fee collector is not configured for this chain');
+    const decision = terminalFeeDecision(r.feePolicy, { ed25519, pinned: TERMINAL_FEE_POLICY, chain: 'sol', trader: address, side, token,
+      amount: typeof p.amount === 'string' ? p.amount : '', seen: FEE_POLICY_SEEN });
+    assertQuoteMatchesDecision(decision, { pinned: TERMINAL_FEE_POLICY, quoteBps: p.feeBps, reservation: p.reservationId, quoteIssuedAtMs: Number(p.issuedAt) });
+    if (decision.nonce) FEE_POLICY_SEEN!.add(decision.nonce, decision.expiresAtMs!);
+  }
   const follow = (hash: string) => (async () => {
     for (let i = 0; i < 98; i++) {
       await new Promise(ok => setTimeout(ok, i < 25 ? 400 : 1500));
@@ -7830,7 +7845,7 @@ async function terminalTradeEvm(request: unknown) {
   if (SOL_MODE || NEAR_MODE || !policy || policy.chainId !== chain.id) throw new Error('Terminal EVM execution is not enabled');
   if (!request || typeof request !== 'object') throw new Error('Invalid terminal EVM request');
   const r = structuredClone(request) as Record<string, unknown>;
-  if (Object.keys(r).some(k => !['walletId', 'side', 'token', 'size', 'transaction', 'route'].includes(k)) ||
+  if (Object.keys(r).some(k => !(TERMINAL_FEE_POLICY ? ['walletId', 'side', 'token', 'size', 'transaction', 'route', 'feePolicy'] : ['walletId', 'side', 'token', 'size', 'transaction', 'route']).includes(k)) ||
     typeof r.walletId !== 'string' || !['buy', 'sell'].includes(String(r.side)) || typeof r.token !== 'string' ||
     !/^0x[0-9a-fA-F]{40}$/.test(r.token) || typeof r.size !== 'number') throw new Error('Invalid terminal EVM intent');
   const side = r.side as 'buy' | 'sell', token = r.token as `0x${string}`, size = r.size;
@@ -7838,6 +7853,10 @@ async function terminalTradeEvm(request: unknown) {
   const s = tradeSettings(undefined);
   if (s.turbo || mevOn(s) || !Number.isFinite(s.gasBoost) || s.gasBoost < 1 || s.gasBoost > 5) throw new Error('Terminal candidate requires ordinary public execution with bounded gas');
   if (!Number.isSafeInteger(policy.finalityBlocks) || policy.finalityBlocks < 1 || BigInt(policy.maxGas) <= 0n || BigInt(policy.maxGasPrice) <= 0n || BigInt(policy.maxGasCost) <= 0n) throw new Error('Invalid terminal execution deployment limits');
+  if (TERMINAL_FEE_POLICY) {
+    const collector = TERMINAL_FEE_POLICY.collectors?.[key as 'robinhood' | 'bsc'];
+    if (!collector || collector !== String(policy.feeRecipient).toLowerCase()) throw new Error('Terminal fee collector is not configured for this chain');
+  }
   keepHot();
   const own = requireUnlocked().find(a => a.id === r.walletId);
   if (!own || own.archived || own.hop || own.ext || !own.key) throw new Error('Own active EVM wallet required');
@@ -7867,6 +7886,14 @@ async function terminalTradeEvm(request: unknown) {
           const intent = { trader: address, token, side, amount: amount.toString(), slippageBps: Math.round(s.slippage * 100) };
           const check = () => verifyTerminalEvm({ config: policy, client: publicClient, transaction: r.transaction, route: r.route, intent, bnbVenues: TERMINAL_EVM_BNB_VENUES });
           let verified = await check();
+          if (TERMINAL_FEE_POLICY) {
+            // The router-verified quote must carry exactly the rate of a valid per-trade fee policy (else the standard rate).
+            const decision = terminalFeeDecision(r.feePolicy, { ed25519, pinned: TERMINAL_FEE_POLICY, chain: key as 'robinhood' | 'bsc',
+              trader: address.toLowerCase(), side, token: token.toLowerCase(), amount: amount.toString(), seen: FEE_POLICY_SEEN });
+            assertQuoteMatchesDecision(decision, { pinned: TERMINAL_FEE_POLICY, quoteBps: Number(verified.quote.motionFeeBps),
+              reservation: verified.claim.reservation, quoteIssuedAtMs: Number(verified.quote.issuedAt) * 1000 });
+            if (decision.nonce) FEE_POLICY_SEEN!.add(decision.nonce, decision.expiresAtMs!);
+          }
           await tradeLimits(side, size, s, 1);
           verified = await check(); // dialogs cannot silently extend receipt validity
           if (!await journal.claim(verified.claim)) throw new Error('Terminal receipt, reservation or nonce is already consumed');

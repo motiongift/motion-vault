@@ -14,7 +14,7 @@ export interface TerminalEvmConfig {
 export interface TerminalEvmIntent { trader: Hex; token: Hex; side: 'buy' | 'sell'; amount: string; slippageBps: number }
 export interface TerminalEvmTx { to: Hex; data: Hex; value: bigint }
 export interface VerifiedTerminalEvm {
-  quote: { trader: Hex; deadline: number; nonce: bigint; minOut: bigint };
+  quote: { trader: Hex; deadline: number; nonce: bigint; minOut: bigint; motionFeeBps: number; issuedAt: number; entitlementId: Hex };
   digest: Hex; transaction: TerminalEvmTx; claim: { id: string; trader: string; nonce: string; reservation: string | null };
   approval: { token: Hex; spender: Hex; amount: bigint } | null; intent: TerminalEvmIntent;
 }
