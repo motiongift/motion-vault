@@ -121,13 +121,15 @@ test('fallback line: chain, venue, reason, size bucket only; one per kind per lo
 });
 
 // ── the real dispatch (engine.buy / engine.sell / engine.float.buy / buyCovered) ──
-function world({ lane = 'robinhood', own = null, read = null, solRoute = null, mode = 'evm', jupIndexed = async () => true } = {}) {
+function world({ lane = 'robinhood', own = null, read = null, solRoute = null, mode = 'evm', jupIndexed = async () => true, solFee = false } = {}) {
   const calls = { trade: [], usdBuy: [], reads: 0, sol: 0, jup: 0, fallback: [] };
   const stubs = {
     gatedBuy, gatedCall, evmCoverVenue, solCoverVenue, gateRegistry, GATE_MODE,
     JUP_INDEXED: (m) => { calls.jup += 1; return jupIndexed(m); },
     noteFallback: (surface, size) => (venue) => { calls.fallback.push([surface, venue, size]); },
     SOL_MODE: mode === 'sol', NEAR_MODE: false, CFG: { key: lane },
+    // fee-cov-1110: the in-transaction Solana fee switch (src/solMarketFee.ts); off = the release-20 observe count below
+    SOL_MARKET_FEE: { enabled: solFee },
     SOL_ADDR: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/,
     TERMINAL_EVM_PONS_V2: true, TERMINAL_EVM_POLICY,
     laneKey: () => (mode === 'sol' ? 'sol' : lane),
@@ -219,6 +221,21 @@ test('engine.buy on Solana: Jupiter and indexed pump.fun / PumpSwap reported; no
     await w.buy(MINT, 0.1); await settle();
     assert.deepEqual(w.calls.trade, [['buy', MINT]]);
     assert.deepEqual(w.calls.fallback, []);
+  }
+});
+
+// fee-cov-1110: with the in-transaction Solana fee on, a Solana buy pays its fee inside its own transaction (whatever the venue):
+// it is not counted as a fee-free fallback and the gate reads no route and asks Jupiter nothing (zero work in front of the click)
+test('engine.buy on Solana with the in-transaction fee on: every venue trades at once, nothing is read, nothing counted fee-free', async () => {
+  const MINT = 'So1aNaMintXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'.replace(/X/g, '2');
+  for (const venue of ['jupiter', 'pump', 'pumpswap', 'pumphop', 'dlmm']) {
+    const w = world({ mode: 'sol', solFee: true, solRoute: async () => ({ venue, mint: MINT }) });
+    await w.buy(MINT, 0.1); await settle();
+    assert.deepEqual(w.calls.trade, [['buy', MINT]]);
+    assert.deepEqual(w.calls.fallback, [], venue);
+    assert.equal(w.calls.sol + w.calls.jup, 0, venue + ': no read');
+    await w.float.buy({ token: MINT, usd: 5 }); await settle();
+    assert.deepEqual(w.calls.fallback, [], venue + ' (USD balance)');
   }
 });
 

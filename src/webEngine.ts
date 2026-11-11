@@ -6,6 +6,8 @@ import { TERMINAL_EVM_RH_L2_RELEASE } from './terminalEvmRelease';
 import { FOUR_SELL_QUANTUM } from './terminal-evm/bnb-venues.mjs';
 import { assertLegacyTerminalAllowed, gatedCall, gatedBuy, relayOriginLane, createFallbackReporter, sizeBucket, GATE_MODE, type LegacySurface, type FallbackReason } from './terminalFeeGate';
 import { evmCoverVenue, solCoverVenue, createJupiterIndexCheck, gateRegistry } from './terminalFeeCoverage';
+// fee-final-1111: the Solana fee inside the vault's own trade transaction (src/solMarketFee.ts)
+import { SOL_MARKET_FEE, setSolFeeSkipHook } from './solMarketFee';
 // release 20: SOL pump.fun / PumpSwap buys are covered only while Jupiter routes the coin (owner decision 2026-11-09)
 const JUP_INDEXED = createJupiterIndexCheck();
 import { solTerminalTrade } from './solEngine';
@@ -5373,6 +5375,9 @@ const hintRoute = (hint: unknown): unknown => { const j = hint && typeof hint ==
 // read for a pump.fun / PumpSwap coin) never sit in front of a click. In OBSERVE the BNB registry classes are counted too (the
 // pre-click read the owner did not approve does not exist in this mode); ENFORCE keeps gateRegistry (BNB table only).
 function buyCovered(token: unknown, hint: unknown): string | null | Promise<string | null> {
+  // fee-final-1111: with the in-transaction Solana fee on, a legacy SOL buy is NOT fee-free (it pays inside its own
+  // transaction); the rare buy that runs without it is reported by the trade itself (setSolFeeSkipHook below), not here
+  if (SOL_MODE && SOL_MARKET_FEE.enabled) return null;
   if (SOL_MODE) return typeof token === 'string' && SOL_ADDR.test(token) ? solRoute(token, hint).then((r) => solCoverVenue(r, JUP_INDEXED), () => null) : null;
   if (NEAR_MODE) return null;
   const lane = CFG.key, sw = { ponsV2: TERMINAL_EVM_PONS_V2 && TERMINAL_EVM_POLICY?.robinhood?.ponsV2?.enabled === true,
@@ -5411,6 +5416,10 @@ const FALLBACK = createFallbackReporter({ post: (body) => {
   if (!/^https:\/\/([a-z0-9-]+\.)*motion\.gift$/.test(base)) return;
   void fetch(base + '/api/app/error', { method: 'POST', mode: 'no-cors', body, headers: { 'content-type': 'text/plain' }, keepalive: true, credentials: 'omit' }).catch(() => {});
 } });
+// fee-final-1111: a Solana trade that ran without its in-transaction fee (collector not ready, dust, a wallet that cannot pay
+// a sell's fee besides its fees and rent, no room in the transaction, a simulation that failed only with it) — one addressless
+// line per kind, like every fallback
+setSolFeeSkipHook((side, venue, reason) => { FALLBACK('sol', `${side}-${venue}`, `fee-leg-${reason}` as FallbackReason, 'na'); });
 const noteFallback = (surface: 'trade' | 'float.buy', size: unknown, accountIds?: string[], opts?: unknown) => (venue: string) => {
   FALLBACK(laneKey(), venue, fallbackReason(surface, accountIds, opts), sizeBucket(size, surface === 'float.buy' ? 'usd' : 'native'));
 };

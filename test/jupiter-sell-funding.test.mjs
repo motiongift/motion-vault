@@ -8,11 +8,15 @@ import { createHash } from 'node:crypto';
 // Runs the actual extracted trade function against an entirely local ledger.
 // No network, key material, signing library or chain dispatch exists in this harness.
 const sources = { baseline: readFileSync(new URL('./fixtures/jupiter-sell-rent-baseline.ts', import.meta.url), 'utf8'), candidate: readFileSync(new URL('../src/solEngine.ts', import.meta.url), 'utf8') };
+// fee-cov-1110: the Solana in-transaction fee the candidate's Jupiter path now carries (src/solMarketFee.ts); this ledger has
+// no collector account, so every leg here is off and the path is exactly the one this harness was written for
+const FEE = await import(new URL('../src/solMarketFee.ts', import.meta.url).href);
 const section = s => s.slice(s.indexOf('async function jupiterTradeOne('), s.indexOf('// the preview of a Jupiter route:'));
 async function run(which, { have = 4_500_000n, missing = 0, micro = 0, side = 'sell', tip = 1_000_000n, guardError = '', simError = false, consumed = 100_000 } = {}) {
   const log = { reads: 0, builds: 0, simulations: 0, signs: 0, sends: 0, balance: null, trial: null, signed: null };
   const ceilFee = (m, u) => (BigInt(m) * BigInt(u) + 999_999n) / 1_000_000n;
   const context = {
+    SOL_MARKET_FEE: FEE.SOL_MARKET_FEE, solBuyLeg: FEE.solBuyLeg, solSellLeg: FEE.solSellLeg, noteSolFeeSkip: () => {}, COLLECTOR_READY: { owner: 'system', data: new Uint8Array(0), lamports: 890_880 }, solCollectorLastReady: true,
     solKeys: () => ({ address: 'user', seed: 'MOCK' }), solHoldGate: async () => {}, joinClick: () => 1,
     sendPlan: async () => ({ tipLamports: tip, micro, mode: 'fast', protect: false }), blockhash: async () => ({ v: 'block', lvh: 1, at: Date.now() }),
     ataOf: (u, mint) => mint, P: { wsol: 'wsol', token: 'token', system: 'system' },

@@ -47,6 +47,8 @@ import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { nativeChainOf, nativeSeed } from './nativeKeys.ts';
 import { directIxsChecked, directInnerGuard, directBalanceGuard, directPriceCheck, directQuoteCheck } from './floatDirect.ts';   // the USD buy from the reserve (appended at the end)
+// fee-cov-1110 (CANDIDATE): the 0.20 % terminal fee inside every Solana market trade (src/solMarketFee.ts)
+import { SOL_MARKET_FEE, solBuyLeg, solSellLeg, solUsdcLeg, noteSolFeeSkip, type SolFeeDecision } from './solMarketFee.ts';
 
 export type SolAcct = { id: string; name: string; address: string; key?: string; ext?: string };
 // mev (TC-M2, exec-quality 2026-11-04): webEngine's per-lane MEV-protection map; `mev.sol` on = Jito bundle-only sends
@@ -1570,6 +1572,10 @@ async function simulateSeeing(tx: Uint8Array, addrs: string[]) {
   return v;
 }
 const simAcc = (x: any) => (x ? { owner: String(x.owner), data: fromB64(x.data?.[0] || ''), lamports: Number(x.lamports || 0) } : null);
+// fee-cov-1110: what the collector looked like on the last click (an early Jupiter build is priced on it); a stand-in account
+// that passes collectorReady, used ONLY to price that early build — every fee decision is made on the click's own read
+let solCollectorLastReady = true;
+const COLLECTOR_READY = Object.freeze({ owner: P.system, data: new Uint8Array(0), lamports: 890_880 });
 async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: number, s: SolSettings): Promise<{ hash: string }> {
   const k = solKeys(a.key!); const user = k.address;
   await solHoldGate(user);
@@ -1579,14 +1585,21 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   // speed: a buy's quote starts with the wallet read, not after it (a sell needs the balance first: its amount is a share of it)
   const buyAmount = side === 'buy' ? BigInt(Math.floor(size * 1e9)) : 0n;
   if (side === 'buy' && buyAmount <= 0n) throw new Error('Enter an amount');
-  const bEarly = side === 'buy' ? jupBuild(r, side, buyAmount, s.slippage, user) : null; bEarly?.catch(() => {});
+  // fee-cov-1110: a buy's Jupiter swap gets the amount less the 0.20 % fee (src/solMarketFee.ts); the early build assumes the
+  // collector is ready as it was on the last click and is rebuilt once only when the read says otherwise
+  const early = side === 'buy' && solCollectorLastReady ? solBuyLeg(buyAmount, COLLECTOR_READY) : null;
+  const earlyIn = early?.on ? early.swapIn : buyAmount;
+  const bEarly = side === 'buy' ? jupBuild(r, side, earlyIn, s.slippage, user) : null; bEarly?.catch(() => {});
   const priceP = motionPriceSol(r.mint);
-  const [uAcc, cAcc, wAcc] = await accounts([user, coinAta, wsolAta]);
+  const [uAcc, cAcc, wAcc, colAcc] = await accounts([user, coinAta, wsolAta, SOL_MARKET_FEE.collector]);
   if (uAcc === undefined || cAcc === undefined || wAcc === undefined) throw new Error('Could not read this wallet from the Solana nodes — nothing was sent; try again');
+  solCollectorLastReady = solBuyLeg(1_000_000n, colAcc).on;
   const coinBefore = tokState(cAcc)?.amount ?? 0n, wsolBefore = tokState(wAcc);
-  let amount = buyAmount;
+  // fee-cov-1110: `amount` is what the Jupiter swap itself takes — a buy: the amount typed less the fee (the leg), a sell: the coin
+  let leg: SolFeeDecision = side === 'buy' ? solBuyLeg(buyAmount, colAcc) : { on: false, reason: 'off', swapIn: 0n };
+  let amount = side === 'buy' ? leg.swapIn : buyAmount;
   if (side === 'sell') { if (coinBefore <= 0n) throw new Error('Nothing to sell in this wallet'); amount = (coinBefore * BigInt(Math.round(Math.min(100, Math.max(0, size)) * 100))) / 10000n; if (amount <= 0n) throw new Error('Nothing to sell'); }
-  const built0 = await (bEarly ?? jupBuild(r, side, amount, s.slippage, user));
+  const built0 = await (bEarly && amount === earlyIn ? bEarly : jupBuild(r, side, amount, s.slippage, user));
   const minOut = BigInt(built0.quote.otherAmountThreshold);
   const { list, tables: tableKeys } = built0;
   const priceWhy = jupPriceCheck({ side, amount, minOut, decimals: r.decimals, priceSol: await priceP, feeBps: r.fee?.lowBps });
@@ -1603,13 +1616,29 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   const rentMax = BigInt(opens) * RENT_ATA22;
   const have = BigInt(uAcc?.lamports || 0), need = (side === 'buy' ? amount + RENT_WALLET + rentMax : 0n) + feesAt(JUP_UNITS_MAX);
   if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees + account rent)`);
+  // fee-cov-1110: a buy needs what it needed before the fee (the swap + the fee = the amount typed): never less refused, never more
+  if (side === 'buy' && leg.on && have < need + leg.fee) throw new Error(`Not enough SOL: ${solTxt(have)} available, about ${solTxt(need + leg.fee)} needed (amount + fees + account rent)`);
+  // fee-cov-1110: a sell's fee = 0.20 % of Jupiter's signed minimum, paid from what the wallet holds besides the proceeds
+  if (side === 'sell') leg = solSellLeg(minOut, have, feesAt(JUP_UNITS_MAX) + rentMax, colAcc);
   // A sell proves its real account-rent funding in the existing simulation, with the maximum priority charge already paid.
   // Every move is checked from inner instructions; the slow token-account list is read only when the node omits them.
   // Idempotent ATA instructions for existing accounts consume no rent. Do not reserve their nominal rent twice.
   const trialMicro = side === 'sell' ? microAt(JUP_UNITS_MAX) : 0;
   const trialPriority = (BigInt(trialMicro) * BigInt(JUP_UNITS_MAX) + 999_999n) / 1_000_000n;
-  const trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, trialMicro), ...ixs, ...tip], P.system, tables));
+  let feeIxs: Ix[] = leg.on ? [transferIx(user, leg.collector, leg.fee)] : [];
+  let trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, trialMicro), ...ixs, ...feeIxs, ...tip], P.system, tables));
+  // the fee never makes a route too large for one transaction: without room for it the trade goes as before, fee-free
+  if (feeIxs.length && trial.length > 1232) { feeIxs = []; leg = { on: false, reason: 'size', swapIn: leg.swapIn }; trial = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, trialMicro), ...ixs, ...tip], P.system, tables)); }
+  noteSolFeeSkip(side, 'jupiter', leg);
+  let legFee = leg.on ? leg.fee : 0n;
   let sim = await simulateSeeing(trial, [user, coinAta, wsolAta]);
+  // engine-candidate-1110 (review #7): a simulation that fails WITH the fee transfer runs once more without it; when that passes
+  // the trade goes as before, fee-free (the fee is never the reason a trade fails). Without the fee it is the legacy trade exactly.
+  if (sim.err && feeIxs.length) {
+    const bare = unsignedTx(compileV0(user, [...budget(JUP_UNITS_MAX, trialMicro), ...ixs, ...tip], P.system, tables));
+    const sim2 = await simulateSeeing(bare, [user, coinAta, wsolAta]);
+    if (!sim2.err) { feeIxs = []; leg = { on: false, reason: 'sim', swapIn: leg.swapIn }; legFee = 0n; trial = bare; sim = sim2; noteSolFeeSkip(side, 'jupiter', leg); }
+  }
   if (sim.err) throw new Error(errText(sim, side, 'jupiter'));
   let others: { address: string; state: TokState }[] = [];
   let post = (sim.accounts as any[]).map(simAcc);
@@ -1647,8 +1676,9 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   const units = Math.min(JUP_UNITS_MAX, Math.ceil(Number(sim.unitsConsumed || JUP_UNITS_MAX) * 1.25) + 5_000);
   // Solana rounds the priority charge up; normalize the simulated sell to the smaller signed limit exactly once.
   const finalPriority = (BigInt(microAt(units)) * BigInt(units) + (side === 'sell' ? 999_999n : 0n)) / 1_000_000n;
+  // fee-cov-1110: the guard sees the Jupiter swap (`amount`) and counts the fee transfer as one more outflow besides the fees
   const why = jupBalanceGuard({
-    side, amount, minOut, feesMax: feesAt(units), rentMax: rentSeen, user,
+    side, amount, minOut, feesMax: feesAt(units) + legFee, rentMax: rentSeen, user,
     solBefore: have, solAfter: BigInt(post[0]?.lamports ?? 0) + trialPriority - finalPriority, coinBefore, coinAfter: post[1] ? tokState(post[1])?.amount ?? null : (side === 'sell' ? 0n : null),
     wsolBefore, wsolAfter: tokState(post[2]),
     others: others.map((t, i) => ({ address: t.address, before: t.state, after: tokState(post[3 + i]) })),
@@ -1657,7 +1687,7 @@ async function jupiterTradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, si
   if (why) throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + why + '. Nothing was sent.');
   let bhi = await bhP; if (Date.now() - bhi.at > 20_000) bhi = await blockhash(0);
   let bh = bhi.v, lvh = bhi.lvh;
-  const build = (b: string) => signMessage(compileV0(user, [...budget(units, microAt(units)), ...ixs, ...tip], b, tables), k.seed);
+  const build = (b: string) => signMessage(compileV0(user, [...budget(units, microAt(units)), ...ixs, ...feeIxs, ...tip], b, tables), k.seed);
   let built = build(bh);
   for (let i = 0; i < 3 && sentSigs.has(b58e(built.sig)); i++) { const nb = await newerBlockhash(bh); bh = nb.v; lvh = nb.lvh; built = build(bh); }
   const { tx, sig } = built;
@@ -1726,18 +1756,23 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
   // volume accumulator (a wallet's first trade there pays its rent)
   // (DLMM keeps no accumulator: the third account is the wrapped-SOL account, whose rent a first trade puts down)
   const uva = (route: SolRoute) => (route.venue === 'pump' ? pumpPda('user_volume_accumulator', b58d(user)) : route.venue === 'dlmm' ? ataOf(user, P.wsol, P.token) : ammPda('user_volume_accumulator', b58d(user)));
-  const read = (route: SolRoute) => readMarket(route, [user, ataOf(user, route.mint, route.tokenProgram), uva(route)]);
+  // fee-cov-1110: the fee collector's account rides in the same read (4th); its read failing never stops the trade (fee-free then)
+  const read = (route: SolRoute) => readMarket(route, [user, ataOf(user, route.mint, route.tokenProgram), uva(route), SOL_MARKET_FEE.collector]);
   let { m, extra } = await read(r);
   // this wallet's slice of the read failed: this wallet stops here, the others go on
-  const mine = () => { if (extra.some((x) => x === undefined)) throw new Error('Could not read this wallet from the Solana nodes — nothing was sent; try again'); };
+  const mine = () => { if (extra.slice(0, 3).some((x) => x === undefined)) throw new Error('Could not read this wallet from the Solana nodes — nothing was sent; try again'); };
   mine();
   let ixs: Ix[];
+  // fee-cov-1110: a buy's swap gets the amount less the 0.20 % fee (decided on this click's read of the collector); a sell's fee
+  // is decided below, on the trade's own signed minimum. `leg` off = exactly the legacy trade.
+  let leg: SolFeeDecision = side === 'buy' ? solBuyLeg(amount, extra[3]) : { on: false, reason: 'off', swapIn: 0n };
+  let minOut = 0n;
   const sellAmount = (acc: Got) => {
     const raw = acc && acc.owner === r.tokenProgram && acc.data.length >= 72 ? rdU64(acc.data, 64) : 0n; if (raw <= 0n) throw new Error('Nothing to sell in this wallet');
     const x = (raw * BigInt(Math.round(Math.min(100, Math.max(0, size)) * 100))) / 10000n; if (x <= 0n) throw new Error('Nothing to sell'); return x;
   };
   if (side === 'sell') amount = sellAmount(extra[1]);
-  try { ixs = (await solTradeIxs(user, r, side, amount, s.slippage, m)).ixs; } catch (e) {
+  try { ({ ixs, minOut } = await solTradeIxs(user, r, side, side === 'buy' ? leg.swapIn : amount, s.slippage, m)); } catch (e) {
     // (2026-10-30) every DLMM candidate is too thin for this trade (a pool with liquidity on one side only, or less than the
     // amount): Jupiter routes it over every venue, under its own checks — nothing was signed yet. Only after that failure,
     // so a click a DLMM pool fills is unchanged.
@@ -1752,7 +1787,8 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
     if (r.venue === 'jupiter') return jupiterTradeOne(a, side, r, size, s);
     ({ m, extra } = await read(r)); mine();
     if (side === 'sell') amount = sellAmount(extra[1]);
-    ixs = (await solTradeIxs(user, r, side, amount, s.slippage, m)).ixs;
+    else leg = solBuyLeg(amount, extra[3]);
+    ({ ixs, minOut } = await solTradeIxs(user, r, side, side === 'buy' ? leg.swapIn : amount, s.slippage, m));
   }
   const plan = await planP;
   const tip = plan.tipLamports > 0n ? [plan.protect ? tipIxGuarded(user, pick(JITO_TIP), plan.tipLamports) : transferIx(user, pick(JITO_TIP), plan.tipLamports)] : [];
@@ -1768,12 +1804,25 @@ async function tradeOne(a: SolAcct, side: 'buy' | 'sell', r: SolRoute, size: num
     const fees = plan.tipLamports + (BigInt(plan.micro) * BigInt(maxUnits)) / 1_000_000n + SIG_FEE;
     const need = (side === 'buy' ? amount + RENT_WALLET : 0n) + fees + rent;
     if (have < need) throw new Error(have === 0n ? 'This wallet has no SOL yet — fund it first' : side === 'buy' ? `Not enough SOL: ${solTxt(have)} available, about ${solTxt(need)} needed (amount + fees${rent ? ' + account rent' : ''})` : `Not enough SOL for the sell's fees: ${solTxt(have)} available, about ${solTxt(need)} needed`);
+    // fee-cov-1110: a sell's fee = 0.20 % of its signed minimum, only when the wallet can pay it besides fees and rent
+    if (side === 'sell') leg = solSellLeg(minOut, have, fees + rent, extra[3]);
   }
+  // fee-cov-1110: the fee transfer goes right after the swap (a sell's proceeds are unwrapped by then); one that would not fit
+  // the transaction is dropped (fee-free), never the trade
+  if (leg.on && unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...ixs, transferIx(user, leg.collector, leg.fee), ...tip], P.system)).length > 1232) leg = { on: false, reason: 'size', swapIn: leg.swapIn };
+  const swapIxs = ixs;   // engine-candidate-1110 (review #7): the trade without the fee transfer
+  if (leg.on) ixs = [...ixs, transferIx(user, leg.collector, leg.fee)];
+  noteSolFeeSkip(side, r.venue, leg);
   let units = s.turbo ? maxUnits : 200_000;
   // (pumphop) always simulated, Turbo too: a new instruction is never signed unseen
   if (!s.turbo || r.venue === 'pumphop') {
     // simulate with a generous limit, then sign with what it really used (+25%): a smaller limit lands sooner at the same price
-    const sim = await simulate(unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...ixs, ...tip], P.system)));
+    let sim = await simulate(unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...ixs, ...tip], P.system)));
+    // engine-candidate-1110 (review #7): failed WITH the fee transfer → once more without it; if that passes, the trade goes fee-free
+    if (sim.err && leg.on) {
+      const sim2 = await simulate(unsignedTx(compileLegacy(user, [...budget(400_000, plan.micro), ...swapIxs, ...tip], P.system)));
+      if (!sim2.err) { ixs = swapIxs; leg = { on: false, reason: 'sim', swapIn: leg.swapIn }; sim = sim2; noteSolFeeSkip(side, r.venue, leg); }
+    }
     if (sim.err) {
       // (pumphop) a refusal that is not the trader's own limit (slippage, SOL, tokens, size): the Jupiter route instead — nothing was signed
       if (r.venue === 'pumphop' && hopFallback(sim, side)) return jupiterTradeOne(a, side, hopAsJupiter(r), size, s);
@@ -2233,6 +2282,8 @@ async function directPlan(R: string, w: string, r: SolRoute, usdcIn: bigint, s: 
   try { return await directPlanAt(R, w, r, usdcIn, s, DIRECT_MAX_ACCOUNTS[0]); }
   catch (e) { if (!(e instanceof DirectTooLarge)) throw e; return directPlanAt(R, w, r, usdcIn, s, DIRECT_MAX_ACCOUNTS[1]); }
 }
+let solUsdcCollectorLastReady = false;   // fee-cov-1110: the collector's USDC account does not exist on 2026-11-10
+const USDC_COLLECTOR_READY = (() => { const d = new Uint8Array(165); d.set(b58d(DIRECT_USDC), 0); d.set(b58d(SOL_MARKET_FEE.collector), 32); d[108] = 1; return Object.freeze({ owner: P.token, data: d, lamports: 2_039_280 }); })();
 async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s: SolSettings, maxAccounts: number): Promise<DirectPlan> {
   if (!SOL_ADDR.test(w) || !SOL_ADDR.test(R)) throw new Error('Bad trading wallet');
   if (r.isCashback) throw new Error('Cashback coins are not supported yet');
@@ -2242,19 +2293,27 @@ async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s
   const usdcAta = ataOf(R, DIRECT_USDC, P.token), rWsolAta = ataOf(R, P.wsol, P.token);
   const wCoinAta = ataOf(w, r.mint, r.tokenProgram), rCoinAta = ataOf(R, r.mint, r.tokenProgram);
   const planP = sendPlan(s); const bhP = blockhash(10_000); planP.catch(() => {}); bhP.catch(() => {});
-  const bP = jupBuildDirect(r.mint, usdcIn, s.slippage, R, wCoinAta, maxAccounts); bP.catch(() => {});
+  // fee-cov-1110: the 0.20 % fee in USDC from R to the collector's USDC account, the swap gets the rest (src/solMarketFee.ts).
+  // The early build is priced on what the collector's account looked like on the last click; rebuilt once if it changed.
+  const earlyLeg = solUsdcCollectorLastReady ? solUsdcLeg(usdcIn, USDC_COLLECTOR_READY) : null;
+  const earlyIn = earlyLeg?.on ? earlyLeg.swapIn : usdcIn;
+  const bP = jupBuildDirect(r.mint, earlyIn, s.slippage, R, wCoinAta, maxAccounts); bP.catch(() => {});
   const priceP = motionPriceUsd(r.mint);
-  const [rAcc, uAcc, cAcc, rcAcc] = await accounts([R, usdcAta, wCoinAta, rCoinAta]);
+  const [rAcc, uAcc, cAcc, rcAcc, colUsdc] = await accounts([R, usdcAta, wCoinAta, rCoinAta, SOL_MARKET_FEE.usdcCollectorAta]);
   mark('read');
   if (rAcc === undefined || uAcc === undefined || cAcc === undefined || rcAcc === undefined) throw new Error(READ_FAIL);
+  let leg: SolFeeDecision = solUsdcLeg(usdcIn, colUsdc);
+  solUsdcCollectorLastReady = leg.on || leg.reason !== 'collector';
+  const jupIn = leg.swapIn;
   const usdcBefore = tokState(uAcc)?.amount ?? 0n;
   if (usdcBefore < usdcIn) throw new Error(`The reserve holds ${(Number(usdcBefore) / 1e6).toFixed(2)} USDC — less than this buy`);
   const coinState = tokState(cAcc);
   if (cAcc && (!coinState || coinState.owner !== w || coinState.mint !== r.mint)) throw new Error('The trading wallet\'s coin account is not what it should be — refused');
   const coinBefore = coinState?.amount ?? 0n;
-  const built = await bP; mark('jupiter');
+  const built = jupIn === earlyIn ? await bP : await jupBuildDirect(r.mint, jupIn, s.slippage, R, wCoinAta, maxAccounts); mark('jupiter');
   const minOut = BigInt(built.quote.otherAmountThreshold);
-  const priceWhy = directPriceCheck({ usdcIn, minOut, decimals: r.decimals, priceUsd: await priceP, feeBps: r.fee?.lowBps });
+  // engine-candidate-1110 (review #6): the minimum was quoted for jupIn (the amount less the fee), so the fair figure is jupIn's too
+  const priceWhy = directPriceCheck({ usdcIn: jupIn, minOut, decimals: r.decimals, priceUsd: await priceP, feeBps: r.fee?.lowBps });
   if (priceWhy) throw new Error('Refused: ' + priceWhy + '. Nothing was sent.');
   const { opens } = directIxsChecked(built.list, { r: R, wCoinAta, rWsolAta });
   const ixs: Ix[] = built.list.map((x) => ({ program: x.programId, keys: x.accounts.map((a) => ({ pubkey: a.pubkey, signer: a.isSigner, writable: a.isWritable })), data: fromB64(x.data) }));
@@ -2273,15 +2332,36 @@ async function directPlanAt(R: string, w: string, r: SolRoute, usdcIn: bigint, s
   const rentMax = BigInt(opens + 1) * RENT_ATA22;   // the route's own opens + W's coin account
   const have = BigInt(rAcc?.lamports || 0), need = feesAt(JUP_UNITS_MAX) + rentMax + RENT_WALLET;
   if (have < need) throw new SolDirectNoGas(`The reserve needs about ${solTxt(need)} for the network fee and account rent — it has ${solTxt(have)}`);
-  const all = (units: number, micro: number) => [...budget(units, micro), ...head, ...ixs, ...tail, ...tip];
-  const trial = unsignedTx(compileV0(R, all(JUP_UNITS_MAX, 0), P.system, tables));
-  if (trial.length > 1232) { if (maxAccounts > DIRECT_MAX_ACCOUNTS[1]) throw new DirectTooLarge(); throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount'); }
+  // fee-cov-1110: R's USDC -> the collector's USDC account (SPL Transfer, R signs as the owner of its own USDC account)
+  let feeIxs: Ix[] = leg.on ? [ix(P.token, [[usdcAta, false, true], [SOL_MARKET_FEE.usdcCollectorAta, false, true], [R, true, false]], cat(Uint8Array.of(3), u64(leg.fee)))] : [];
+  const all = (units: number, micro: number) => [...budget(units, micro), ...head, ...ixs, ...tail, ...feeIxs, ...tip];
+  let trial = unsignedTx(compileV0(R, all(JUP_UNITS_MAX, 0), P.system, tables));
+  if (trial.length > 1232) {
+    // engine-candidate-1110 (review #6): the fee yields first — a route that fits without the fee at THIS (the larger) account limit
+    // goes fee-free on its better route; only a route too large even without the fee moves on to the smaller limit (and tries the
+    // fee again there)
+    if (feeIxs.length) {
+      const bare = unsignedTx(compileV0(R, [...budget(JUP_UNITS_MAX, 0), ...head, ...ixs, ...tail, ...tip], P.system, tables));
+      if (bare.length <= 1232) { feeIxs = []; leg = { on: false, reason: 'size', swapIn: leg.swapIn }; trial = bare; }
+    }
+    if (trial.length > 1232) {
+      if (maxAccounts > DIRECT_MAX_ACCOUNTS[1]) throw new DirectTooLarge();
+      throw new Error('Jupiter\'s route does not fit one transaction — nothing was sent; try a different amount');
+    }
+  }
+  noteSolFeeSkip('buy', 'usd-balance', leg);
   let sim = await simulateSeeing(trial, [R, usdcAta, wCoinAta]);
+  // engine-candidate-1110 (review #7): failed WITH the fee transfer → once more without it; if that passes, the buy goes fee-free
+  if (sim.err && feeIxs.length) {
+    const bare = unsignedTx(compileV0(R, [...budget(JUP_UNITS_MAX, 0), ...head, ...ixs, ...tail, ...tip], P.system, tables));
+    const sim2 = await simulateSeeing(bare, [R, usdcAta, wCoinAta]);
+    if (!sim2.err) { feeIxs = []; leg = { on: false, reason: 'sim', swapIn: leg.swapIn }; trial = bare; sim = sim2; noteSolFeeSkip('buy', 'usd-balance', leg); }
+  }
   mark('simulate');
   if (sim.err) throw new Error(errText(sim, 'buy', 'jupiter'));
   let post = (sim.accounts as any[]).map(simAcc);
   const through = new Set<string>();
-  const innerWhy = directInnerGuard({ inner: sim.innerInstructions, r: R, w, usdcAta, rWsolAta, wCoinAta, amount: usdcIn, rentMax: RENT_ATA22, through });
+  const innerWhy = directInnerGuard({ inner: sim.innerInstructions, r: R, w, usdcAta, rWsolAta, wCoinAta, amount: jupIn, rentMax: RENT_ATA22, through });
   if (innerWhy && innerWhy !== 'no inner instructions') throw new Error('Refused: Jupiter\'s transaction does not do what you asked — ' + innerWhy + '. Nothing was sent.');
   let others: { address: string; state: TokState }[] = [];
   let rentSeen = rentMax;

@@ -63,7 +63,9 @@ export function gatedBuy<T>(chain: string, surface: 'trade' | 'float.buy', cover
 }
 /** The addressless fee-fallback line (same channel and shape as the app's feeFallbackBeacon.ts, scope 'fee-fallback'):
  *  chain, side, venue class, reason code, size bucket — no wallet, no token, no exact amount, no page path. Pure. */
-export type FallbackReason = 'turbo' | 'private-send' | 'privy-wallet' | 'hop-wallet' | '2fa' | 'usd-balance' | 'sol-tip' | 'no-fee-path';
+export type FallbackReason = 'turbo' | 'private-send' | 'privy-wallet' | 'hop-wallet' | '2fa' | 'usd-balance' | 'sol-tip' | 'no-fee-path'
+  // fee-cov-1110: a Solana trade without its in-transaction fee (src/solMarketFee.ts SolFeeDecision reasons)
+  | 'fee-leg-collector' | 'fee-leg-dust' | 'fee-leg-funds' | 'fee-leg-size' | 'fee-leg-sim';
 export const FALLBACK_SCOPE = 'fee-fallback';
 /** native units (ETH / BNB / SOL) by default; 'usd' for a buy from the USD balance */
 export function sizeBucket(x: unknown, unit: 'native' | 'usd' = 'native'): string {

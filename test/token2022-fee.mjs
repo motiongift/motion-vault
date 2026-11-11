@@ -212,7 +212,8 @@ test('source: the fee branch sits before every own-venue builder and only a fee 
   assert.ok(at > 0 && at < lr.indexOf('if (curveAcc && curveAcc.owner === P.pump)'), 'before the pump / PumpSwap / pumphop / DLMM logic');
   assert.match(lr, /if \(fee\) \{\n\s+if \(fee\.refuse\) throw new Error\(fee\.refuse\);\n\s+const h = await Promise\.race\(\[hP, Promise\.resolve\(null\)\]\);\n\s+const r: SolRoute = \{ mint, venue: 'jupiter',/);
   assert.match(src, /jupPriceCheck\(\{ side, amount, minOut, decimals: r\.decimals, priceSol: await priceP, feeBps: r\.fee\?\.lowBps \}\)/);
-  assert.match(src, /directPriceCheck\(\{ usdcIn, minOut, decimals: r\.decimals, priceUsd: await priceP, feeBps: r\.fee\?\.lowBps \}\)/);
+  // engine-candidate-1110 (review #6): the USD buy's fair figure is taken on what the swap gets (jupIn = the amount less the fee)
+  assert.match(src, /directPriceCheck\(\{ usdcIn: jupIn, minOut, decimals: r\.decimals, priceUsd: await priceP, feeBps: r\.fee\?\.lowBps \}\)/);
   // the hook refusal for coins without a fee is the old one, unchanged
   assert.equal((src.match(/if \(ext\.has\(14\)\) throw new Error\('This coin carries a transfer hook \(Token-2022\) — not supported here'\);/g) || []).length, 2);
 });
